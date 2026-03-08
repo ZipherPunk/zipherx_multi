@@ -1,10 +1,11 @@
 import SwiftUI
+import LocalAuthentication
 
 @main
 struct ZipherXApp: App {
 
     @State private var walletReady: Bool
-    /// SA-24: Observe scenePhase at the app level for wallet lock on background.
+    @State private var walletLocked: Bool
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -12,21 +13,27 @@ struct ZipherXApp: App {
         registerPlatformServices()
 
         // Check if a spending key is already stored in Keychain.
-        // If so, skip the setup screen and go straight to the wallet.
-        // SA-AUDIT: Use hasKey() to avoid loading the full key into memory
         let hasExistingKey = AppleSecureStorage().hasKey(identifier: "spending_key")
         _walletReady = State(initialValue: hasExistingKey)
+        // If wallet exists, start locked — require auth before showing wallet
+        _walletLocked = State(initialValue: hasExistingKey)
     }
 
     var body: some Scene {
         WindowGroup {
             if #available(macOS 14, iOS 17, *) {
-                if walletReady {
+                if walletReady && walletLocked {
+                    LockScreenView(onUnlocked: {
+                        walletLocked = false
+                    })
+                    .frame(minWidth: 400, minHeight: 600)
+                } else if walletReady {
                     WalletView()
                         .frame(minWidth: 400, minHeight: 600)
                 } else {
                     WalletSetupView(onWalletReady: {
                         walletReady = true
+                        walletLocked = false
                     })
                     .frame(minWidth: 400, minHeight: 600)
                 }
@@ -38,15 +45,95 @@ struct ZipherXApp: App {
         #if os(macOS)
         .defaultSize(width: 480, height: 720)
         #endif
-        // SA-24: TODO — Implement wallet lock behavior when app goes to background.
-        // Currently, WalletView handles privacy overlay via its own scenePhase observer.
-        // A full lock (requiring re-authentication) should be implemented here by
-        // setting a `walletLocked` state and presenting an authentication gate.
         .onChange(of: scenePhase) { oldPhase, newPhase in
-            // SA-24: Placeholder for app-level background lock.
-            // When `newPhase == .background`, the wallet should be locked.
-            // When `newPhase == .active`, require re-authentication before unlocking.
-            _ = (oldPhase, newPhase) // Suppress unused variable warnings
+            // Lock wallet when app goes to background (iOS) or resigns active (macOS)
+            if newPhase == .background && walletReady {
+                walletLocked = true
+            }
+            _ = oldPhase
+        }
+    }
+}
+
+// MARK: - Lock Screen
+
+@available(iOS 17, macOS 14, *)
+struct LockScreenView: View {
+    var onUnlocked: () -> Void
+
+    @State private var authFailed = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        ZStack {
+            ZColors.terminalBlack.ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                Spacer()
+
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 64))
+                    .foregroundColor(ZColors.primary)
+                    .shadow(color: ZColors.primary.opacity(0.5), radius: 10)
+
+                Text("ZIPHERX MULTI")
+                    .font(.system(size: 28, weight: .bold, design: .monospaced))
+                    .foregroundColor(ZColors.primary)
+                    .shadow(color: ZColors.glow, radius: 5)
+
+                Text("WALLET LOCKED")
+                    .font(.system(size: 14, weight: .medium, design: .monospaced))
+                    .foregroundColor(ZColors.primaryDark)
+
+                Spacer()
+
+                ZButton("Unlock", icon: "faceid", action: authenticate)
+                    .padding(.horizontal, 32)
+
+                if let error = errorMessage {
+                    Text(error)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(ZColors.error)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
+
+                Spacer()
+            }
+        }
+        .foregroundColor(ZColors.primary)
+        .onAppear {
+            // Auto-prompt biometric on appear
+            authenticate()
+        }
+    }
+
+    private func authenticate() {
+        errorMessage = nil
+        // SA-22: Fresh LAContext per request, use deviceOwnerAuthentication
+        // (biometric + passcode fallback) so the user can always unlock
+        let ctx = LAContext()
+        var evalError: NSError?
+        // Use .deviceOwnerAuthentication — allows passcode fallback if biometrics fail
+        guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &evalError) else {
+            // No auth available at all — unlock anyway (no way to gate)
+            onUnlocked()
+            return
+        }
+
+        ctx.evaluatePolicy(
+            .deviceOwnerAuthentication,
+            localizedReason: "Unlock ZipherX Multi"
+        ) { success, error in
+            DispatchQueue.main.async {
+                if success {
+                    onUnlocked()
+                } else if let err = error as? LAError, err.code == .userCancel {
+                    errorMessage = "Authentication cancelled."
+                } else {
+                    errorMessage = "Authentication failed. Tap Unlock to try again."
+                }
+            }
         }
     }
 }

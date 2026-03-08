@@ -301,10 +301,18 @@ impl AsyncWallet {
             .map_err(|e| CoreError::Storage(e.to_string()))?
             .unwrap_or(0);
 
+        // Populate balance from DB (same logic as get_balance())
+        let db_clone2 = self.db.clone();
+        let balance = tokio::task::spawn_blocking(move || db_clone2.get_all_unspent_notes(0))
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .ok()
+            .map(|notes| WalletCore::compute_balance(&notes));
+
         Ok(WalletSummary {
             state,
             address: None,
-            balance: None,
+            balance,
             last_synced_height: sync_state.last_scanned_height,
             chain_tip: header_height,
             startup_mode: None,

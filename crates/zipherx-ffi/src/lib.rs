@@ -504,6 +504,21 @@ fn initialize_wallet(config: WalletConfigFFI) -> Result<(), WalletError> {
         }
     };
 
+    // If spending key exists in platform storage, wallet is Ready (not Uninitialized)
+    let has_key = match PLATFORM_STORAGE.lock() {
+        Ok(guard) => guard
+            .as_ref()
+            .and_then(|s| s.load_key("spending_key".to_string()))
+            .map(|k| !k.is_empty())
+            .unwrap_or(false),
+        Err(_) => false,
+    };
+    if has_key {
+        wallet
+            .core
+            .set_state(zipherx_core::wallet::WalletLifecycleState::Ready);
+    }
+
     let _ = WALLET.set(wallet);
     // Leave WALLET_INITIALIZING=true — wallet is now set, future calls exit early via is_some()
     Ok(())
@@ -525,7 +540,11 @@ fn is_wallet_initialized() -> bool {
 /// BLOCKING: This function blocks the calling thread. Call from a background thread.
 fn create_wallet_new() -> Result<Vec<String>, WalletError> {
     let wallet = get_wallet()?;
-    wallet.create_wallet().map_err(WalletError::from)
+    let words = wallet.create_wallet().map_err(WalletError::from)?;
+    wallet
+        .core
+        .set_state(zipherx_core::wallet::WalletLifecycleState::Ready);
+    Ok(words)
 }
 
 /// Restore a wallet from a mnemonic phrase.
@@ -533,7 +552,11 @@ fn create_wallet_new() -> Result<Vec<String>, WalletError> {
 /// BLOCKING: This function blocks the calling thread. Call from a background thread.
 fn restore_wallet(words: Vec<String>) -> Result<(), WalletError> {
     let wallet = get_wallet()?;
-    wallet.restore_wallet(&words).map_err(WalletError::from)
+    wallet.restore_wallet(&words).map_err(WalletError::from)?;
+    wallet
+        .core
+        .set_state(zipherx_core::wallet::WalletLifecycleState::Ready);
+    Ok(())
 }
 
 /// Import a wallet from raw spending key bytes.
@@ -548,7 +571,11 @@ fn import_wallet_from_key(sk_bytes: Vec<u8>) -> Result<(), WalletError> {
     let wallet = get_wallet()?;
     wallet
         .import_wallet_from_key(&sk_bytes)
-        .map_err(WalletError::from)
+        .map_err(WalletError::from)?;
+    wallet
+        .core
+        .set_state(zipherx_core::wallet::WalletLifecycleState::Ready);
+    Ok(())
 }
 
 /// Get the number of connected peers (lock-free atomic read).
@@ -885,6 +912,11 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
         })
     };
 
+    // Set state to Syncing while sync is in progress
+    wallet
+        .core
+        .set_state(zipherx_core::wallet::WalletLifecycleState::Syncing);
+
     let cb_complete = callback.clone();
     let cb_error = callback.clone();
     let cb_bg = callback;
@@ -961,6 +993,10 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
 
         match sync_result {
             Ok(height) => {
+                // Set state back to Ready after successful sync
+                wallet
+                    .core
+                    .set_state(zipherx_core::wallet::WalletLifecycleState::Ready);
                 #[cfg(debug_assertions)]
                 eprintln!(
                     "[ZipherX] FFI: sync succeeded, calling on_complete({})",
@@ -1004,6 +1040,10 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                 }
             }
             Err(e) => {
+                // Set state back to Ready on sync failure (don't leave stuck on Syncing)
+                wallet
+                    .core
+                    .set_state(zipherx_core::wallet::WalletLifecycleState::Ready);
                 #[cfg(debug_assertions)]
                 eprintln!("[ZipherX] FFI: sync FAILED: {}", e);
                 cb_error.on_error(e.to_string());

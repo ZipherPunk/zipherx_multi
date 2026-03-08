@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -69,7 +69,7 @@
 		B0B5134BC7940639AE34A7B2 /* WalletSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletSetupView.swift; sourceTree = "<group>"; };
 		CA36FF6E04D83ED29DA52985 /* PlatformBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformBridge.swift; sourceTree = "<group>"; };
 		D0A2FF1F9EF05B04F73C0C4C /* SendView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SendView.swift; sourceTree = "<group>"; };
-		EBABAFAE73D9798396AF2D40 /* ZipherXApp-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "ZipherXApp-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		EBABAFAE73D9798396AF2D40 /* ZipherXApp-iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "ZipherXApp-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F70EAE3313F398F65B4C9D1A /* AppleNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleNotifications.swift; sourceTree = "<group>"; };
 		F91E4570F579EFA270816B67 /* zipherx.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = zipherx.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -223,7 +223,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1500;
+				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					B254D5F6565B2CF034BED751 = {
 						ProvisioningStyle = Automatic;
@@ -243,7 +243,6 @@
 			);
 			mainGroup = 02AB15393CB58DD92C45B4C1;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -376,17 +375,16 @@
 				CODE_SIGN_ENTITLEMENTS = ZipherXApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/Generated/include",
-				);
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Generated/include";
 				INFOPLIST_FILE = Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"@executable_path/../Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/Generated/lib",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/Generated/lib";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				OTHER_LDFLAGS = (
 					"-lzipherx_ffi",
@@ -398,9 +396,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.zipherx.wallet.macos;
 				SDKROOT = macosx;
-				SWIFT_INCLUDE_PATHS = (
-					"$(PROJECT_DIR)/Generated/include",
-				);
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/Generated/include";
 			};
 			name = Release;
 		};
@@ -411,17 +407,11 @@
 				CODE_SIGN_ENTITLEMENTS = "ZipherXApp-iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				HEADER_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/Generated/include",
-				);
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Generated/include";
 				INFOPLIST_FILE = "Info-iOS.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"@executable_path/Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/Generated/lib-ios-sim",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/Generated/lib-ios-sim";
 				OTHER_LDFLAGS = (
 					"-lzipherx_ffi",
 					"-lc++",
@@ -430,9 +420,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.zipherx.wallet.ios;
 				SDKROOT = iphoneos;
-				SWIFT_INCLUDE_PATHS = (
-					"$(PROJECT_DIR)/Generated/include",
-				);
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/Generated/include";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -444,17 +432,16 @@
 				CODE_SIGN_ENTITLEMENTS = ZipherXApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/Generated/include",
-				);
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_USER_SELECTED_FILES = readwrite;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Generated/include";
 				INFOPLIST_FILE = Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"@executable_path/../Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/Generated/lib",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/Generated/lib";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				OTHER_LDFLAGS = (
 					"-lzipherx_ffi",
@@ -466,9 +453,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.zipherx.wallet.macos;
 				SDKROOT = macosx;
-				SWIFT_INCLUDE_PATHS = (
-					"$(PROJECT_DIR)/Generated/include",
-				);
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/Generated/include";
 			};
 			name = Debug;
 		};
@@ -479,17 +464,11 @@
 				CODE_SIGN_ENTITLEMENTS = "ZipherXApp-iOS.entitlements";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				HEADER_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/Generated/include",
-				);
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/Generated/include";
 				INFOPLIST_FILE = "Info-iOS.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"@executable_path/Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(PROJECT_DIR)/Generated/lib-ios-sim",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/Generated/lib-ios-sim";
 				OTHER_LDFLAGS = (
 					"-lzipherx_ffi",
 					"-lc++",
@@ -498,9 +477,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.zipherx.wallet.ios;
 				SDKROOT = iphoneos;
-				SWIFT_INCLUDE_PATHS = (
-					"$(PROJECT_DIR)/Generated/include",
-				);
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/Generated/include";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -539,9 +516,11 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -554,6 +533,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.9;
@@ -594,9 +574,11 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -616,6 +598,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.9;
