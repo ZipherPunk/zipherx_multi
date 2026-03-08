@@ -199,27 +199,33 @@ public struct WalletSetupView: View {
                         GridItem(.flexible(), spacing: 6),
                         GridItem(.flexible(), spacing: 6)
                     ], spacing: 6) {
-                        ForEach(0..<24, id: \.self) { idx in
+                        ForEach(0..<24) { idx in
+                            let i = idx
                             HStack(spacing: 3) {
-                                Text("#\(idx + 1)")
+                                Text("#\(i + 1)")
                                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                                     .foregroundColor(ZColors.primaryDim)
                                     .frame(width: 24, alignment: .trailing)
-                                TextField("", text: $seedWords[idx])
+                                TextField("", text: Binding(
+                                    get: { seedWords[i] },
+                                    set: { seedWords[i] = $0 }
+                                ))
                                     .font(.system(size: 13, design: .monospaced))
                                     .foregroundColor(ZColors.primary)
+                                    #if os(iOS)
                                     .textInputAutocapitalization(.never)
+                                    #endif
                                     .autocorrectionDisabled()
-                                    .focused($focusedField, equals: idx)
+                                    .focused($focusedField, equals: i)
                                     .padding(.horizontal, 4)
                                     .padding(.vertical, 3)
                                     .background(ZColors.terminalBlack)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 3)
-                                            .stroke(focusedField == idx ? ZColors.primary : ZColors.primaryDim.opacity(0.4), lineWidth: 1)
+                                            .stroke(focusedField == i ? ZColors.primary : ZColors.primaryDim.opacity(0.4), lineWidth: 1)
                                     )
-                                    .onChange(of: seedWords[idx]) { _, newValue in
-                                        handleWordInput(index: idx, value: newValue)
+                                    .onChange(of: seedWords[i]) { _, newValue in
+                                        handleWordInput(index: i, value: newValue)
                                     }
                             }
                         }
