@@ -16,8 +16,34 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
 
+use serde::Deserialize;
+
 use crate::constants::*;
 use crate::peer::{Peer, Socks5Config};
+
+/// Bundled peer entry from bundled_peers.json.
+#[derive(Debug, Clone, Deserialize)]
+struct BundledPeer {
+    host: String,
+    port: u16,
+    #[allow(dead_code)]
+    reliability: f64,
+    #[serde(rename = "lastSeen")]
+    #[allow(dead_code)]
+    last_seen: String,
+}
+
+/// Bundled peers JSON embedded at compile time.
+const BUNDLED_PEERS_JSON: &str = include_str!("../resources/bundled_peers.json");
+
+/// Parse bundled peers from the embedded JSON.
+fn bundled_peers() -> Vec<(String, u16)> {
+    serde_json::from_str::<Vec<BundledPeer>>(BUNDLED_PEERS_JSON)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| (p.host, p.port))
+        .collect()
+}
 use crate::types::*;
 
 /// Default peer manager configuration.
@@ -216,14 +242,14 @@ impl PeerManager {
             self.discover_peers().await
         };
 
-        // Add hardcoded seeds
-        for addr_str in HARDCODED_SEEDS {
-            let key = format!("{addr_str}:{DEFAULT_PORT}");
+        // Add bundled seed peers (from bundled_peers.json)
+        for (host, port) in bundled_peers() {
+            let key = format!("{host}:{port}");
             self.known_addresses
                 .entry(key.clone())
                 .or_insert(AddressInfo {
-                    host: addr_str.to_string(),
-                    port: DEFAULT_PORT,
+                    host,
+                    port,
                     last_attempt: None,
                     is_hardcoded: true,
                 });
@@ -387,11 +413,12 @@ impl PeerManager {
         }
 
         #[cfg(debug_assertions)]
+        let bundled_count = bundled_peers().len();
         eprintln!(
-            "[ZipherX] Peer discovery: {} DNS + {} hardcoded = {} candidates",
+            "[ZipherX] Peer discovery: {} DNS + {} bundled = {} candidates",
             addresses.len(),
-            HARDCODED_SEEDS.len(),
-            addresses.len() + HARDCODED_SEEDS.len()
+            bundled_count,
+            addresses.len() + bundled_count
         );
         addresses
     }
@@ -775,17 +802,6 @@ impl PeerManager {
         Ok((accepted, total))
     }
 }
-
-/// Hardcoded seed nodes (exempt from cooldown + ban).
-const HARDCODED_SEEDS: &[&str] = &[
-    "140.174.189.3",
-    "140.174.189.17",
-    "205.209.104.118",
-    "95.179.131.117",
-    "45.77.216.198",
-    "212.23.222.231",
-    "157.90.223.151",
-];
 
 /// Check if an IP is reserved/private.
 fn is_reserved_ip(ip: &str) -> bool {

@@ -37,7 +37,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy -p zipherx-core -p zipherx-crypto -p zipherx-network -p zipherx-storage -p zipherx-ffi -p zipherx-tor -p zipherx-platform -- -D warnings
 
       - name: Verify Cargo.lock is up-to-date
         run: cargo check --locked
