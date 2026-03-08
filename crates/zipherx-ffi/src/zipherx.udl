@@ -181,6 +181,24 @@ namespace zipherx {
     string? get_onion_address();
 
     // ==================================================================
+    // Peer Management
+    // ==================================================================
+    [Throws=WalletError]
+    sequence<ConnectedPeerInfoFFI> get_connected_peers();
+
+    [Throws=WalletError]
+    sequence<BannedPeerInfoFFI> get_banned_peers();
+
+    [Throws=WalletError]
+    boolean add_custom_peer(string host, u16 port);
+
+    [Throws=WalletError]
+    boolean unban_peer(string host);
+
+    [Throws=WalletError]
+    boolean disconnect_peer(string peer_id);
+
+    // ==================================================================
     // Platform Storage (Phase 9)
     // ==================================================================
     void set_platform_storage(PlatformStorageCallback storage);
@@ -311,4 +329,18 @@ dictionary SendResultFFI {
     u64 fee;
     u64 change_value;
     u32 notes_used;
+};
+
+dictionary ConnectedPeerInfoFFI {
+    string address;
+    u32 protocol_version;
+    string user_agent;
+    u32 start_height;
+};
+
+dictionary BannedPeerInfoFFI {
+    string host;
+    string reason;
+    boolean is_permanent;
+    u64 remaining_seconds;
 };

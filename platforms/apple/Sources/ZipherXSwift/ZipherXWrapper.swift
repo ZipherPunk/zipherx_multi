@@ -41,6 +41,14 @@ private func _ffiGetConnectedPeerCount() throws -> UInt32 { try getConnectedPeer
 private func _ffiGetOnionAddress() -> String? { getOnionAddress() }
 private func _ffiGetTorState() -> UInt8 { getTorState() }
 private func _ffiGetTorBootstrapProgress() -> UInt8 { getTorBootstrapProgress() }
+private func _ffiSetTorEnabled(enabled: Bool) { setTorEnabled(enabled: enabled) }
+private func _ffiIsTorEnabled() -> Bool { isTorEnabled() }
+// Peer management
+private func _ffiGetConnectedPeers() throws -> [ConnectedPeerInfoFfi] { try getConnectedPeers() }
+private func _ffiGetBannedPeers() throws -> [BannedPeerInfoFfi] { try getBannedPeers() }
+private func _ffiAddCustomPeer(host: String, port: UInt16) throws -> Bool { try addCustomPeer(host: host, port: port) }
+private func _ffiUnbanPeer(host: String) throws -> Bool { try unbanPeer(host: host) }
+private func _ffiDisconnectPeer(peerId: String) throws -> Bool { try disconnectPeer(peerId: peerId) }
 #endif
 
 /// Keychain identifier for the spending key.
@@ -199,6 +207,40 @@ public struct WalletTransaction: Identifiable {
         self.confirmations = confirmations
         self.height = height
         self.timestamp = timestamp
+    }
+}
+
+/// Connected peer information for display.
+public struct ConnectedPeerInfo: Identifiable {
+    public let id: String
+    public let address: String
+    public let protocolVersion: UInt32
+    public let userAgent: String
+    public let startHeight: UInt32
+
+    public init(address: String, protocolVersion: UInt32, userAgent: String, startHeight: UInt32) {
+        self.id = address
+        self.address = address
+        self.protocolVersion = protocolVersion
+        self.userAgent = userAgent
+        self.startHeight = startHeight
+    }
+}
+
+/// Banned peer information for display.
+public struct BannedPeerInfo: Identifiable {
+    public let id: String
+    public let host: String
+    public let reason: String
+    public let isPermanent: Bool
+    public let remainingSeconds: UInt64
+
+    public init(host: String, reason: String, isPermanent: Bool, remainingSeconds: UInt64) {
+        self.id = host
+        self.host = host
+        self.reason = reason
+        self.isPermanent = isPermanent
+        self.remainingSeconds = remainingSeconds
     }
 }
 
@@ -427,14 +469,14 @@ public enum ZipherXWrapper {
     /// Tor is disabled by default. Takes effect on next sync.
     public static func setTorEnabled(_ enabled: Bool) {
         #if canImport(ZipherXFFI)
-        ZipherXFFI.setTorEnabled(enabled: enabled)
+        _ffiSetTorEnabled(enabled: enabled)
         #endif
     }
 
     /// Check whether Tor is currently enabled.
     public static func isTorEnabled() -> Bool {
         #if canImport(ZipherXFFI)
-        return ZipherXFFI.isTorEnabled()
+        return _ffiIsTorEnabled()
         #else
         return false
         #endif
@@ -594,6 +636,90 @@ public enum ZipherXWrapper {
         return (try? _ffiGetConnectedPeerCount()) ?? 0
         #else
         return 0
+        #endif
+    }
+
+    /// Get list of currently connected peers with details.
+    public static func getConnectedPeers() -> [ConnectedPeerInfo] {
+        #if canImport(ZipherXFFI)
+        do {
+            return try _ffiGetConnectedPeers().map { p in
+                ConnectedPeerInfo(
+                    address: p.address,
+                    protocolVersion: p.protocolVersion,
+                    userAgent: p.userAgent,
+                    startHeight: p.startHeight
+                )
+            }
+        } catch {
+            return []
+        }
+        #else
+        return []
+        #endif
+    }
+
+    /// Get list of banned peers.
+    public static func getBannedPeers() -> [BannedPeerInfo] {
+        #if canImport(ZipherXFFI)
+        do {
+            return try _ffiGetBannedPeers().map { p in
+                BannedPeerInfo(
+                    host: p.host,
+                    reason: p.reason,
+                    isPermanent: p.isPermanent,
+                    remainingSeconds: p.remainingSeconds
+                )
+            }
+        } catch {
+            return []
+        }
+        #else
+        return []
+        #endif
+    }
+
+    /// Add a custom peer by IP address and port.
+    public static func addCustomPeer(host: String, port: UInt16) -> Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 253 else { return false }
+        #if canImport(ZipherXFFI)
+        return (try? _ffiAddCustomPeer(host: trimmed, port: port)) ?? false
+        #else
+        return false
+        #endif
+    }
+
+    /// Unban a peer by host address.
+    public static func unbanPeer(host: String) -> Bool {
+        #if canImport(ZipherXFFI)
+        return (try? _ffiUnbanPeer(host: host)) ?? false
+        #else
+        return false
+        #endif
+    }
+
+    /// Disconnect a peer by address/ID.
+    public static func disconnectPeer(peerId: String) -> Bool {
+        #if canImport(ZipherXFFI)
+        return (try? _ffiDisconnectPeer(peerId: peerId)) ?? false
+        #else
+        return false
+        #endif
+    }
+
+    // MARK: Key Encoding
+
+    /// Encode spending key bytes to bech32 string for export display.
+    public static func encodeSpendingKey(_ skBytes: [UInt8]) throws -> String {
+        #if canImport(ZipherXFFI)
+        do {
+            return try _ffiEncodeSpendingKey(skBytes: skBytes)
+        } catch let e {
+            throw ZipherXError.cryptoError(e.localizedDescription)
+        }
+        #else
+        throw ZipherXError.ffiNotAvailable
         #endif
     }
 

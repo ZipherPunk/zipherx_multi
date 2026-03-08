@@ -288,7 +288,9 @@ public struct WalletView: View {
         }
         .task {
             viewModel.loadWallet()
-            viewModel.startSync()
+            if viewModel.errorMessage == nil {
+                viewModel.startSync()
+            }
         }
         .onAppear {
             // Refresh peer count every 3 seconds

@@ -43,6 +43,7 @@ public struct BalanceView: View {
         self.syncSpeed = syncSpeed
         self.syncETA = syncETA
         self.connectedPeers = connectedPeers
+        self.pendingConfirmation = pendingConfirmation
     }
 
     public var body: some View {

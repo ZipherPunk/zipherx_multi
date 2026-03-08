@@ -197,6 +197,20 @@ pub struct SendResultFFI {
     pub notes_used: u32,
 }
 
+pub struct ConnectedPeerInfoFFI {
+    pub address: String,
+    pub protocol_version: u32,
+    pub user_agent: String,
+    pub start_height: u32,
+}
+
+pub struct BannedPeerInfoFFI {
+    pub host: String,
+    pub reason: String,
+    pub is_permanent: bool,
+    pub remaining_seconds: u64,
+}
+
 // ============================================================================
 // Callback Interfaces (must match UDL callback interfaces)
 // ============================================================================
@@ -1290,6 +1304,108 @@ fn get_onion_address() -> Option<String> {
 // ============================================================================
 // Phase 9: Platform Storage
 // ============================================================================
+
+// ============================================================================
+// Peer Management
+// ============================================================================
+
+/// Get connected peers info.
+fn get_connected_peers() -> Result<Vec<ConnectedPeerInfoFFI>, WalletError> {
+    let wallet = get_wallet()?;
+    let infos = runtime::block_on(async {
+        let pm = wallet.peer_manager.lock().await;
+        pm.get_connected_peer_infos()
+    })
+    .map_err(|e| WalletError::RuntimeError { msg: e.to_string() })?;
+
+    Ok(infos
+        .into_iter()
+        .map(|p| ConnectedPeerInfoFFI {
+            address: p.address,
+            protocol_version: p.protocol_version,
+            user_agent: p.user_agent,
+            start_height: p.start_height,
+        })
+        .collect())
+}
+
+/// Get banned peers info.
+fn get_banned_peers() -> Result<Vec<BannedPeerInfoFFI>, WalletError> {
+    let wallet = get_wallet()?;
+    let infos = runtime::block_on(async {
+        let pm = wallet.peer_manager.lock().await;
+        pm.get_banned_peer_infos()
+    })
+    .map_err(|e| WalletError::RuntimeError { msg: e.to_string() })?;
+
+    Ok(infos
+        .into_iter()
+        .map(|p| BannedPeerInfoFFI {
+            host: p.host,
+            reason: p.reason,
+            is_permanent: p.is_permanent,
+            remaining_seconds: p.remaining_seconds,
+        })
+        .collect())
+}
+
+/// Add a custom peer. Validates host is a valid IP (no hostnames to prevent DNS leaks).
+fn add_custom_peer(host: String, port: u16) -> Result<bool, WalletError> {
+    // Validate before acquiring lock (defense in depth)
+    let host = host.trim().to_string();
+    if host.is_empty() || host.len() > 253 {
+        return Err(WalletError::InvalidInput {
+            msg: "Invalid host".into(),
+        });
+    }
+
+    let wallet = get_wallet()?;
+    let result = runtime::block_on(async {
+        let mut pm = wallet.peer_manager.lock().await;
+        pm.add_custom_peer(&host, port)
+    })
+    .map_err(|e| WalletError::RuntimeError { msg: e.to_string() })?;
+
+    result.map_err(|e| WalletError::InvalidInput { msg: e })
+}
+
+/// Unban a peer. Returns true if the peer was banned and was removed.
+fn unban_peer(host: String) -> Result<bool, WalletError> {
+    let host = host.trim().to_string();
+    if host.is_empty() {
+        return Err(WalletError::InvalidInput {
+            msg: "Host is empty".into(),
+        });
+    }
+
+    let wallet = get_wallet()?;
+    let result = runtime::block_on(async {
+        let mut pm = wallet.peer_manager.lock().await;
+        pm.unban_peer(&host)
+    })
+    .map_err(|e| WalletError::RuntimeError { msg: e.to_string() })?;
+
+    Ok(result)
+}
+
+/// Disconnect a specific peer. Returns true if the peer was connected.
+fn disconnect_peer(peer_id: String) -> Result<bool, WalletError> {
+    let peer_id = peer_id.trim().to_string();
+    if peer_id.is_empty() {
+        return Err(WalletError::InvalidInput {
+            msg: "Peer ID is empty".into(),
+        });
+    }
+
+    let wallet = get_wallet()?;
+    let result = runtime::block_on(async {
+        let mut pm = wallet.peer_manager.lock().await;
+        pm.disconnect_peer(&peer_id)
+    })
+    .map_err(|e| WalletError::RuntimeError { msg: e.to_string() })?;
+
+    Ok(result)
+}
 
 /// Set the platform-specific secure storage implementation.
 fn set_platform_storage(storage: Box<dyn PlatformStorageCallback>) {

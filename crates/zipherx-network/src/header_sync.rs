@@ -179,9 +179,9 @@ impl<S: HeaderStore> HeaderSync<S> {
                         peer_manager.start_all_block_listeners().await;
                         tokio::time::sleep(Duration::from_millis(500)).await;
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         #[cfg(debug_assertions)]
-                        eprintln!("[ZipherX] Header sync: reconnect failed: {e}");
+                        eprintln!("[ZipherX] Header sync: reconnect failed: {_e}");
                     }
                 }
             } else if started > 0 {
@@ -340,9 +340,9 @@ impl<S: HeaderStore> HeaderSync<S> {
 
             let (_cmd, payload) = match result {
                 Ok(r) => r,
-                Err(e) => {
+                Err(_e) => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[ZipherX] Header fetch failed from {peer_key}: {e}");
+                    eprintln!("[ZipherX] Header fetch failed from {peer_key}: {_e}");
                     failed_peers.insert(peer_key);
                     continue;
                 }

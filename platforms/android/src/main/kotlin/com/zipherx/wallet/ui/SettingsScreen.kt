@@ -1,5 +1,8 @@
 package com.zipherx.wallet.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
@@ -8,6 +11,7 @@ import android.os.Build
 import android.os.PersistableBundle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -63,6 +67,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import com.zipherx.wallet.BannedPeerInfo
+import com.zipherx.wallet.ConnectedPeerInfo
 import com.zipherx.wallet.WalletViewModel
 import com.zipherx.wallet.ZColors
 import com.zipherx.wallet.ZipherXWrapper
@@ -97,6 +106,14 @@ fun SettingsScreen(
     var showExportKeyDialog by remember { mutableStateOf(false) }
     var exportedKey by remember { mutableStateOf<CharArray?>(null) }
     var showSecurityAuditDialog by remember { mutableStateOf(false) }
+
+    // Peer management state
+    var peerList by remember { mutableStateOf<List<ConnectedPeerInfo>>(emptyList()) }
+    var bannedList by remember { mutableStateOf<List<BannedPeerInfo>>(emptyList()) }
+    var customPeerHost by remember { mutableStateOf("") }
+    var customPeerPort by remember { mutableStateOf("8033") }
+    var peerActionResult by remember { mutableStateOf<String?>(null) }
+    var peerSectionExpanded by remember { mutableStateOf(false) }
 
     // Tor state polling
     var torState by remember { mutableStateOf<UByte>(0u) }
@@ -251,6 +268,316 @@ fun SettingsScreen(
                                 fontSize = 10.sp,
                                 letterSpacing = 1.sp,
                             )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // =================================================================
+            // PEER MANAGEMENT SECTION (collapsible)
+            // =================================================================
+            SectionHeader("PEER MANAGEMENT")
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(cardBorder),
+                shape = cardShape,
+                colors = CardDefaults.cardColors(containerColor = ZColors.surface),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                ) {
+                    // Clickable header row — toggles expand/collapse
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            peerSectionExpanded = !peerSectionExpanded
+                            if (peerSectionExpanded && peerList.isEmpty()) {
+                                scope.launch {
+                                    peerList = withContext(Dispatchers.IO) { ZipherXWrapper.getConnectedPeers() }
+                                    bannedList = withContext(Dispatchers.IO) { ZipherXWrapper.getBannedPeers() }
+                                }
+                            }
+                        },
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "PEER DETAILS",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ZColors.primary,
+                            letterSpacing = 1.sp,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "${peerList.size} connected, ${bannedList.size} banned",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 9.sp,
+                                color = ZColors.primaryDim,
+                            )
+                            Text(
+                                text = if (peerSectionExpanded) "[-]" else "[+]",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZColors.primary,
+                            )
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = peerSectionExpanded,
+                        enter = expandVertically(),
+                        exit = shrinkVertically(),
+                    ) {
+                        Column {
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Refresh button
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch {
+                                            peerList = withContext(Dispatchers.IO) { ZipherXWrapper.getConnectedPeers() }
+                                            bannedList = withContext(Dispatchers.IO) { ZipherXWrapper.getBannedPeers() }
+                                            peerActionResult = null
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(2.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.primary),
+                                ) {
+                                    Text("REFRESH", fontFamily = FontFamily.Monospace, fontSize = 10.sp, letterSpacing = 1.sp)
+                                }
+                            }
+
+                            // Action result feedback
+                            if (peerActionResult != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = peerActionResult!!,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    color = if (peerActionResult!!.startsWith("Error")) ZColors.error else ZColors.primary,
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = ZColors.primaryDim.copy(alpha = 0.3f))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Connected peers list
+                            Text(
+                                text = "CONNECTED (${peerList.size})",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZColors.primary,
+                                letterSpacing = 1.sp,
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            if (peerList.isEmpty()) {
+                                Text(
+                                    text = "No peers loaded. Tap REFRESH.",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    color = ZColors.primaryDim,
+                                )
+                            }
+                            for (peer in peerList) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = peer.address,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            color = ZColors.primary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = "v${peer.protocolVersion} | ${peer.userAgent.take(24)} | h:${peer.startHeight}",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 8.sp,
+                                            color = ZColors.primaryDim,
+                                        )
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch {
+                                                val ok = withContext(Dispatchers.IO) { ZipherXWrapper.disconnectPeer(peer.address) }
+                                                peerActionResult = if (ok) "Disconnected ${peer.address}" else "Error: disconnect failed"
+                                                peerList = withContext(Dispatchers.IO) { ZipherXWrapper.getConnectedPeers() }
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(2.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.error),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(28.dp),
+                                    ) {
+                                        Text("DC", fontFamily = FontFamily.Monospace, fontSize = 8.sp)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = ZColors.primaryDim.copy(alpha = 0.3f))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Banned peers list
+                            Text(
+                                text = "BANNED (${bannedList.size})",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZColors.error,
+                                letterSpacing = 1.sp,
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            if (bannedList.isEmpty()) {
+                                Text(
+                                    text = "No banned peers.",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    color = ZColors.primaryDim,
+                                )
+                            }
+                            for (peer in bannedList) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = peer.host,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            color = ZColors.error,
+                                        )
+                                        val timeStr = if (peer.isPermanent) "permanent" else "${peer.remainingSeconds}s left"
+                                        Text(
+                                            text = "${peer.reason.take(30)} | $timeStr",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 8.sp,
+                                            color = ZColors.primaryDim,
+                                        )
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch {
+                                                val ok = withContext(Dispatchers.IO) { ZipherXWrapper.unbanPeer(peer.host) }
+                                                peerActionResult = if (ok) "Unbanned ${peer.host}" else "Error: unban failed"
+                                                bannedList = withContext(Dispatchers.IO) { ZipherXWrapper.getBannedPeers() }
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(2.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.primary),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(28.dp),
+                                    ) {
+                                        Text("UNBAN", fontFamily = FontFamily.Monospace, fontSize = 8.sp)
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = ZColors.primaryDim.copy(alpha = 0.3f))
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Add custom peer
+                            Text(
+                                text = "ADD CUSTOM PEER",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZColors.primaryDim,
+                                letterSpacing = 1.sp,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "IP address only (no hostnames — DNS leak prevention).",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 8.sp,
+                                color = ZColors.primaryDim,
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                OutlinedTextField(
+                                    value = customPeerHost,
+                                    onValueChange = { customPeerHost = it.filter { c -> c.isDigit() || c == '.' } },
+                                    label = { Text("IP Address", fontFamily = FontFamily.Monospace, fontSize = 9.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = ZColors.primary,
+                                        unfocusedBorderColor = ZColors.primaryDim.copy(alpha = 0.4f),
+                                        cursorColor = ZColors.primary,
+                                        focusedTextColor = ZColors.primary,
+                                        unfocusedTextColor = ZColors.primaryDim,
+                                    ),
+                                    shape = RoundedCornerShape(2.dp),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 10.sp),
+                                )
+                                OutlinedTextField(
+                                    value = customPeerPort,
+                                    onValueChange = { customPeerPort = it.filter { c -> c.isDigit() }.take(5) },
+                                    label = { Text("Port", fontFamily = FontFamily.Monospace, fontSize = 9.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier.width(80.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = ZColors.primary,
+                                        unfocusedBorderColor = ZColors.primaryDim.copy(alpha = 0.4f),
+                                        cursorColor = ZColors.primary,
+                                        focusedTextColor = ZColors.primary,
+                                        unfocusedTextColor = ZColors.primaryDim,
+                                    ),
+                                    shape = RoundedCornerShape(2.dp),
+                                    textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace, fontSize = 10.sp),
+                                )
+                                OutlinedButton(
+                                    onClick = {
+                                        val port = customPeerPort.toIntOrNull() ?: 0
+                                        if (customPeerHost.isBlank()) {
+                                            peerActionResult = "Error: IP address required"
+                                        } else if (port !in 1..65535) {
+                                            peerActionResult = "Error: Invalid port (1-65535)"
+                                        } else {
+                                            scope.launch {
+                                                val ok = withContext(Dispatchers.IO) { ZipherXWrapper.addCustomPeer(customPeerHost, port) }
+                                                peerActionResult = if (ok) "Added ${customPeerHost}:$port" else "Error: Invalid IP or peer rejected"
+                                                if (ok) {
+                                                    customPeerHost = ""
+                                                    peerList = withContext(Dispatchers.IO) { ZipherXWrapper.getConnectedPeers() }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(2.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.primary),
+                                ) {
+                                    Text("ADD", fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                                }
+                            }
                         }
                     }
                 }

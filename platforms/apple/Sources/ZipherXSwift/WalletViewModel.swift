@@ -24,6 +24,7 @@ private let logger = AppleLogger(subsystem: "com.zipherx.wallet", category: "vie
 private func _ffiStartSync(callback: SyncProgressCallback) throws { try startSync(callback: callback) }
 private func _ffiStopSync() { stopSync() }
 private func _ffiSendWithProgress(toAddress: String, amount: UInt64, fee: UInt64, memo: String?, skBytes: [UInt8], callback: SendProgressCallback) throws { try sendWithProgress(toAddress: toAddress, amount: amount, fee: fee, memo: memo, skBytes: skBytes, callback: callback) }
+private func _ffiSetTorEnabled(enabled: Bool) { setTorEnabled(enabled: enabled) }
 #endif
 
 // MARK: - WalletViewModel
@@ -146,7 +147,7 @@ public final class WalletViewModel {
         didSet {
             let storage = AppleSecureStorage()
             let value = Data((screenshotProtectionEnabled ? "1" : "0").utf8)
-            try? storage.storeKey(value, identifier: "screenshot_protection")
+            try? storage.storeKey(identifier: "screenshot_protection", data: value)
         }
     }
 
@@ -184,7 +185,10 @@ public final class WalletViewModel {
         // SA-AUDIT: Zero spending key data after address derivation
         if walletAddress == nil {
             var skData = ZipherXWrapper.loadSpendingKey()
-            defer { skData?.resetBytes(in: 0..<(skData?.count ?? 0)) }
+            defer {
+                let count = skData?.count ?? 0
+                skData?.resetBytes(in: 0..<count)
+            }
             if let sk = skData {
                 do {
                     walletAddress = try ZipherXWrapper.deriveAddressFromKey(sk)
@@ -467,7 +471,7 @@ public final class WalletViewModel {
     public func setTorEnabled(_ enabled: Bool) {
         torEnabled = enabled
         #if canImport(ZipherXFFI)
-        ZipherXFFI.setTorEnabled(enabled: enabled)
+        _ffiSetTorEnabled(enabled: enabled)
         #endif
     }
 

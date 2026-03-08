@@ -899,15 +899,6 @@ class WalletViewModel : ViewModel() {
             _mnemonicWords.value = emptyList()
             _errorMessage.value = null
 
-            // Delete database files
-            withContext(Dispatchers.IO) {
-                try {
-                    uniffi.zipherx.deleteDatabase()
-                } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.w(TAG, "deleteDatabase FFI call failed (may not exist): ${e.message}")
-                }
-            }
-
             if (BuildConfig.DEBUG) Log.i(TAG, "All data deleted. Wallet reset to onboarding state.")
         }
     }

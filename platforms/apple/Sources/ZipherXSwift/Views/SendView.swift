@@ -293,7 +293,10 @@ public struct SendView: View {
     private func performSend() {
         // SA-AUDIT: Zero spending key data after use
         var skData = ZipherXWrapper.loadSpendingKey()
-        defer { skData?.resetBytes(in: 0..<(skData?.count ?? 0)) }
+        defer {
+            let count = skData?.count ?? 0
+            skData?.resetBytes(in: 0..<count)
+        }
         guard let skBytes = skData, !skBytes.isEmpty else {
             viewModel.errorMessage = "Spending key not found. Please restore or import your wallet."
             return

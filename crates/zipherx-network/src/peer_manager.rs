@@ -46,6 +46,33 @@ fn bundled_peers() -> Vec<(String, u16)> {
 }
 use crate::types::*;
 
+/// Connected peer info (safe snapshot for FFI/UI).
+#[derive(Debug, Clone)]
+pub struct ConnectedPeerInfo {
+    pub address: String,
+    pub protocol_version: u32,
+    pub user_agent: String,
+    pub start_height: u32,
+}
+
+/// Banned peer info (safe snapshot for FFI/UI).
+#[derive(Debug, Clone)]
+pub struct BannedPeerInfo {
+    pub host: String,
+    pub reason: String,
+    pub is_permanent: bool,
+    pub remaining_seconds: u64,
+}
+
+/// Truncate a string to max_len chars.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
 /// Default peer manager configuration.
 pub struct PeerManagerConfig {
     pub min_peers: usize,
@@ -294,7 +321,7 @@ impl PeerManager {
                 let sem = self.socks_semaphore.clone();
 
                 join_set.spawn(async move {
-                    let peer_id = format!("{host}:{port}");
+                    let _peer_id = format!("{host}:{port}");
                     let mut peer = Peer::new(host, port);
                     let sem_ref = if tor.is_some() {
                         Some(&*sem as &Semaphore)
@@ -303,14 +330,14 @@ impl PeerManager {
                     };
 
                     #[cfg(debug_assertions)]
-                    eprintln!("[ZipherX] Connecting to {peer_id}...");
+                    eprintln!("[ZipherX] Connecting to {_peer_id}...");
 
                     // TCP connect can take 2-5s, handshake (version/verack exchange)
                     // another 5-15s. 30s outer timeout gives enough room.
                     match tokio::time::timeout(Duration::from_secs(30), async {
                         peer.connect(tor.as_ref(), sem_ref).await?;
                         #[cfg(debug_assertions)]
-                        eprintln!("[ZipherX] TCP connected to {peer_id}, starting handshake...");
+                        eprintln!("[ZipherX] TCP connected to {_peer_id}, starting handshake...");
                         peer.perform_handshake(0).await?;
                         Ok::<Peer, NetworkError>(peer)
                     })
@@ -324,14 +351,14 @@ impl PeerManager {
                             );
                             Some(peer)
                         }
-                        Ok(Err(e)) => {
+                        Ok(Err(_e)) => {
                             #[cfg(debug_assertions)]
-                            eprintln!("[ZipherX] Peer {peer_id} failed: {e}");
+                            eprintln!("[ZipherX] Peer {_peer_id} failed: {_e}");
                             None
                         }
                         Err(_) => {
                             #[cfg(debug_assertions)]
-                            eprintln!("[ZipherX] Peer {peer_id} timed out (30s)");
+                            eprintln!("[ZipherX] Peer {_peer_id} timed out (30s)");
                             None
                         }
                     }
@@ -413,13 +440,15 @@ impl PeerManager {
         }
 
         #[cfg(debug_assertions)]
-        let bundled_count = bundled_peers().len();
-        eprintln!(
-            "[ZipherX] Peer discovery: {} DNS + {} bundled = {} candidates",
-            addresses.len(),
-            bundled_count,
-            addresses.len() + bundled_count
-        );
+        {
+            let bundled_count = bundled_peers().len();
+            eprintln!(
+                "[ZipherX] Peer discovery: {} DNS + {} bundled = {} candidates",
+                addresses.len(),
+                bundled_count,
+                addresses.len() + bundled_count
+            );
+        }
         addresses
     }
 
@@ -612,6 +641,113 @@ impl PeerManager {
         } else {
             false
         }
+    }
+
+    /// Unban a peer. Returns true if the peer was banned and was removed.
+    pub fn unban_peer(&mut self, host: &str) -> bool {
+        self.banned_peers.remove(host).is_some()
+    }
+
+    /// Disconnect a specific peer by id (host:port).
+    /// Returns true if the peer was found and removed.
+    pub fn disconnect_peer(&mut self, peer_id: &str) -> bool {
+        self.peers.remove(peer_id).is_some()
+    }
+
+    /// Get info about all connected peers (safe snapshot for FFI).
+    pub fn get_connected_peer_infos(&self) -> Vec<ConnectedPeerInfo> {
+        self.peers
+            .values()
+            .map(|p| ConnectedPeerInfo {
+                address: p.id.clone(),
+                protocol_version: p.peer_version,
+                user_agent: truncate_str(&p.peer_user_agent, 64),
+                start_height: p.peer_start_height,
+            })
+            .collect()
+    }
+
+    /// Get info about all currently banned peers.
+    pub fn get_banned_peer_infos(&self) -> Vec<BannedPeerInfo> {
+        self.banned_peers
+            .iter()
+            .filter(|(_, entry)| entry.permanent || entry.banned_at.elapsed() < entry.duration)
+            .map(|(host, entry)| {
+                let remaining = if entry.permanent {
+                    u64::MAX
+                } else {
+                    entry
+                        .duration
+                        .checked_sub(entry.banned_at.elapsed())
+                        .unwrap_or_default()
+                        .as_secs()
+                };
+                BannedPeerInfo {
+                    host: host.clone(),
+                    reason: format!("{}", entry.reason),
+                    is_permanent: entry.permanent,
+                    remaining_seconds: remaining,
+                }
+            })
+            .collect()
+    }
+
+    /// Validate a peer address for user input.
+    /// Returns Ok(()) if valid, Err(reason) if not.
+    pub fn validate_peer_address(host: &str, port: u16) -> Result<(), String> {
+        if host.is_empty() {
+            return Err("Host is empty".into());
+        }
+        if host.len() > 253 {
+            return Err("Host too long (max 253 chars)".into());
+        }
+        if host.contains('\0') {
+            return Err("Host contains null byte".into());
+        }
+        // Reject shell metacharacters
+        for c in [
+            ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\\', '\'', '"',
+        ] {
+            if host.contains(c) {
+                return Err(format!("Host contains invalid character: {c}"));
+            }
+        }
+        if host.contains(char::is_whitespace) {
+            return Err("Host contains whitespace".into());
+        }
+        // Must be a valid IP address (no hostnames to prevent DNS leaks)
+        if host.parse::<std::net::IpAddr>().is_err() {
+            return Err("Host must be a valid IP address (no hostnames)".into());
+        }
+        if is_reserved_ip(host) {
+            return Err("Reserved/private IP addresses not allowed".into());
+        }
+        if port == 0 {
+            return Err("Port must be > 0".into());
+        }
+        Ok(())
+    }
+
+    /// Add a custom peer from user input. Returns true if added.
+    pub fn add_custom_peer(&mut self, host: &str, port: u16) -> Result<bool, String> {
+        Self::validate_peer_address(host, port)?;
+        let key = format!("{host}:{port}");
+        if self.known_addresses.contains_key(&key) {
+            return Ok(false); // Already known
+        }
+        if self.known_addresses.len() >= MAX_KNOWN_ADDRESSES {
+            return Err("Maximum peer addresses reached".into());
+        }
+        self.known_addresses.insert(
+            key,
+            AddressInfo {
+                host: host.to_string(),
+                port,
+                last_attempt: None,
+                is_hardcoded: false,
+            },
+        );
+        Ok(true)
     }
 
     /// RN-N4: Record a message from a peer and check rate limits.

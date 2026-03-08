@@ -53,6 +53,20 @@ data class Transaction(
     val timestamp: Long,
 )
 
+data class ConnectedPeerInfo(
+    val address: String,
+    val protocolVersion: Int,
+    val userAgent: String,
+    val startHeight: Int,
+)
+
+data class BannedPeerInfo(
+    val host: String,
+    val reason: String,
+    val isPermanent: Boolean,
+    val remainingSeconds: Long,
+)
+
 // ---------------------------------------------------------------------------
 // Wrapper Singleton
 // ---------------------------------------------------------------------------
@@ -212,5 +226,61 @@ object ZipherXWrapper {
 
     fun getVersion(): String {
         return uniffi.zipherx.getVersion()
+    }
+
+    fun getConnectedPeers(): List<ConnectedPeerInfo> {
+        return try {
+            uniffi.zipherx.getConnectedPeers().map { p ->
+                ConnectedPeerInfo(
+                    address = p.address,
+                    protocolVersion = p.protocolVersion.toInt(),
+                    userAgent = p.userAgent,
+                    startHeight = p.startHeight.toInt(),
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun getBannedPeers(): List<BannedPeerInfo> {
+        return try {
+            uniffi.zipherx.getBannedPeers().map { p ->
+                BannedPeerInfo(
+                    host = p.host,
+                    reason = p.reason,
+                    isPermanent = p.isPermanent,
+                    remainingSeconds = p.remainingSeconds.toLong(),
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    fun addCustomPeer(host: String, port: Int): Boolean {
+        val trimmed = host.trim()
+        if (trimmed.isEmpty() || trimmed.length > 253) return false
+        return try {
+            uniffi.zipherx.addCustomPeer(trimmed, port.toUShort())
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun unbanPeer(host: String): Boolean {
+        return try {
+            uniffi.zipherx.unbanPeer(host)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun disconnectPeer(peerId: String): Boolean {
+        return try {
+            uniffi.zipherx.disconnectPeer(peerId)
+        } catch (_: Exception) {
+            false
+        }
     }
 }

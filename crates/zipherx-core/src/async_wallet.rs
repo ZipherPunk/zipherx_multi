@@ -181,6 +181,29 @@ impl AsyncWallet {
         // Update peer count after sync completes
         peer_count_ref.store(pm.connected_count() as u32, Ordering::Relaxed);
 
+        // Pre-initialize the Sapling prover after sync so that send() is instant.
+        // The params files are cached on disk; this just loads them into memory.
+        // Only runs once per app session (is_prover_ready() returns true afterwards).
+        if result.is_ok() && !crate::async_prover::is_prover_ready() {
+            let spend_path = self.core.config.spend_params_path.clone();
+            let output_path = self.core.config.output_params_path.clone();
+            tokio::spawn(async move {
+                match crate::async_prover::ensure_prover_initialized(&spend_path, &output_path)
+                    .await
+                {
+                    Ok(()) => {
+                        eprintln!("[ZipherX] Sapling prover pre-initialized (ready to send)");
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[ZipherX] Prover pre-init failed (will retry on send): {}",
+                            e
+                        );
+                    }
+                }
+            });
+        }
+
         result
     }
 
