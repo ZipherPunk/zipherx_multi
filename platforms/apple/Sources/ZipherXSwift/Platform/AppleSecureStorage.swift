@@ -46,7 +46,12 @@ public final class AppleSecureStorage: @unchecked Sendable {
         var query = baseQuery(for: identifier)
         query[kSecValueData as String]  = data
 
-        // C-4: Add SecAccessControl with .userPresence for spending key
+        // C-4: On iOS, add SecAccessControl with .userPresence for spending key
+        // so the OS requires biometric/passcode before the item can be read.
+        // On macOS, skip .userPresence — Hardened Runtime + sandbox causes
+        // errSecMissingEntitlement (-34018) with SecAccessControl in dev builds.
+        // macOS biometric auth is enforced separately via LAContext before key access.
+        #if os(iOS)
         if requireUserPresence {
             var error: Unmanaged<CFError>?
             guard let accessControl = SecAccessControlCreateWithFlags(
@@ -55,7 +60,6 @@ public final class AppleSecureStorage: @unchecked Sendable {
                 .userPresence,
                 &error
             ) else {
-                // SA-AUDIT: Include the error description instead of swallowing it
                 let desc = error.map { ($0.takeRetainedValue() as Error).localizedDescription } ?? "unknown"
                 throw SecureStorageError.unexpectedData("SecAccessControl creation failed: \(desc)")
             }
@@ -63,6 +67,9 @@ public final class AppleSecureStorage: @unchecked Sendable {
         } else {
             query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         }
+        #else
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        #endif
 
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
