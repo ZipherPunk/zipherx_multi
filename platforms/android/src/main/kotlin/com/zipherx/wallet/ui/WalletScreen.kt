@@ -24,8 +24,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallMade
@@ -60,8 +62,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -335,10 +340,8 @@ fun WalletScreen(
                     Spacer(modifier = Modifier.height(24.dp))
                 } else {
                 // Onboarding: no wallet yet
-                var mnemonicInput by remember { mutableStateOf("") }
-                val mnemonicWords = remember(mnemonicInput) {
-                    mnemonicInput.trim().split("\\s+".toRegex())
-                }
+                var seedWords by remember { mutableStateOf(List(24) { "" }) }
+                val filledCount = seedWords.count { it.isNotBlank() }
                 var skInput by remember { mutableStateOf("") }
 
                 Spacer(modifier = Modifier.height(48.dp))
@@ -392,22 +395,86 @@ fun WalletScreen(
                     style = MaterialTheme.typography.titleSmall,
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
-                OutlinedTextField(
-                    value = mnemonicInput,
-                    onValueChange = { mnemonicInput = it },
-                    label = { Text("24 words separated by spaces") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3,
+                Text(
+                    text = "$filledCount/24 words filled",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    color = if (filledCount == 24) Color(0xFF00E676)
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // 24-word grid: 8 rows x 3 columns
+                for (row in 0 until 8) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        for (col in 0 until 3) {
+                            val index = row * 3 + col
+                            OutlinedTextField(
+                                value = seedWords[index],
+                                onValueChange = { newValue ->
+                                    // Detect multi-word paste (contains spaces)
+                                    val trimmed = newValue.trim()
+                                    val words = trimmed.split("\\s+".toRegex()).filter { it.isNotBlank() }
+                                    if (words.size > 1) {
+                                        // Paste detected: distribute words starting from this field
+                                        val updated = seedWords.toMutableList()
+                                        for (i in words.indices) {
+                                            val targetIndex = index + i
+                                            if (targetIndex < 24) {
+                                                updated[targetIndex] = words[i].lowercase()
+                                            }
+                                        }
+                                        seedWords = updated
+                                    } else {
+                                        // Single word edit: update only this field
+                                        val updated = seedWords.toMutableList()
+                                        updated[index] = newValue.lowercase().trim()
+                                        seedWords = updated
+                                    }
+                                },
+                                label = {
+                                    Text(
+                                        "#${index + 1}",
+                                        style = TextStyle(fontSize = 10.sp),
+                                    )
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp),
+                                textStyle = TextStyle(
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Text,
+                                    imeAction = if (index < 23) ImeAction.Next else ImeAction.Done,
+                                    autoCorrectEnabled = false,
+                                ),
+                            )
+                        }
+                    }
+                    if (row < 7) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 OutlinedButton(
-                    onClick = { viewModel.restoreFromMnemonic(mnemonicWords) },
+                    onClick = {
+                        val mnemonicWords = seedWords.map { it.trim().lowercase() }
+                        viewModel.restoreFromMnemonic(mnemonicWords)
+                    },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !isBusy && mnemonicWords.size == 24,
+                    enabled = !isBusy && filledCount == 24,
                 ) {
                     Text("Restore Wallet")
                 }

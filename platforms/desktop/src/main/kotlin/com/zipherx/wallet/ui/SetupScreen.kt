@@ -9,6 +9,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -26,6 +29,7 @@ fun SetupScreen(
     var mnemonicWords by remember { mutableStateOf<List<String>?>(null) }
     var restoreInput by remember { mutableStateOf("") }
     var importInput by remember { mutableStateOf("") }
+    var seedWords by remember { mutableStateOf(List(24) { "" }) }
     var error by remember { mutableStateOf<String?>(null) }
     val vmError by viewModel.error.collectAsState()
 
@@ -118,6 +122,8 @@ fun SetupScreen(
                 }
             }
             "restore" -> {
+                val focusRequesters = remember { List(24) { FocusRequester() } }
+
                 Text(
                     text = "> ENTER 24-WORD MNEMONIC",
                     fontSize = 13.sp,
@@ -125,21 +131,94 @@ fun SetupScreen(
                     fontFamily = FontFamily.Monospace,
                     color = ZColors.primary,
                 )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = restoreInput,
-                    onValueChange = { restoreInput = it; error = null },
-                    label = { Text("Mnemonic words (space-separated)", fontFamily = FontFamily.Monospace, fontSize = 10.sp) },
-                    modifier = Modifier.fillMaxWidth().height(120.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = ZColors.primary,
-                        unfocusedBorderColor = ZColors.border,
-                        cursorColor = ZColors.primary,
-                        focusedTextColor = ZColors.primary,
-                        unfocusedTextColor = ZColors.primaryDim,
-                    ),
-                    shape = RoundedCornerShape(2.dp),
+                Spacer(Modifier.height(8.dp))
+
+                val filledCount = seedWords.count { it.isNotBlank() }
+                Text(
+                    text = "$filledCount/24 words filled",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (filledCount == 24) ZColors.primary else ZColors.textDim,
                 )
+                Spacer(Modifier.height(12.dp))
+
+                // 24-field grid: 8 rows x 3 columns
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    for (rowIdx in 0 until 8) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            for (colIdx in 0 until 3) {
+                                val idx = rowIdx * 3 + colIdx
+                                val wordNum = idx + 1
+                                OutlinedTextField(
+                                    value = seedWords[idx],
+                                    onValueChange = { newValue ->
+                                        error = null
+                                        val trimmed = newValue.trim()
+                                        // Detect multi-word paste (contains spaces -> multiple words)
+                                        if (trimmed.contains(" ") || trimmed.contains("\t") || trimmed.contains("\n")) {
+                                            val pastedWords = trimmed.split("\\s+".toRegex()).filter { it.isNotBlank() }
+                                            val updated = seedWords.toMutableList()
+                                            for (i in pastedWords.indices) {
+                                                val targetIdx = idx + i
+                                                if (targetIdx < 24) {
+                                                    updated[targetIdx] = pastedWords[i].lowercase()
+                                                }
+                                            }
+                                            seedWords = updated
+                                            // Focus the field after the last pasted word, or the last field
+                                            val nextFocus = minOf(idx + pastedWords.size, 23)
+                                            try { focusRequesters[nextFocus].requestFocus() } catch (_: Exception) {}
+                                        } else {
+                                            // Single word typed
+                                            val updated = seedWords.toMutableList()
+                                            updated[idx] = newValue.lowercase().replace(" ", "")
+                                            seedWords = updated
+                                            // Auto-advance if the word looks complete (no spaces, non-empty, ended with space in raw input)
+                                            if (newValue.endsWith(" ") && trimmed.isNotBlank() && idx < 23) {
+                                                updated[idx] = trimmed.lowercase()
+                                                seedWords = updated
+                                                try { focusRequesters[idx + 1].requestFocus() } catch (_: Exception) {}
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(52.dp)
+                                        .focusRequester(focusRequesters[idx]),
+                                    textStyle = TextStyle(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        color = ZColors.primary,
+                                    ),
+                                    label = {
+                                        Text(
+                                            "#$wordNum",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            color = ZColors.textDim,
+                                        )
+                                    },
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = ZColors.primary,
+                                        unfocusedBorderColor = ZColors.border,
+                                        cursorColor = ZColors.primary,
+                                        focusedTextColor = ZColors.primary,
+                                        unfocusedTextColor = ZColors.primaryDim,
+                                    ),
+                                    shape = RoundedCornerShape(2.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
                 val displayError = error ?: vmError
                 if (displayError != null) {
                     Spacer(Modifier.height(4.dp))
@@ -147,9 +226,10 @@ fun SetupScreen(
                 }
                 Spacer(Modifier.height(12.dp))
                 SetupButton("RESTORE") {
-                    val words = restoreInput.trim().split("\\s+".toRegex())
-                    if (words.size != 24) {
-                        error = "Expected 24 words, got ${words.size}"
+                    val words = seedWords.map { it.trim().lowercase() }
+                    val emptyCount = words.count { it.isBlank() }
+                    if (emptyCount > 0) {
+                        error = "Missing ${emptyCount} word${if (emptyCount > 1) "s" else ""} — fill all 24 fields"
                     } else if (viewModel.restoreWallet(words)) {
                         onWalletCreated()
                     } else {
