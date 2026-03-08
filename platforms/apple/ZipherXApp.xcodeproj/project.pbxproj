@@ -1,0 +1,629 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		08F74D1949E2B5719BB159A1 /* AppleClipboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2240C49C1618F35034CA932A /* AppleClipboard.swift */; };
+		108AB0304674E35D510A6AA0 /* ReceiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27499A7AD2F2366FE93ADC16 /* ReceiveView.swift */; };
+		18330F9129C5064B3FF00E76 /* ZipherXTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08D5A51222E212910ADBBFEA /* ZipherXTheme.swift */; };
+		1A375949E3A602880A0538E7 /* PlatformBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA36FF6E04D83ED29DA52985 /* PlatformBridge.swift */; };
+		1D1C489F9039AEAC3E3952D7 /* TransactionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1576DD69D5A15489745EF6 /* TransactionHistoryView.swift */; };
+		2A2AD2114D85ADFA9D530258 /* zipherx.swift in Sources */ = {isa = PBXBuildFile; fileRef = F91E4570F579EFA270816B67 /* zipherx.swift */; };
+		2AA34351ED251C25604AF7E4 /* AppleClipboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2240C49C1618F35034CA932A /* AppleClipboard.swift */; };
+		3EBE1E1BF5574A65225E7D17 /* ApplePlatformInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A59467963C4EFB5CCA6F64 /* ApplePlatformInfo.swift */; };
+		4A38AB7273C22E5012F8A388 /* ZipherXWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B137B19C6CE238CE7201FF7 /* ZipherXWrapper.swift */; };
+		54E88918F3DB0DBF93B833B6 /* AppleLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96B1D4415D7674B37790033A /* AppleLogger.swift */; };
+		550ECEE51C5E0438826C8E08 /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03DAE139482AA91B06F0F65 /* WalletView.swift */; };
+		565AF718DF0D8227EAB70ABF /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF68FE636687CF9BC891545A /* SettingsView.swift */; };
+		581457D33D93106996E8B085 /* SendView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0A2FF1F9EF05B04F73C0C4C /* SendView.swift */; };
+		644A91C5B8737A0F5C7A41DA /* AppleSecureStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DE32D50EBB8F8FA42DBC28F /* AppleSecureStorage.swift */; };
+		6715423EC44226160C75CCD9 /* ZipherXWrapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B137B19C6CE238CE7201FF7 /* ZipherXWrapper.swift */; };
+		6ECFF27DBDC9A93C5DD78DDE /* TransactionHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A1576DD69D5A15489745EF6 /* TransactionHistoryView.swift */; };
+		789609A07CDDE8B88330061C /* ZipherXApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22720DEA756565923EE27A03 /* ZipherXApp.swift */; };
+		78D5EFCCE5CAC29229CBA81E /* zipherx.swift in Sources */ = {isa = PBXBuildFile; fileRef = F91E4570F579EFA270816B67 /* zipherx.swift */; };
+		8B361069E2665492C9C03A9E /* ZipherXTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08D5A51222E212910ADBBFEA /* ZipherXTheme.swift */; };
+		903B9BEB0D6F5D407DAC89B0 /* WalletViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E03C19F322E8D64586A5CBE /* WalletViewModel.swift */; };
+		9774A2FEF8F775CB9EA03633 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF68FE636687CF9BC891545A /* SettingsView.swift */; };
+		A26F6FEE14CE98E9271DF324 /* BalanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175D8176703FE3DFCB37568B /* BalanceView.swift */; };
+		B645D37C70E46D884FF7C353 /* ReceiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27499A7AD2F2366FE93ADC16 /* ReceiveView.swift */; };
+		B8A040B0650476B2111DDD09 /* WalletSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B5134BC7940639AE34A7B2 /* WalletSetupView.swift */; };
+		BAB7D08923BCCDA4FC012BF3 /* SendView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0A2FF1F9EF05B04F73C0C4C /* SendView.swift */; };
+		D88D72774F7407502F9D9379 /* WalletViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E03C19F322E8D64586A5CBE /* WalletViewModel.swift */; };
+		E2792855138B66B59D1AF8A4 /* AppleBiometricAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E1C3B6E910B1BB70FD69121 /* AppleBiometricAuth.swift */; };
+		E2BA08918976EA0034ABF287 /* AppleLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96B1D4415D7674B37790033A /* AppleLogger.swift */; };
+		E74B644D57959CFE4D8F21D5 /* WalletSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B5134BC7940639AE34A7B2 /* WalletSetupView.swift */; };
+		ECA21BD102C1015AB8BAD082 /* BalanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175D8176703FE3DFCB37568B /* BalanceView.swift */; };
+		EEAB0B309A025B9872C92112 /* ZipherXApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22720DEA756565923EE27A03 /* ZipherXApp.swift */; };
+		F1FE95273EC7E6BDD45AC2E1 /* AppleBiometricAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E1C3B6E910B1BB70FD69121 /* AppleBiometricAuth.swift */; };
+		F41195DABA7C5FA57DEDF18E /* AppleSecureStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DE32D50EBB8F8FA42DBC28F /* AppleSecureStorage.swift */; };
+		F733066BB5BDC185046065AA /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03DAE139482AA91B06F0F65 /* WalletView.swift */; };
+		F7D9D747C5213E412280585E /* AppleNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70EAE3313F398F65B4C9D1A /* AppleNotifications.swift */; };
+		F87C24C098F4FF6119D8C23A /* ApplePlatformInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A59467963C4EFB5CCA6F64 /* ApplePlatformInfo.swift */; };
+		F9C258AB37AB28A49388F59B /* PlatformBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA36FF6E04D83ED29DA52985 /* PlatformBridge.swift */; };
+		FCF00649E87C146E09B401CF /* AppleNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = F70EAE3313F398F65B4C9D1A /* AppleNotifications.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		08D5A51222E212910ADBBFEA /* ZipherXTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipherXTheme.swift; sourceTree = "<group>"; };
+		0B137B19C6CE238CE7201FF7 /* ZipherXWrapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipherXWrapper.swift; sourceTree = "<group>"; };
+		0E03C19F322E8D64586A5CBE /* WalletViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletViewModel.swift; sourceTree = "<group>"; };
+		175D8176703FE3DFCB37568B /* BalanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BalanceView.swift; sourceTree = "<group>"; };
+		1A1576DD69D5A15489745EF6 /* TransactionHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransactionHistoryView.swift; sourceTree = "<group>"; };
+		1DE32D50EBB8F8FA42DBC28F /* AppleSecureStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSecureStorage.swift; sourceTree = "<group>"; };
+		2240C49C1618F35034CA932A /* AppleClipboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleClipboard.swift; sourceTree = "<group>"; };
+		22720DEA756565923EE27A03 /* ZipherXApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipherXApp.swift; sourceTree = "<group>"; };
+		27499A7AD2F2366FE93ADC16 /* ReceiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReceiveView.swift; sourceTree = "<group>"; };
+		711C664AE13387B7A1A342B6 /* ZipherXApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ZipherXApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		76A59467963C4EFB5CCA6F64 /* ApplePlatformInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplePlatformInfo.swift; sourceTree = "<group>"; };
+		8E1C3B6E910B1BB70FD69121 /* AppleBiometricAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleBiometricAuth.swift; sourceTree = "<group>"; };
+		96B1D4415D7674B37790033A /* AppleLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleLogger.swift; sourceTree = "<group>"; };
+		AF68FE636687CF9BC891545A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B03DAE139482AA91B06F0F65 /* WalletView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletView.swift; sourceTree = "<group>"; };
+		B0B5134BC7940639AE34A7B2 /* WalletSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletSetupView.swift; sourceTree = "<group>"; };
+		CA36FF6E04D83ED29DA52985 /* PlatformBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformBridge.swift; sourceTree = "<group>"; };
+		D0A2FF1F9EF05B04F73C0C4C /* SendView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SendView.swift; sourceTree = "<group>"; };
+		EBABAFAE73D9798396AF2D40 /* ZipherXApp-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "ZipherXApp-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F70EAE3313F398F65B4C9D1A /* AppleNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleNotifications.swift; sourceTree = "<group>"; };
+		F91E4570F579EFA270816B67 /* zipherx.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = zipherx.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		02AB15393CB58DD92C45B4C1 = {
+			isa = PBXGroup;
+			children = (
+				D98DE64B36EEA7223B3C52FC /* Generated */,
+				B11F12EE10206FAD318C5025 /* Sources */,
+				6811F589E7F1AFAC30E60B1B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		2F99305AC852E01C498011A1 /* ZipherXApp */ = {
+			isa = PBXGroup;
+			children = (
+				22720DEA756565923EE27A03 /* ZipherXApp.swift */,
+			);
+			path = ZipherXApp;
+			sourceTree = "<group>";
+		};
+		54327AEC9766532B1BEFB66A /* swift */ = {
+			isa = PBXGroup;
+			children = (
+				F91E4570F579EFA270816B67 /* zipherx.swift */,
+			);
+			path = swift;
+			sourceTree = "<group>";
+		};
+		56910B0E9D151C19A245D146 /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+				8E1C3B6E910B1BB70FD69121 /* AppleBiometricAuth.swift */,
+				2240C49C1618F35034CA932A /* AppleClipboard.swift */,
+				96B1D4415D7674B37790033A /* AppleLogger.swift */,
+				F70EAE3313F398F65B4C9D1A /* AppleNotifications.swift */,
+				76A59467963C4EFB5CCA6F64 /* ApplePlatformInfo.swift */,
+				1DE32D50EBB8F8FA42DBC28F /* AppleSecureStorage.swift */,
+				CA36FF6E04D83ED29DA52985 /* PlatformBridge.swift */,
+			);
+			path = Platform;
+			sourceTree = "<group>";
+		};
+		6603B35D8F2E86D70748B71E /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				08D5A51222E212910ADBBFEA /* ZipherXTheme.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
+		6811F589E7F1AFAC30E60B1B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				EBABAFAE73D9798396AF2D40 /* ZipherXApp-iOS.app */,
+				711C664AE13387B7A1A342B6 /* ZipherXApp.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		B11F12EE10206FAD318C5025 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				2F99305AC852E01C498011A1 /* ZipherXApp */,
+				E7871454AF8A8AB28D2DB90B /* ZipherXSwift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		D22B6B9485B66CC830DC49B2 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				175D8176703FE3DFCB37568B /* BalanceView.swift */,
+				27499A7AD2F2366FE93ADC16 /* ReceiveView.swift */,
+				D0A2FF1F9EF05B04F73C0C4C /* SendView.swift */,
+				AF68FE636687CF9BC891545A /* SettingsView.swift */,
+				1A1576DD69D5A15489745EF6 /* TransactionHistoryView.swift */,
+				B0B5134BC7940639AE34A7B2 /* WalletSetupView.swift */,
+				B03DAE139482AA91B06F0F65 /* WalletView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		D98DE64B36EEA7223B3C52FC /* Generated */ = {
+			isa = PBXGroup;
+			children = (
+				54327AEC9766532B1BEFB66A /* swift */,
+			);
+			path = Generated;
+			sourceTree = "<group>";
+		};
+		E7871454AF8A8AB28D2DB90B /* ZipherXSwift */ = {
+			isa = PBXGroup;
+			children = (
+				0E03C19F322E8D64586A5CBE /* WalletViewModel.swift */,
+				0B137B19C6CE238CE7201FF7 /* ZipherXWrapper.swift */,
+				56910B0E9D151C19A245D146 /* Platform */,
+				6603B35D8F2E86D70748B71E /* Theme */,
+				D22B6B9485B66CC830DC49B2 /* Views */,
+			);
+			path = ZipherXSwift;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B254D5F6565B2CF034BED751 /* ZipherXApp-iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5B02F957F43575560ADEE286 /* Build configuration list for PBXNativeTarget "ZipherXApp-iOS" */;
+			buildPhases = (
+				B6381CA240855E9B15A493E1 /* Check Rust FFI Build (iOS) */,
+				C54AF28FFF55D392F229B736 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "ZipherXApp-iOS";
+			packageProductDependencies = (
+			);
+			productName = "ZipherXApp-iOS";
+			productReference = EBABAFAE73D9798396AF2D40 /* ZipherXApp-iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B6DFAAEE6309F53E6409C166 /* ZipherXApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7D6C76340D7A36EF7D9E12B1 /* Build configuration list for PBXNativeTarget "ZipherXApp" */;
+			buildPhases = (
+				2C24261FC52D885509AC4678 /* Check Rust FFI Build */,
+				5E7ED8DA60278FA0D01DEC7D /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ZipherXApp;
+			packageProductDependencies = (
+			);
+			productName = ZipherXApp;
+			productReference = 711C664AE13387B7A1A342B6 /* ZipherXApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DC4C9066685CBAFD26467061 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					B254D5F6565B2CF034BED751 = {
+						ProvisioningStyle = Automatic;
+					};
+					B6DFAAEE6309F53E6409C166 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 74A61C67AF0B9806BCD67FCF /* Build configuration list for PBXProject "ZipherXApp" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 02AB15393CB58DD92C45B4C1;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B6DFAAEE6309F53E6409C166 /* ZipherXApp */,
+				B254D5F6565B2CF034BED751 /* ZipherXApp-iOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		2C24261FC52D885509AC4678 /* Check Rust FFI Build */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check Rust FFI Build";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ ! -f \"${PROJECT_DIR}/Generated/lib/libzipherx_ffi.a\" ]; then\n  echo \"error: Rust FFI library not found.\"\n  echo \"error: Run ./scripts/build-macos.sh from the repository root first.\"\n  exit 1\nfi\n";
+		};
+		B6381CA240855E9B15A493E1 /* Check Rust FFI Build (iOS) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check Rust FFI Build (iOS)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ ! -f \"${PROJECT_DIR}/Generated/lib-ios-sim/libzipherx_ffi.a\" ]; then\n  echo \"error: Rust FFI library for iOS Simulator not found.\"\n  echo \"error: Run ./scripts/build-ios-sim.sh from the repository root first.\"\n  exit 1\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5E7ED8DA60278FA0D01DEC7D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E2792855138B66B59D1AF8A4 /* AppleBiometricAuth.swift in Sources */,
+				08F74D1949E2B5719BB159A1 /* AppleClipboard.swift in Sources */,
+				54E88918F3DB0DBF93B833B6 /* AppleLogger.swift in Sources */,
+				FCF00649E87C146E09B401CF /* AppleNotifications.swift in Sources */,
+				F87C24C098F4FF6119D8C23A /* ApplePlatformInfo.swift in Sources */,
+				644A91C5B8737A0F5C7A41DA /* AppleSecureStorage.swift in Sources */,
+				A26F6FEE14CE98E9271DF324 /* BalanceView.swift in Sources */,
+				1A375949E3A602880A0538E7 /* PlatformBridge.swift in Sources */,
+				108AB0304674E35D510A6AA0 /* ReceiveView.swift in Sources */,
+				581457D33D93106996E8B085 /* SendView.swift in Sources */,
+				565AF718DF0D8227EAB70ABF /* SettingsView.swift in Sources */,
+				1D1C489F9039AEAC3E3952D7 /* TransactionHistoryView.swift in Sources */,
+				B8A040B0650476B2111DDD09 /* WalletSetupView.swift in Sources */,
+				550ECEE51C5E0438826C8E08 /* WalletView.swift in Sources */,
+				903B9BEB0D6F5D407DAC89B0 /* WalletViewModel.swift in Sources */,
+				789609A07CDDE8B88330061C /* ZipherXApp.swift in Sources */,
+				8B361069E2665492C9C03A9E /* ZipherXTheme.swift in Sources */,
+				4A38AB7273C22E5012F8A388 /* ZipherXWrapper.swift in Sources */,
+				2A2AD2114D85ADFA9D530258 /* zipherx.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C54AF28FFF55D392F229B736 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F1FE95273EC7E6BDD45AC2E1 /* AppleBiometricAuth.swift in Sources */,
+				2AA34351ED251C25604AF7E4 /* AppleClipboard.swift in Sources */,
+				E2BA08918976EA0034ABF287 /* AppleLogger.swift in Sources */,
+				F7D9D747C5213E412280585E /* AppleNotifications.swift in Sources */,
+				3EBE1E1BF5574A65225E7D17 /* ApplePlatformInfo.swift in Sources */,
+				F41195DABA7C5FA57DEDF18E /* AppleSecureStorage.swift in Sources */,
+				ECA21BD102C1015AB8BAD082 /* BalanceView.swift in Sources */,
+				F9C258AB37AB28A49388F59B /* PlatformBridge.swift in Sources */,
+				B645D37C70E46D884FF7C353 /* ReceiveView.swift in Sources */,
+				BAB7D08923BCCDA4FC012BF3 /* SendView.swift in Sources */,
+				9774A2FEF8F775CB9EA03633 /* SettingsView.swift in Sources */,
+				6ECFF27DBDC9A93C5DD78DDE /* TransactionHistoryView.swift in Sources */,
+				E74B644D57959CFE4D8F21D5 /* WalletSetupView.swift in Sources */,
+				F733066BB5BDC185046065AA /* WalletView.swift in Sources */,
+				D88D72774F7407502F9D9379 /* WalletViewModel.swift in Sources */,
+				EEAB0B309A025B9872C92112 /* ZipherXApp.swift in Sources */,
+				18330F9129C5064B3FF00E76 /* ZipherXTheme.swift in Sources */,
+				6715423EC44226160C75CCD9 /* ZipherXWrapper.swift in Sources */,
+				78D5EFCCE5CAC29229CBA81E /* zipherx.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		78519BA5A3EDAE3FF997B1AF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ZipherXApp.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated/include",
+				);
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = (
+					"-lzipherx_ffi",
+					"-lc++",
+					"-lz",
+					"-lresolv",
+					"-framework",
+					SystemConfiguration,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.zipherx.wallet.macos;
+				SDKROOT = macosx;
+				SWIFT_INCLUDE_PATHS = (
+					"$(PROJECT_DIR)/Generated/include",
+				);
+			};
+			name = Release;
+		};
+		C25F933F9018541D682A43F9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated/include",
+				);
+				INFOPLIST_FILE = "Info-iOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated/lib-ios-sim",
+				);
+				OTHER_LDFLAGS = (
+					"-lzipherx_ffi",
+					"-lc++",
+					"-lz",
+					"-lresolv",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.zipherx.wallet.ios;
+				SDKROOT = iphoneos;
+				SWIFT_INCLUDE_PATHS = (
+					"$(PROJECT_DIR)/Generated/include",
+				);
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		C458E5349372D968141A9B7B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ZipherXApp.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated/include",
+				);
+				INFOPLIST_FILE = Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = (
+					"-lzipherx_ffi",
+					"-lc++",
+					"-lz",
+					"-lresolv",
+					"-framework",
+					SystemConfiguration,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.zipherx.wallet.macos;
+				SDKROOT = macosx;
+				SWIFT_INCLUDE_PATHS = (
+					"$(PROJECT_DIR)/Generated/include",
+				);
+			};
+			name = Debug;
+		};
+		ED74B2F32D35B29F0D2C7492 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated/include",
+				);
+				INFOPLIST_FILE = "Info-iOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Generated/lib-ios-sim",
+				);
+				OTHER_LDFLAGS = (
+					"-lzipherx_ffi",
+					"-lc++",
+					"-lz",
+					"-lresolv",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.zipherx.wallet.ios;
+				SDKROOT = iphoneos;
+				SWIFT_INCLUDE_PATHS = (
+					"$(PROJECT_DIR)/Generated/include",
+				);
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		EE79C7C1E9720802713FCBF0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		F1FED7BA072D8828EB55A88E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5B02F957F43575560ADEE286 /* Build configuration list for PBXNativeTarget "ZipherXApp-iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ED74B2F32D35B29F0D2C7492 /* Debug */,
+				C25F933F9018541D682A43F9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		74A61C67AF0B9806BCD67FCF /* Build configuration list for PBXProject "ZipherXApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F1FED7BA072D8828EB55A88E /* Debug */,
+				EE79C7C1E9720802713FCBF0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7D6C76340D7A36EF7D9E12B1 /* Build configuration list for PBXNativeTarget "ZipherXApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C458E5349372D968141A9B7B /* Debug */,
+				78519BA5A3EDAE3FF997B1AF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = DC4C9066685CBAFD26467061 /* Project object */;
+}

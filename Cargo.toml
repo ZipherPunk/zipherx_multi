@@ -1,0 +1,127 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/zipherx-platform",
+    "crates/zipherx-crypto",
+    "crates/zipherx-network",
+    "crates/zipherx-storage",
+    "crates/zipherx-core",
+    "crates/zipherx-tor",
+    "crates/zipherx-ffi",
+    "crates/uniffi-bindgen",
+    "platforms/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# NOTE: Cargo.lock provides reproducible builds. Run `cargo update` with care and
+# review dependency changes (especially crypto crates) before committing the lockfile.
+
+# Internal crates
+zipherx-platform = { path = "crates/zipherx-platform" }
+zipherx-crypto = { path = "crates/zipherx-crypto" }
+zipherx-network = { path = "crates/zipherx-network" }
+zipherx-storage = { path = "crates/zipherx-storage" }
+zipherx-core = { path = "crates/zipherx-core" }
+zipherx-tor = { path = "crates/zipherx-tor" }
+
+# Zcash/Zclassic crypto (local forks)
+zcash_primitives = { path = "libs/zcash_primitives_zcl" }
+zcash_proofs = { path = "libs/zcash_proofs_zcl" }
+zcash_address = "0.3"
+zcash_note_encryption = "0.4"
+incrementalmerkletree = "0.5"
+
+# Elliptic curve / zk-SNARK
+jubjub = "0.10"
+group = "0.13"
+ff = "0.13"
+bls12_381 = "0.8"
+bellman = "0.14"
+equihash = "0.2"
+
+# Symmetric crypto
+# SECURITY: Cryptographic crates pinned to exact versions to prevent unreviewed updates.
+# Bump these deliberately, audit changelogs, and update Cargo.lock in a dedicated commit.
+chacha20poly1305 = "=0.10.1"
+aes-gcm = "=0.10.3"
+
+# Hashing
+sha2 = "=0.10.9"
+sha3 = "0.10"
+blake2b_simd = "1.0"
+subtle = "2.5"
+
+# Key generation
+bip0039 = "0.12"
+bech32 = "0.9"
+rand = "0.8"
+rand_core = "0.6"
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "io-util", "net", "macros", "fs"] }
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+
+# Tor (Arti)
+arti-client = { version = "0.37", default-features = false, features = ["tokio", "rustls", "onion-service-client", "onion-service-service", "experimental-api"] }
+tor-rtcompat = { version = "0.37", features = ["tokio", "rustls"] }
+tor-hsservice = "0.37"
+tor-hscrypto = "0.37"
+tor-llcrypto = "0.37"
+tor-cell = "0.37"
+tor-proto = "0.37"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+
+# HTTP
+# TODO: Upgrade reqwest to 0.12 for maintained TLS stack (hyper 1.x + rustls 0.23).
+# reqwest 0.11 pulls ring 0.16.x transitively; upgrading eliminates that unmaintained dep.
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "stream", "json"] }
+ureq = { version = "2.9", features = ["json"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# Parallelism
+rayon = "1.8"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+hex = "0.4"
+base64 = "0.21"
+
+# Compression
+zstd = "0.13"
+
+# UniFFI
+uniffi = "0.28"
+
+# Utilities
+once_cell = "1.19"
+dirs = "5.0"
+socket2 = { version = "0.5", features = ["all"] }
+zeroize = "1.8"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+libc = "0.2"
+memmap2 = "0.9"
+url = "2.5"
+
+[profile.release]
+lto = true
+opt-level = 3
+overflow-checks = true
+panic = "abort"
+strip = "symbols"
+
+[patch.crates-io]
+# Override all zcash_primitives dependencies to use our local fork with Zclassic Buttercup support
+zcash_primitives = { path = "libs/zcash_primitives_zcl" }
+# Local fork with parallel spend proof generation (spend_proof_detached)
+zcash_proofs = { path = "libs/zcash_proofs_zcl" }

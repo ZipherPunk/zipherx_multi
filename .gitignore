@@ -1,0 +1,61 @@
+# Rust build artifacts
+/target/
+
+# macOS
+.DS_Store
+
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/
+*.xcworkspace/xcuserdata/
+**/xcuserdata/
+*.xcuserstate
+DerivedData/
+
+# Generated UniFFI bindings and compiled Rust library
+platforms/apple/Generated/
+platforms/android/src/main/kotlin/uniffi/
+platforms/desktop/src/main/kotlin/uniffi/
+
+# IDE
+.idea/
+.vscode/
+
+# Claude agent memory
+.claude/
+
+# Android build artifacts
+platforms/android/.gradle/
+platforms/android/build/
+platforms/android/local.properties
+platforms/android/src/main/jniLibs/
+
+# Desktop build artifacts
+platforms/desktop/build/
+platforms/desktop/.gradle/
+
+# Docs — keep README, disclaimer, user guide; ignore plans
+docs/plans/
+
+# Compiled native libraries
+*.dylib
+*.so
+*.dll
+
+# OpenSSL cross-compilation artifacts
+/target/.openssl-*/
+
+# Security audit reports (contain vulnerability details)
+docs/SECURITY_*
+docs/security-*
+
+# Secrets / credentials
+*.env
+.env.*
+*.keystore
+*.jks
+*.pem
+*.p12
+
+# Misc
+log-analysis.html

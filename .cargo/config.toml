@@ -1,0 +1,30 @@
+# Cross-compilation target configuration for ZipherX Multi-Platform
+
+# iOS device (ARM64)
+[target.aarch64-apple-ios]
+rustflags = ["-C", "link-arg=-mios-version-min=14.0"]
+
+# iOS Simulator (ARM64)
+[target.aarch64-apple-ios-sim]
+rustflags = ["-C", "link-arg=-mios-simulator-version-min=14.0"]
+
+# macOS ARM64 (Apple Silicon)
+[target.aarch64-apple-darwin]
+
+# macOS Intel
+[target.x86_64-apple-darwin]
+
+# Android ARM64
+[target.aarch64-linux-android]
+# linker = "aarch64-linux-android-clang"  # Set NDK_HOME first
+
+# Android ARMv7
+[target.armv7-linux-androideabi]
+# linker = "armv7a-linux-androideabi-clang"
+
+# Android x86_64 (emulator)
+[target.x86_64-linux-android]
+# linker = "x86_64-linux-android-clang"
+
+# Windows MSVC
+[target.x86_64-pc-windows-msvc]

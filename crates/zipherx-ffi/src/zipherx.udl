@@ -1,0 +1,314 @@
+// ZipherX UniFFI interface definition.
+//
+// UDL Interface Version: 2.0
+//
+// This file defines the cross-platform API surface.
+// UniFFI generates Swift, Kotlin, and C# bindings from this definition.
+//
+// Phase 1: Crypto, mnemonic, address, balance, validation, boost scan.
+// Phase 9: Runtime, wallet lifecycle, sync, send, repair, Tor, platform.
+//
+// CHANGELOG:
+//   v2.0 — RF-22: Added version header. Added get_sync_progress().
+//           NoteInfo.value changed from u64 to i64 (RF-19).
+//   v1.0 — Initial interface (Phase 1 + Phase 9).
+
+namespace zipherx {
+    // ==================================================================
+    // Version
+    // ==================================================================
+    string get_version();
+
+    // ==================================================================
+    // Mnemonic
+    // ==================================================================
+    [Throws=WalletError]
+    string generate_mnemonic();
+
+    [Throws=WalletError]
+    sequence<u8> mnemonic_to_seed(string phrase);
+
+    boolean validate_mnemonic(string phrase);
+
+    // ==================================================================
+    // Key Derivation
+    // ==================================================================
+    [Throws=WalletError]
+    sequence<u8> derive_spending_key(sequence<u8> seed, u32 account_index);
+
+    [Throws=WalletError]
+    string derive_address(sequence<u8> sk_bytes, u64 diversifier_index);
+
+    // ==================================================================
+    // Key Encoding
+    // ==================================================================
+    [Throws=WalletError]
+    sequence<u8> decode_spending_key(string encoded);
+
+    [Throws=WalletError]
+    string encode_spending_key(sequence<u8> sk_bytes);
+
+    // ==================================================================
+    // Address
+    // ==================================================================
+    boolean validate_address(string address);
+
+    // ==================================================================
+    // Balance (stateless)
+    // ==================================================================
+    [Throws=WalletError]
+    BalanceInfo compute_balance_from_notes(sequence<NoteInfo> notes);
+
+    // ==================================================================
+    // Transaction Validation (stateless)
+    // ==================================================================
+    [Throws=WalletError]
+    void validate_send_request_params(string to_address, u64 amount, u64 fee, string? memo);
+
+    // ==================================================================
+    // Boost Scan
+    // ==================================================================
+    [Throws=WalletError]
+    BoostScanResultFFI scan_boost_outputs(sequence<u8> sk_bytes, sequence<u8> outputs_data, sequence<u8> spends_data);
+
+    // ==================================================================
+    // Runtime (Phase 9)
+    // ==================================================================
+    [Throws=WalletError]
+    void initialize_runtime();
+
+    void shutdown_runtime();
+
+    boolean is_runtime_ready();
+
+    // ==================================================================
+    // Wallet Lifecycle (Phase 9)
+    // ==================================================================
+    [Throws=WalletError]
+    void initialize_wallet(WalletConfigFFI config);
+
+    boolean is_wallet_initialized();
+
+    [Throws=WalletError]
+    sequence<string> create_wallet_new();
+
+    [Throws=WalletError]
+    void restore_wallet(sequence<string> words);
+
+    [Throws=WalletError]
+    void import_wallet_from_key(sequence<u8> sk_bytes);
+
+    [Throws=WalletError]
+    u32 get_connected_peer_count();
+
+    [Throws=WalletError]
+    string get_wallet_address(sequence<u8> sk_bytes);
+
+    [Throws=WalletError]
+    BalanceInfo get_balance();
+
+    [Throws=WalletError]
+    WalletSummaryFFI get_wallet_summary();
+
+    [Throws=WalletError]
+    sequence<TransactionDisplayFFI> get_transaction_history(u32 limit, u32 offset);
+
+    [Throws=WalletError]
+    TransactionCountsFFI get_transaction_counts();
+
+    // ==================================================================
+    // Sync (Phase 9)
+    // ==================================================================
+    [Throws=WalletError]
+    void start_sync(SyncProgressCallback callback);
+
+    void stop_sync();
+
+    f64 get_sync_progress();
+
+    // ==================================================================
+    // Send (Phase 9)
+    // ==================================================================
+    [Throws=WalletError]
+    void send_with_progress(
+        string to_address,
+        u64 amount,
+        u64 fee,
+        string? memo,
+        sequence<u8> sk_bytes,
+        SendProgressCallback callback
+    );
+
+    // ==================================================================
+    // Repair (Phase 9)
+    // ==================================================================
+    [Throws=WalletError]
+    void repair_database();
+
+    [Throws=WalletError]
+    void full_rescan();
+
+    // ==================================================================
+    // Tor (Phase 9)
+    // ==================================================================
+    void set_tor_enabled(boolean enabled);
+
+    boolean is_tor_enabled();
+
+    [Throws=WalletError]
+    u16 start_tor_client(string? data_dir);
+
+    [Throws=WalletError]
+    void stop_tor_client();
+
+    u8 get_tor_state();
+
+    u8 get_tor_bootstrap_progress();
+
+    string? get_tor_error();
+
+    u16 get_tor_socks_port();
+
+    [Throws=WalletError]
+    void enable_p2p_tor(u16 socks_port);
+
+    [Throws=WalletError]
+    void disable_p2p_tor();
+
+    [Throws=WalletError]
+    string init_hidden_service(string? data_dir);
+
+    string? get_onion_address();
+
+    // ==================================================================
+    // Platform Storage (Phase 9)
+    // ==================================================================
+    void set_platform_storage(PlatformStorageCallback storage);
+};
+
+// ======================================================================
+// Error Types
+// ======================================================================
+
+// NOTE (RF-15): UniFFI flat enums do not carry associated data across the
+// FFI boundary. The detailed `msg` fields in the Rust WalletError variants
+// (e.g., CryptoError { msg }, NetworkError { msg }) are lost — callers on
+// Swift/Kotlin only see the variant name, not the diagnostic string.
+// To surface error details, callers should rely on callback `on_error(message)`
+// or use a separate error-query function.
+[Error]
+enum WalletError {
+    "CryptoError",
+    "NetworkError",
+    "StorageError",
+    "InvalidInput",
+    "InsufficientBalance",
+    "WalletLocked",
+    "NotInitialized",
+    "SyncInProgress",
+    "RuntimeError",
+    "BroadcastFailed",
+    "InvalidAnchor",
+};
+
+// ======================================================================
+// Callback Interfaces
+// ======================================================================
+
+callback interface SyncProgressCallback {
+    void on_progress(string phase, u64 current, u64 target);
+    void on_complete(u64 height);
+    void on_error(string message);
+};
+
+callback interface SendProgressCallback {
+    void on_phase(string phase, u32 current, u32 total);
+    void on_complete(string txid, u64 amount, u64 fee);
+    void on_error(string message);
+};
+
+callback interface PlatformStorageCallback {
+    sequence<u8>? load_key(string key);
+    boolean store_key(string key, sequence<u8> value);
+    boolean delete_key(string key);
+    boolean has_key(string key);
+};
+
+// ======================================================================
+// Data Types — existing
+// ======================================================================
+
+dictionary BalanceInfo {
+    u64 total;
+    u64 spendable;
+    u32 note_count;
+    u32 spendable_note_count;
+};
+
+dictionary NoteInfo {
+    i64 id;
+    i64 value;
+    boolean is_spent;
+    boolean has_witness;
+    boolean has_anchor;
+};
+
+dictionary BoostScanResultFFI {
+    u64 total_received;
+    u64 total_spent;
+    u64 unspent_balance;
+    u32 notes_found;
+    u32 notes_spent;
+    u32 spends_checked;
+};
+
+// ======================================================================
+// Data Types — Phase 9
+// ======================================================================
+
+dictionary WalletConfigFFI {
+    string db_path;
+    string header_store_path;
+    string delta_store_dir;
+    string spend_params_path;
+    string output_params_path;
+    u32 account_index;
+    sequence<u8>? db_encryption_key;
+};
+
+dictionary WalletSummaryFFI {
+    string state;
+    string? address;
+    u64 total_balance;
+    u64 spendable_balance;
+    u32 note_count;
+    u64 last_synced_height;
+    u64 chain_tip;
+    string? startup_mode;
+    string sync_phase;
+};
+
+dictionary TransactionDisplayFFI {
+    string txid;
+    string tx_type;
+    u64 amount;
+    u64 fee;
+    string? address;
+    string? memo;
+    u64 confirmations;
+    u64 height;
+    u64 timestamp;
+};
+
+dictionary TransactionCountsFFI {
+    u32 sent_count;
+    u32 received_count;
+};
+
+dictionary SendResultFFI {
+    string txid;
+    u64 amount;
+    u64 fee;
+    u64 change_value;
+    u32 notes_used;
+};

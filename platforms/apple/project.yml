@@ -1,0 +1,117 @@
+name: ZipherXApp
+options:
+  bundleIdPrefix: com.zipherx
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+targets:
+  ZipherXApp:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/ZipherXApp
+        type: group
+      - path: Sources/ZipherXSwift
+        type: group
+      - path: Generated/swift
+        type: group
+        optional: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zipherx.wallet.macos
+        INFOPLIST_FILE: Info.plist
+        # ZipherXApp.entitlements includes network.server for P2P protocol + Tor hidden service
+        CODE_SIGN_ENTITLEMENTS: ZipherXApp.entitlements
+        CODE_SIGN_STYLE: Automatic
+        # Hardened Runtime required for notarization and Gatekeeper on macOS 10.15+
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_INCLUDE_PATHS:
+          - "$(PROJECT_DIR)/Generated/include"
+        HEADER_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/Generated/include"
+        LIBRARY_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/Generated/lib"
+        OTHER_LDFLAGS:
+          - "-lzipherx_ffi"
+          - "-lc++"
+          - "-lz"
+          - "-lresolv"
+          - "-framework"
+          - "SystemConfiguration"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+    dependencies: []
+    preBuildScripts:
+      - name: "Check Rust FFI Build"
+        script: |
+          if [ ! -f "${PROJECT_DIR}/Generated/lib/libzipherx_ffi.a" ]; then
+            echo "error: Rust FFI library not found."
+            echo "error: Run ./scripts/build-macos.sh from the repository root first."
+            exit 1
+          fi
+        basedOnDependencyAnalysis: false
+    frameworks:
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: IOKit.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: UserNotifications.framework
+
+  ZipherXApp-iOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources/ZipherXApp
+        type: group
+      - path: Sources/ZipherXSwift
+        type: group
+      - path: Generated/swift
+        type: group
+        optional: true
+    entitlements:
+      path: ZipherXApp-iOS.entitlements
+      properties:
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.zipherx.wallet.ios"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zipherx.wallet.ios
+        INFOPLIST_FILE: Info-iOS.plist
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: ZipherXApp-iOS.entitlements
+        SWIFT_INCLUDE_PATHS:
+          - "$(PROJECT_DIR)/Generated/include"
+        HEADER_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/Generated/include"
+        LIBRARY_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/Generated/lib-ios-sim"
+        OTHER_LDFLAGS:
+          - "-lzipherx_ffi"
+          - "-lc++"
+          - "-lz"
+          - "-lresolv"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/Frameworks"
+    dependencies: []
+    preBuildScripts:
+      - name: "Check Rust FFI Build (iOS)"
+        script: |
+          if [ ! -f "${PROJECT_DIR}/Generated/lib-ios-sim/libzipherx_ffi.a" ]; then
+            echo "error: Rust FFI library for iOS Simulator not found."
+            echo "error: Run ./scripts/build-ios-sim.sh from the repository root first."
+            exit 1
+          fi
+        basedOnDependencyAnalysis: false
+    frameworks:
+      - sdk: Security.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: UserNotifications.framework
