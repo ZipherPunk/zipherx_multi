@@ -1,6 +1,6 @@
 //! Storage data types — Rust-native structs for database records.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::encryption::EncryptionError;

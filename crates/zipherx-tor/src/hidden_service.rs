@@ -177,7 +177,10 @@ mod tests {
 
         let addr1 = init_hidden_service(tmp1.clone()).unwrap();
         let addr2 = init_hidden_service(tmp2.clone()).unwrap();
-        assert_ne!(addr1, addr2, "different keys should produce different addresses");
+        assert_ne!(
+            addr1, addr2,
+            "different keys should produce different addresses"
+        );
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&tmp1);

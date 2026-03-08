@@ -3,13 +3,13 @@
 //! The prover generates zk-SNARK proofs for Sapling spend and output circuits.
 //! Parameters: sapling-spend.params (47MB), sapling-output.params (3.5MB).
 
-use std::sync::Mutex;
 use std::path::Path;
+use std::sync::Mutex;
 
 use zcash_proofs::prover::LocalTxProver;
 use zcash_proofs::ZcashParameters;
 
-use crate::types::{CryptoError, SPEND_PARAMS_SIZE, OUTPUT_PARAMS_SIZE};
+use crate::types::{CryptoError, OUTPUT_PARAMS_SIZE, SPEND_PARAMS_SIZE};
 
 /// Global prover instance (thread-safe).
 static PROVER: Mutex<Option<LocalTxProver>> = Mutex::new(None);
@@ -43,12 +43,10 @@ pub fn init_from_files(spend_path: &str, output_path: &str) -> Result<(), Crypto
         )));
     }
 
-    let prover = LocalTxProver::new(
-        Path::new(spend_path),
-        Path::new(output_path),
-    );
+    let prover = LocalTxProver::new(Path::new(spend_path), Path::new(output_path));
 
-    let mut guard = PROVER.lock()
+    let mut guard = PROVER
+        .lock()
         .map_err(|e| CryptoError::ProverInitFailed(format!("Lock: {e}")))?;
     *guard = Some(prover);
 
@@ -72,7 +70,8 @@ pub fn init_from_bytes(spend_data: &[u8], output_data: &[u8]) -> Result<(), Cryp
 
     let prover = LocalTxProver::from_bytes(spend_data, output_data);
 
-    let mut guard = PROVER.lock()
+    let mut guard = PROVER
+        .lock()
         .map_err(|e| CryptoError::ProverInitFailed(format!("Lock: {e}")))?;
     *guard = Some(prover);
 
@@ -95,8 +94,10 @@ pub fn is_initialized() -> bool {
 /// which means concurrent `build_transaction` calls will block on this lock.
 /// This is intentional — the prover is not reentrant and proof generation is
 /// CPU-intensive. Callers should not attempt parallel TX builds.
-pub(crate) fn get_prover() -> Result<std::sync::MutexGuard<'static, Option<LocalTxProver>>, CryptoError> {
-    let guard = PROVER.lock()
+pub(crate) fn get_prover(
+) -> Result<std::sync::MutexGuard<'static, Option<LocalTxProver>>, CryptoError> {
+    let guard = PROVER
+        .lock()
         .map_err(|e| CryptoError::ProverInitFailed(format!("Lock: {e}")))?;
     if guard.is_none() {
         return Err(CryptoError::ProverNotInitialized);
@@ -106,8 +107,10 @@ pub(crate) fn get_prover() -> Result<std::sync::MutexGuard<'static, Option<Local
 
 /// Get a reference to the verifying keys (for TX verification).
 #[allow(dead_code)]
-pub(crate) fn get_verifying_keys() -> Result<std::sync::MutexGuard<'static, Option<ZcashParameters>>, CryptoError> {
-    let guard = VERIFYING_KEYS.lock()
+pub(crate) fn get_verifying_keys(
+) -> Result<std::sync::MutexGuard<'static, Option<ZcashParameters>>, CryptoError> {
+    let guard = VERIFYING_KEYS
+        .lock()
         .map_err(|e| CryptoError::ProverInitFailed(format!("Lock: {e}")))?;
     Ok(guard)
 }

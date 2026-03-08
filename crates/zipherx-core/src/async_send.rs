@@ -67,9 +67,9 @@ impl<'a> BroadcastGuard<'a> {
         guards
             .is_broadcasting
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .map_err(|_| CoreError::BroadcastFailed(
-                "Another broadcast is already in progress".into(),
-            ))?;
+            .map_err(|_| {
+                CoreError::BroadcastFailed("Another broadcast is already in progress".into())
+            })?;
         Ok(Self { guards })
     }
 }
@@ -124,10 +124,13 @@ pub async fn send_transaction(
     let _broadcast_guard = BroadcastGuard::new(guards)?;
 
     // Step 4: Load unspent notes from DB via spawn_blocking
-    report_progress(&progress, SendPhase::NoteSelection {
-        count: 0,
-        total_value: 0,
-    });
+    report_progress(
+        &progress,
+        SendPhase::NoteSelection {
+            count: 0,
+            total_value: 0,
+        },
+    );
     let db_clone = db.clone();
     let notes = tokio::task::spawn_blocking(move || db_clone.get_all_unspent_notes(0))
         .await
@@ -141,23 +144,30 @@ pub async fn send_transaction(
         .collect();
 
     let (selected, total_value) =
-        send::select_notes(&spendable, request.total_needed())
-            .map_err(|_| CoreError::InsufficientBalance {
+        send::select_notes(&spendable, request.total_needed()).map_err(|_| {
+            CoreError::InsufficientBalance {
                 have: spendable.iter().map(|n| n.value).sum(),
                 need: request.total_needed(),
-            })?;
+            }
+        })?;
 
-    report_progress(&progress, SendPhase::NoteSelection {
-        count: selected.len(),
-        total_value,
-    });
+    report_progress(
+        &progress,
+        SendPhase::NoteSelection {
+            count: selected.len(),
+            total_value,
+        },
+    );
 
     // Step 6: Validate EACH witness root (FIX #1280)
     for (i, note) in selected.iter().enumerate() {
-        report_progress(&progress, SendPhase::WitnessValidation {
-            note_index: i,
-            total: selected.len(),
-        });
+        report_progress(
+            &progress,
+            SendPhase::WitnessValidation {
+                note_index: i,
+                total: selected.len(),
+            },
+        );
 
         // FIX #1279: Validate EACH anchor against HeaderStore
         let anchor_bytes = note.anchor;
@@ -178,16 +188,16 @@ pub async fn send_transaction(
     }
 
     // Step 7: Build TX via spawn_blocking (Groth16 is CPU-heavy)
-    report_progress(&progress, SendPhase::Building {
-        spend_index: 0,
-        total_spends: selected.len() as u32,
-    });
+    report_progress(
+        &progress,
+        SendPhase::Building {
+            spend_index: 0,
+            total_spends: selected.len() as u32,
+        },
+    );
 
-    let change = send::calculate_change(
-        total_value,
-        request.amount_zatoshis,
-        request.fee_zatoshis,
-    )?;
+    let change =
+        send::calculate_change(total_value, request.amount_zatoshis, request.fee_zatoshis)?;
 
     // Decode destination address
     let to_address_bytes = zipherx_crypto::address::decode_address(&request.to_address)
@@ -300,9 +310,7 @@ pub async fn send_transaction(
         spent_nullifiers: tx_result.nullifiers,
     };
 
-    report_progress(&progress, SendPhase::Complete {
-        txid: txid.clone(),
-    });
+    report_progress(&progress, SendPhase::Complete { txid: txid.clone() });
 
     Ok(result)
 }
@@ -348,10 +356,7 @@ mod tests {
             memo: None,
         };
 
-        let result = send_transaction(
-            db, &pm, &hs, &[], &bad_request, &guards, None, 100,
-        )
-        .await;
+        let result = send_transaction(db, &pm, &hs, &[], &bad_request, &guards, None, 100).await;
 
         assert!(result.is_err());
     }
@@ -365,17 +370,8 @@ mod tests {
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let pm = PeerManager::new(pm_config);
 
-        let result = send_transaction(
-            db,
-            &pm,
-            &hs,
-            &[],
-            &make_test_request(),
-            &guards,
-            None,
-            100,
-        )
-        .await;
+        let result =
+            send_transaction(db, &pm, &hs, &[], &make_test_request(), &guards, None, 100).await;
 
         assert!(matches!(result, Err(CoreError::SyncInProgress)));
     }
@@ -389,17 +385,8 @@ mod tests {
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let pm = PeerManager::new(pm_config);
 
-        let result = send_transaction(
-            db,
-            &pm,
-            &hs,
-            &[],
-            &make_test_request(),
-            &guards,
-            None,
-            100,
-        )
-        .await;
+        let result =
+            send_transaction(db, &pm, &hs, &[], &make_test_request(), &guards, None, 100).await;
 
         assert!(matches!(result, Err(CoreError::GapFillInProgress)));
     }
@@ -435,21 +422,9 @@ mod tests {
         let pm = PeerManager::new(pm_config);
 
         // No notes in DB → insufficient balance
-        let result = send_transaction(
-            db,
-            &pm,
-            &hs,
-            &[],
-            &make_test_request(),
-            &guards,
-            None,
-            100,
-        )
-        .await;
+        let result =
+            send_transaction(db, &pm, &hs, &[], &make_test_request(), &guards, None, 100).await;
 
-        assert!(matches!(
-            result,
-            Err(CoreError::InsufficientBalance { .. })
-        ));
+        assert!(matches!(result, Err(CoreError::InsufficientBalance { .. })));
     }
 }

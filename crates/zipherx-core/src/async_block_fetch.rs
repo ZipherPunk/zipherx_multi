@@ -16,9 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use crate::CoreError;
-use zipherx_network::block_fetcher::{
-    self, CompactBlock, FetchResult, PacingConfig,
-};
+use zipherx_network::block_fetcher::{self, CompactBlock, FetchResult, PacingConfig};
 use zipherx_network::messages::{self, BlockHeader};
 use zipherx_network::peer_manager::PeerManager;
 use zipherx_network::types::{InvType, InvVector};
@@ -75,10 +73,8 @@ pub async fn fetch_blocks_by_hashes(
     }
 
     // Build hash → height lookup for matching received blocks
-    let hash_to_height: HashMap<[u8; 32], u64> = blocks_to_fetch
-        .iter()
-        .map(|&(h, hash)| (hash, h))
-        .collect();
+    let hash_to_height: HashMap<[u8; 32], u64> =
+        blocks_to_fetch.iter().map(|&(h, hash)| (hash, h)).collect();
 
     let blocks_per_round = (peer_count as u64) * MAX_BLOCKS_PER_PEER;
     let total = blocks_to_fetch.len();
@@ -170,9 +166,15 @@ pub async fn fetch_blocks_by_hashes(
                 // leaking IP addresses in release builds.
                 if let Err(e) = peer.send_message("getdata", &payload).await {
                     #[cfg(debug_assertions)]
-                    eprintln!("[ZipherX] Warning: send_message(getdata) to peer {} failed: {:?}", pid, e);
+                    eprintln!(
+                        "[ZipherX] Warning: send_message(getdata) to peer {} failed: {:?}",
+                        pid, e
+                    );
                     #[cfg(not(debug_assertions))]
-                    eprintln!("[ZipherX] Warning: send_message(getdata) to peer failed: {:?}", e);
+                    eprintln!(
+                        "[ZipherX] Warning: send_message(getdata) to peer failed: {:?}",
+                        e
+                    );
                 }
             }
         }
@@ -191,9 +193,7 @@ pub async fn fetch_blocks_by_hashes(
         let mut round_blocks_received: Vec<CompactBlock> = Vec::new();
         let deadline = tokio::time::Instant::now() + ROUND_TIMEOUT;
 
-        while let Ok(Some(result)) =
-            tokio::time::timeout_at(deadline, join_set.join_next()).await
-        {
+        while let Ok(Some(result)) = tokio::time::timeout_at(deadline, join_set.join_next()).await {
             if let Ok(Some(raw_data)) = result {
                 // Parse the block header to compute hash and identify height
                 match parse_and_identify_block(&raw_data, &hash_to_height) {
@@ -263,10 +263,7 @@ fn parse_and_identify_block(
     match block_fetcher::parse_raw_block(raw_data, height, computed_hash) {
         Ok(compact) => Some(compact),
         Err(e) => {
-            eprintln!(
-                "[ZipherX] Failed to parse block at height {}: {e}",
-                height
-            );
+            eprintln!("[ZipherX] Failed to parse block at height {}: {e}", height);
             None
         }
     }

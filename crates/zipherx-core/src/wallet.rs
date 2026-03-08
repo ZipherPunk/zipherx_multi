@@ -235,12 +235,16 @@ impl WalletCore {
         let unspent: Vec<&zipherx_storage::types::Note> =
             notes.iter().filter(|n| !n.is_spent).collect();
 
-        let total: u64 = unspent.iter().fold(0u64, |acc, n| acc.saturating_add(n.value));
+        let total: u64 = unspent
+            .iter()
+            .fold(0u64, |acc, n| acc.saturating_add(n.value));
         let spendable_notes: Vec<&&zipherx_storage::types::Note> = unspent
             .iter()
             .filter(|n| n.witness.is_some() && n.anchor.is_some())
             .collect();
-        let spendable: u64 = spendable_notes.iter().fold(0u64, |acc, n| acc.saturating_add(n.value));
+        let spendable: u64 = spendable_notes
+            .iter()
+            .fold(0u64, |acc, n| acc.saturating_add(n.value));
 
         BalanceInfo {
             total,
@@ -251,9 +255,7 @@ impl WalletCore {
     }
 
     /// Get spendable notes (notes with valid witnesses that can be used in TX).
-    pub fn get_spendable_notes(
-        notes: &[zipherx_storage::types::Note],
-    ) -> Vec<SpendableNote> {
+    pub fn get_spendable_notes(notes: &[zipherx_storage::types::Note]) -> Vec<SpendableNote> {
         notes
             .iter()
             .filter(|n| !n.is_spent)
@@ -318,8 +320,16 @@ mod tests {
             value,
             rcm: Some(vec![0xCC; 32]),
             nullifier: Some(vec![0xDD; 32]),
-            witness: if has_witness { Some(vec![0x01; 200]) } else { None },
-            anchor: if has_witness { Some(vec![0xEE; 32]) } else { None },
+            witness: if has_witness {
+                Some(vec![0x01; 200])
+            } else {
+                None
+            },
+            anchor: if has_witness {
+                Some(vec![0xEE; 32])
+            } else {
+                None
+            },
             is_spent: spent,
             spent_in_tx: if spent { Some("abc123".into()) } else { None },
             spent_height: if spent { Some(2000) } else { None },
@@ -402,9 +412,9 @@ mod tests {
     #[test]
     fn test_compute_balance_mixed() {
         let notes = vec![
-            make_note(1, 50_000, false, true),   // Spendable
-            make_note(2, 30_000, false, false),   // Unspent but no witness (FIX #1210)
-            make_note(3, 20_000, true, true),     // Spent
+            make_note(1, 50_000, false, true),  // Spendable
+            make_note(2, 30_000, false, false), // Unspent but no witness (FIX #1210)
+            make_note(3, 20_000, true, true),   // Spent
         ];
         let balance = WalletCore::compute_balance(&notes);
         // FIX #1210: total includes ALL unspent (even without witness)
@@ -428,12 +438,15 @@ mod tests {
     #[test]
     fn test_compute_balance_empty() {
         let balance = WalletCore::compute_balance(&[]);
-        assert_eq!(balance, BalanceInfo {
-            total: 0,
-            spendable: 0,
-            note_count: 0,
-            spendable_note_count: 0,
-        });
+        assert_eq!(
+            balance,
+            BalanceInfo {
+                total: 0,
+                spendable: 0,
+                note_count: 0,
+                spendable_note_count: 0,
+            }
+        );
     }
 
     // ---- Spendable Notes Tests ----
@@ -441,9 +454,9 @@ mod tests {
     #[test]
     fn test_get_spendable_notes() {
         let notes = vec![
-            make_note(1, 50_000, false, true),   // Spendable
-            make_note(2, 30_000, false, false),   // No witness
-            make_note(3, 20_000, true, true),     // Spent
+            make_note(1, 50_000, false, true),  // Spendable
+            make_note(2, 30_000, false, false), // No witness
+            make_note(3, 20_000, true, true),   // Spent
         ];
         let spendable = WalletCore::get_spendable_notes(&notes);
         assert_eq!(spendable.len(), 1);

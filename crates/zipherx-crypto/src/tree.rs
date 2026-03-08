@@ -23,18 +23,14 @@
 //! Never acquire a lower-numbered lock while holding a higher-numbered one.
 //! The `append` and `append_batch` functions demonstrate the correct ordering.
 
-use std::sync::Mutex;
 use std::io::Cursor;
+use std::sync::Mutex;
 
-use incrementalmerkletree::{
-    frontier::CommitmentTree,
-    witness::IncrementalWitness,
+use incrementalmerkletree::{frontier::CommitmentTree, witness::IncrementalWitness};
+use zcash_primitives::merkle_tree::{
+    read_commitment_tree, read_incremental_witness, write_commitment_tree, HashSer,
 };
 use zcash_primitives::sapling::Node;
-use zcash_primitives::merkle_tree::{
-    read_commitment_tree, read_incremental_witness, write_commitment_tree,
-    HashSer,
-};
 
 use crate::types::CryptoError;
 
@@ -82,7 +78,10 @@ fn root_to_bytes(root: &Node) -> Result<[u8; 32], CryptoError> {
     root.write(&mut buf)
         .map_err(|e| CryptoError::TreeError(format!("Root write: {e}")))?;
     if buf.len() != 32 {
-        return Err(CryptoError::TreeError(format!("Root unexpected len: {}", buf.len())));
+        return Err(CryptoError::TreeError(format!(
+            "Root unexpected len: {}",
+            buf.len()
+        )));
     }
     let mut result = [0u8; 32];
     result.copy_from_slice(&buf);
@@ -91,16 +90,24 @@ fn root_to_bytes(root: &Node) -> Result<[u8; 32], CryptoError> {
 
 /// Initialize a new empty commitment tree.
 pub fn init() -> Result<(), CryptoError> {
-    let mut tree = TREE.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut tree = TREE
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     *tree = Some(CommitmentTree::empty());
 
-    let mut pos = TREE_POSITION.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut pos = TREE_POSITION
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     *pos = 0;
 
-    let mut witnesses = WITNESSES.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut witnesses = WITNESSES
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     witnesses.clear();
 
-    let mut delta = DELTA_CMUS.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut delta = DELTA_CMUS
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     delta.clear();
     delta.shrink_to_fit();
 
@@ -113,24 +120,35 @@ pub fn init() -> Result<(), CryptoError> {
 pub fn append(cmu: &[u8; 32]) -> Result<u64, CryptoError> {
     let node = parse_node(cmu)?;
 
-    let mut tree = TREE.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
-    let tree = tree.as_mut().ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
+    let mut tree = TREE
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let tree = tree
+        .as_mut()
+        .ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
 
-    tree.append(node).map_err(|_| CryptoError::TreeError("Append failed".into()))?;
+    tree.append(node)
+        .map_err(|_| CryptoError::TreeError("Append failed".into()))?;
 
     // Update witnesses
-    let mut witnesses = WITNESSES.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut witnesses = WITNESSES
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     for witness in witnesses.iter_mut() {
-        witness.append(node).map_err(|e| {
-            CryptoError::WitnessError(format!("Witness append failed: {:?}", e))
-        })?;
+        witness
+            .append(node)
+            .map_err(|e| CryptoError::WitnessError(format!("Witness append failed: {:?}", e)))?;
     }
 
-    let mut pos = TREE_POSITION.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut pos = TREE_POSITION
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     *pos += 1;
 
     // Buffer delta CMU (best-effort — skip if buffer full)
-    let mut delta = DELTA_CMUS.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut delta = DELTA_CMUS
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     if delta.len() < MAX_DELTA_CMUS {
         delta.push(node);
     }
@@ -158,14 +176,23 @@ pub fn append_batch(cmus: &[u8]) -> Result<u64, CryptoError> {
         nodes.push(parse_node(cmu_slice)?);
     }
 
-    let mut tree = TREE.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
-    let tree = tree.as_mut().ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
+    let mut tree = TREE
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let tree = tree
+        .as_mut()
+        .ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
 
-    let mut witnesses = WITNESSES.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
-    let mut delta = DELTA_CMUS.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut witnesses = WITNESSES
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut delta = DELTA_CMUS
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
 
     for node in &nodes {
-        tree.append(*node).map_err(|_| CryptoError::TreeError("Append failed".into()))?;
+        tree.append(*node)
+            .map_err(|_| CryptoError::TreeError("Append failed".into()))?;
         for witness in witnesses.iter_mut() {
             witness.append(*node).map_err(|e| {
                 CryptoError::WitnessError(format!("Witness append failed in batch: {:?}", e))
@@ -176,7 +203,9 @@ pub fn append_batch(cmus: &[u8]) -> Result<u64, CryptoError> {
         }
     }
 
-    let mut pos = TREE_POSITION.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut pos = TREE_POSITION
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     *pos += count as u64;
 
     Ok(*pos)
@@ -184,14 +213,20 @@ pub fn append_batch(cmus: &[u8]) -> Result<u64, CryptoError> {
 
 /// Get the current tree root.
 pub fn root() -> Result<[u8; 32], CryptoError> {
-    let tree = TREE.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
-    let tree = tree.as_ref().ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
+    let tree = TREE
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let tree = tree
+        .as_ref()
+        .ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
     root_to_bytes(&tree.root())
 }
 
 /// Get the current tree size (number of appended CMUs).
 pub fn size() -> Result<u64, CryptoError> {
-    let pos = TREE_POSITION.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let pos = TREE_POSITION
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     Ok(*pos)
 }
 
@@ -200,15 +235,21 @@ pub fn size() -> Result<u64, CryptoError> {
 /// Use after `deserialize()` to restore the correct position from the DB's
 /// tree_height, since `deserialize()` does not update TREE_POSITION.
 pub fn set_position(position: u64) -> Result<(), CryptoError> {
-    let mut pos = TREE_POSITION.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut pos = TREE_POSITION
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     *pos = position;
     Ok(())
 }
 
 /// Serialize the tree to bytes.
 pub fn serialize() -> Result<Vec<u8>, CryptoError> {
-    let tree = TREE.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
-    let tree = tree.as_ref().ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
+    let tree = TREE
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let tree = tree
+        .as_ref()
+        .ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
 
     let mut buf = Vec::new();
     write_commitment_tree(tree, &mut buf)
@@ -223,7 +264,9 @@ pub fn deserialize(data: &[u8]) -> Result<(), CryptoError> {
     let new_tree: CommitmentTree<Node, 32> = read_commitment_tree(cursor)
         .map_err(|e| CryptoError::TreeError(format!("Deserialize: {e}")))?;
 
-    let mut tree = TREE.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut tree = TREE
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     *tree = Some(new_tree);
 
     Ok(())
@@ -244,12 +287,18 @@ pub fn root_from_serialized(data: &[u8]) -> Result<[u8; 32], CryptoError> {
 ///
 /// Returns the witness index.
 pub fn witness_current() -> Result<u64, CryptoError> {
-    let tree = TREE.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
-    let tree = tree.as_ref().ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
+    let tree = TREE
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let tree = tree
+        .as_ref()
+        .ok_or(CryptoError::TreeError("Tree not initialized".into()))?;
 
     let witness = IncrementalWitness::from_tree(tree.clone());
 
-    let mut witnesses = WITNESSES.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut witnesses = WITNESSES
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     witnesses.push(witness);
 
     Ok((witnesses.len() - 1) as u64)
@@ -259,10 +308,16 @@ pub fn witness_current() -> Result<u64, CryptoError> {
 ///
 /// Returns the witness bytes that can be stored in the database.
 pub fn get_witness_serialized(idx: u64) -> Result<Vec<u8>, CryptoError> {
-    let witnesses = WITNESSES.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
-    let witness = witnesses
-        .get(idx as usize)
-        .ok_or_else(|| CryptoError::TreeError(format!("Witness index {} out of range (have {})", idx, witnesses.len())))?;
+    let witnesses = WITNESSES
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let witness = witnesses.get(idx as usize).ok_or_else(|| {
+        CryptoError::TreeError(format!(
+            "Witness index {} out of range (have {})",
+            idx,
+            witnesses.len()
+        ))
+    })?;
 
     let mut buf = Vec::new();
     zcash_primitives::merkle_tree::write_incremental_witness(witness, &mut buf)
@@ -272,7 +327,9 @@ pub fn get_witness_serialized(idx: u64) -> Result<Vec<u8>, CryptoError> {
 
 /// Get the root (anchor) of a witness by index.
 pub fn get_witness_root(idx: u64) -> Result<[u8; 32], CryptoError> {
-    let witnesses = WITNESSES.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let witnesses = WITNESSES
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     let witness = witnesses
         .get(idx as usize)
         .ok_or_else(|| CryptoError::TreeError(format!("Witness index {} out of range", idx)))?;
@@ -281,13 +338,17 @@ pub fn get_witness_root(idx: u64) -> Result<[u8; 32], CryptoError> {
 
 /// Get the total number of active witnesses.
 pub fn witness_count() -> Result<u64, CryptoError> {
-    let witnesses = WITNESSES.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let witnesses = WITNESSES
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     Ok(witnesses.len() as u64)
 }
 
 /// Clear all witnesses (does NOT clear the tree).
 pub fn clear_witnesses() -> Result<u64, CryptoError> {
-    let mut witnesses = WITNESSES.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let mut witnesses = WITNESSES
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     let count = witnesses.len() as u64;
     witnesses.clear();
     Ok(count)
@@ -295,13 +356,17 @@ pub fn clear_witnesses() -> Result<u64, CryptoError> {
 
 /// Get the number of delta CMUs buffered.
 pub fn delta_cmus_count() -> Result<u64, CryptoError> {
-    let delta = DELTA_CMUS.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let delta = DELTA_CMUS
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     Ok(delta.len() as u64)
 }
 
 /// Get the delta CMUs as raw bytes.
 pub fn get_delta_cmus() -> Result<Vec<u8>, CryptoError> {
-    let delta = DELTA_CMUS.lock().map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
+    let delta = DELTA_CMUS
+        .lock()
+        .map_err(|e| CryptoError::TreeError(format!("Lock: {e}")))?;
     let mut buf = Vec::with_capacity(delta.len() * 32);
     for node in delta.iter() {
         let mut node_bytes = Vec::new();

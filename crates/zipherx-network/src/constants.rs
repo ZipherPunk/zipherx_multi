@@ -91,17 +91,20 @@ pub const MSG_FILTERED_BLOCK: u32 = 3;
 /// Run `zclassic-cli getblockhash <height>` to obtain the real hashes.
 pub const CHECKPOINTS: &[(u64, &str)] = &[
     // Genesis block (height 0) — Zclassic genesis
-    (0, "0007104ccda289427919efc39dc9e4d499804b7bebc22df55f8b834301571b40"),
+    (
+        0,
+        "0007104ccda289427919efc39dc9e4d499804b7bebc22df55f8b834301571b40",
+    ),
     // Height 100,000
-    (100_000, ""),  // TODO: populate with `zclassic-cli getblockhash 100000`
+    (100_000, ""), // TODO: populate with `zclassic-cli getblockhash 100000`
     // Height 250,000
-    (250_000, ""),  // TODO: populate with `zclassic-cli getblockhash 250000`
+    (250_000, ""), // TODO: populate with `zclassic-cli getblockhash 250000`
     // Sapling activation (height 476969)
-    (476_969, ""),  // TODO: populate with `zclassic-cli getblockhash 476969`
+    (476_969, ""), // TODO: populate with `zclassic-cli getblockhash 476969`
     // Height 600,000
-    (600_000, ""),  // TODO: populate with `zclassic-cli getblockhash 600000`
+    (600_000, ""), // TODO: populate with `zclassic-cli getblockhash 600000`
     // Buttercup activation (height 707000)
-    (707_000, ""),  // TODO: populate with `zclassic-cli getblockhash 707000`
+    (707_000, ""), // TODO: populate with `zclassic-cli getblockhash 707000`
 ];
 
 /// DNS seeds for peer discovery.

@@ -163,10 +163,7 @@ mod tests {
         let bad_result = BroadcastResult {
             txid: "abc".into(),
             accepted_by: vec![],
-            rejected_by: vec![
-                ("p1".into(), "err".into()),
-                ("p2".into(), "err".into()),
-            ],
+            rejected_by: vec![("p1".into(), "err".into()), ("p2".into(), "err".into())],
             duplicate_at: vec![],
             success: false,
         };

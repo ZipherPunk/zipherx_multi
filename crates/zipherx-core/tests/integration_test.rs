@@ -25,7 +25,9 @@ fn test_mnemonic_phrase() -> &'static str {
 
 fn test_sk() -> Vec<u8> {
     let seed = zipherx_crypto::mnemonic::to_seed(test_mnemonic_phrase()).unwrap();
-    zipherx_crypto::keys::derive_spending_key(&seed, 0).unwrap().to_vec()
+    zipherx_crypto::keys::derive_spending_key(&seed, 0)
+        .unwrap()
+        .to_vec()
 }
 
 fn make_test_note(id: i64, value: u64, has_witness: bool) -> Note {
@@ -39,8 +41,16 @@ fn make_test_note(id: i64, value: u64, has_witness: bool) -> Note {
         value,
         rcm: Some(vec![0xCC; 32]),
         nullifier: Some(vec![id as u8; 32]),
-        witness: if has_witness { Some(vec![0x01; 200]) } else { None },
-        anchor: if has_witness { Some(vec![0xEE; 32]) } else { None },
+        witness: if has_witness {
+            Some(vec![0x01; 200])
+        } else {
+            None
+        },
+        anchor: if has_witness {
+            Some(vec![0xEE; 32])
+        } else {
+            None
+        },
         is_spent: false,
         spent_in_tx: None,
         spent_height: None,
@@ -106,15 +116,15 @@ fn test_full_wallet_lifecycle() {
 fn test_balance_computation_flow() {
     // Simulate notes discovered from scanning
     let notes = vec![
-        make_test_note(1, 100_000, true),   // Spendable
-        make_test_note(2, 50_000, true),    // Spendable
-        make_test_note(3, 30_000, false),   // No witness
+        make_test_note(1, 100_000, true), // Spendable
+        make_test_note(2, 50_000, true),  // Spendable
+        make_test_note(3, 30_000, false), // No witness
     ];
 
     // FIX #1210: Total includes ALL unspent, spendable only those with witnesses
     let balance = wallet::WalletCore::compute_balance(&notes);
-    assert_eq!(balance.total, 180_000);      // 100K + 50K + 30K
-    assert_eq!(balance.spendable, 150_000);  // 100K + 50K
+    assert_eq!(balance.total, 180_000); // 100K + 50K + 30K
+    assert_eq!(balance.spendable, 150_000); // 100K + 50K
     assert_eq!(balance.note_count, 3);
     assert_eq!(balance.spendable_note_count, 2);
 
@@ -141,24 +151,23 @@ fn test_send_validation_flow() {
     assert_eq!(request.total_needed(), 60_000);
 
     // Note selection
-    let notes = vec![
-        send::SpendableNote {
-            id: 1,
-            value: 100_000,
-            rcm: [0xAA; 32],
-            diversifier: [0xBB; 11],
-            witness: vec![0x01; 200],
-            anchor: [0xCC; 32],
-            nullifier: [0x01; 32],
-            is_zip212: false,
-        },
-    ];
+    let notes = vec![send::SpendableNote {
+        id: 1,
+        value: 100_000,
+        rcm: [0xAA; 32],
+        diversifier: [0xBB; 11],
+        witness: vec![0x01; 200],
+        anchor: [0xCC; 32],
+        nullifier: [0x01; 32],
+        is_zip212: false,
+    }];
 
     let (selected, total) = send::select_notes(&notes, request.total_needed()).unwrap();
     assert_eq!(selected.len(), 1);
     assert_eq!(total, 100_000);
 
-    let change = send::calculate_change(total, request.amount_zatoshis, request.fee_zatoshis).unwrap();
+    let change =
+        send::calculate_change(total, request.amount_zatoshis, request.fee_zatoshis).unwrap();
     assert_eq!(change, 40_000); // 100K - 50K - 10K
 
     // Validate spend notes
@@ -176,15 +185,13 @@ fn test_scanner_flow() {
             hash: [0; 32],
             timestamp: 1700000000,
             final_sapling_root: [0xAB; 32],
-            outputs: vec![
-                ShieldedOutput {
-                    txid: [0x01; 32],
-                    cmu: [0x02; 32],
-                    epk: [0; 32],
-                    ciphertext: vec![0; 580],
-                    cv: [0; 32],
-                },
-            ],
+            outputs: vec![ShieldedOutput {
+                txid: [0x01; 32],
+                cmu: [0x02; 32],
+                epk: [0; 32],
+                ciphertext: vec![0; 580],
+                cv: [0; 32],
+            }],
             spends: vec![],
         },
         CompactBlock {
@@ -193,12 +200,10 @@ fn test_scanner_flow() {
             timestamp: 1700000060,
             final_sapling_root: [0xCD; 32],
             outputs: vec![],
-            spends: vec![
-                ShieldedSpend {
-                    txid: [0x03; 32],
-                    nullifier: [0xDD; 32],
-                },
-            ],
+            spends: vec![ShieldedSpend {
+                txid: [0x03; 32],
+                nullifier: [0xDD; 32],
+            }],
         },
     ];
 
@@ -240,7 +245,10 @@ fn test_sync_orchestration_flow() {
         has_valid_witnesses: true,
         chain_tip: 2_951_950,
     };
-    assert_eq!(sync::determine_startup_mode(&state), sync::StartupMode::Instant);
+    assert_eq!(
+        sync::determine_startup_mode(&state),
+        sync::StartupMode::Instant
+    );
 
     // Calculate delta sync range
     let range = sync::calculate_delta_sync_range(2_951_900, 2_951_950, 2_951_950);
@@ -254,19 +262,35 @@ fn test_sync_orchestration_flow() {
     let heights = vec![100, 101, 105, 106, 107, 110];
     let gaps = sync::detect_gaps(&heights, 100, 110);
     assert_eq!(gaps.len(), 2);
-    assert_eq!(gaps[0], sync::DeltaGap { start: 102, end: 104 });
-    assert_eq!(gaps[1], sync::DeltaGap { start: 108, end: 109 });
+    assert_eq!(
+        gaps[0],
+        sync::DeltaGap {
+            start: 102,
+            end: 104
+        }
+    );
+    assert_eq!(
+        gaps[1],
+        sync::DeltaGap {
+            start: 108,
+            end: 109
+        }
+    );
 
     // Root validation (FIX #1230 — both byte orders)
     let root_a = [0x01; 32];
     let mut root_b = [0u8; 32];
-    for i in 0..32 { root_b[i] = root_a[31 - i]; }
+    for i in 0..32 {
+        root_b[i] = root_a[31 - i];
+    }
     assert!(sync::roots_match(&root_a, &root_b));
 
     // Sync guards
     let guards = sync::SyncGuards::new();
     assert!(guards.can_background_sync());
-    guards.is_broadcasting.store(true, std::sync::atomic::Ordering::SeqCst);
+    guards
+        .is_broadcasting
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(!guards.can_background_sync()); // FIX #1184: blocked during broadcast
 }
 
@@ -280,18 +304,19 @@ fn test_storage_roundtrip() {
     db.insert_note(
         0, // account_id
         2_951_900,
-        &[0xAA; 32], // cmu
-        50_000,       // value
-        Some(&[0xDDu8; 32] as &[u8]), // nullifier
-        Some(&[0xCCu8; 32] as &[u8]), // rcm
-        Some(&[0xBBu8; 32] as &[u8]), // epk
+        &[0xAA; 32],                     // cmu
+        50_000,                          // value
+        Some(&[0xDDu8; 32] as &[u8]),    // nullifier
+        Some(&[0xCCu8; 32] as &[u8]),    // rcm
+        Some(&[0xBBu8; 32] as &[u8]),    // epk
         Some(vec![0u8; 580].as_slice()), // ciphertext
         Some("Test memo"),
         Some(&[0xFFu8; 11] as &[u8]), // diversifier
-        None,            // witness (no witness yet)
-        Some("tx_abc123"), // received_txid
-        Some(42),        // position
-    ).unwrap();
+        None,                         // witness (no witness yet)
+        Some("tx_abc123"),            // received_txid
+        Some(42),                     // position
+    )
+    .unwrap();
 
     // Query balance (FIX #1210)
     let total = db.get_total_unspent_balance(0).unwrap();
@@ -310,15 +335,16 @@ fn test_storage_roundtrip() {
     // Record a transaction — signature: txid, height, timestamp, tx_type, amount, fee, address, memo, status
     db.insert_transaction(
         "tx_abc123",
-        2_951_900,           // height
-        Some(1700000000),    // timestamp
+        2_951_900,        // height
+        Some(1700000000), // timestamp
         TxType::Received,
         50_000,
-        0,                   // fee
-        None,                // address
+        0,    // fee
+        None, // address
         Some("Test memo"),
         TxStatus::Confirmed,
-    ).unwrap();
+    )
+    .unwrap();
 
     let history = db.get_transaction_history(10, 0).unwrap();
     assert_eq!(history.len(), 1);

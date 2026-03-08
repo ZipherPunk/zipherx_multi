@@ -52,7 +52,10 @@ impl SecureStorage for MockSecureStorage {
         self.store.lock().unwrap().contains_key(identifier)
     }
 
-    fn load_encrypted_key_pair(&self, identifier: &str) -> Result<(Vec<u8>, Vec<u8>), PlatformError> {
+    fn load_encrypted_key_pair(
+        &self,
+        identifier: &str,
+    ) -> Result<(Vec<u8>, Vec<u8>), PlatformError> {
         let encrypted = self.load_key(identifier)?;
         let enc_key = self.load_key(&format!("{}_enc", identifier))?;
         Ok((encrypted, enc_key))
@@ -75,7 +78,10 @@ pub struct MockBiometricAuth {
 
 impl MockBiometricAuth {
     pub fn new(available: bool, should_succeed: bool) -> Self {
-        Self { available, should_succeed }
+        Self {
+            available,
+            should_succeed,
+        }
     }
 }
 
@@ -309,7 +315,10 @@ mod tests {
     #[test]
     fn test_mock_platform_info() {
         let info = MockPlatformInfo;
-        assert_eq!(info.data_directory(), PathBuf::from("/tmp/zipherx_test/data"));
+        assert_eq!(
+            info.data_directory(),
+            PathBuf::from("/tmp/zipherx_test/data")
+        );
         assert!(info.is_simulator());
         assert!(info.is_foreground());
         assert!(!info.device_id().is_empty());

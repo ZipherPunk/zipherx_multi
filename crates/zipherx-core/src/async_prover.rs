@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::CoreError;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use zipherx_crypto::prover;
 use zipherx_crypto::transaction::{self, SpendInfo, TransactionResult};
 
@@ -30,12 +30,10 @@ pub async fn init_prover(
     let spend_path = spend_params_path.to_string();
     let output_path = output_params_path.to_string();
 
-    tokio::task::spawn_blocking(move || {
-        prover::init_from_files(&spend_path, &output_path)
-    })
-    .await
-    .map_err(|e| CoreError::RuntimeError(e.to_string()))?
-    .map_err(|e| CoreError::Crypto(e.to_string()))
+    tokio::task::spawn_blocking(move || prover::init_from_files(&spend_path, &output_path))
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+        .map_err(|e| CoreError::Crypto(e.to_string()))
 }
 
 /// Initialize the prover from raw bytes (e.g., embedded in app bundle).
@@ -47,12 +45,10 @@ pub async fn init_prover_from_bytes(
         return Ok(());
     }
 
-    tokio::task::spawn_blocking(move || {
-        prover::init_from_bytes(&spend_data, &output_data)
-    })
-    .await
-    .map_err(|e| CoreError::RuntimeError(e.to_string()))?
-    .map_err(|e| CoreError::Crypto(e.to_string()))
+    tokio::task::spawn_blocking(move || prover::init_from_bytes(&spend_data, &output_data))
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+        .map_err(|e| CoreError::Crypto(e.to_string()))
 }
 
 /// Check if the prover is initialized and ready.
@@ -65,10 +61,8 @@ pub fn is_prover_ready() -> bool {
 // ============================================================================
 
 /// Well-known Zcash Sapling parameter download URLs.
-const SPEND_PARAMS_URL: &str =
-    "https://download.z.cash/downloads/sapling-spend.params";
-const OUTPUT_PARAMS_URL: &str =
-    "https://download.z.cash/downloads/sapling-output.params";
+const SPEND_PARAMS_URL: &str = "https://download.z.cash/downloads/sapling-spend.params";
+const OUTPUT_PARAMS_URL: &str = "https://download.z.cash/downloads/sapling-output.params";
 
 /// Official SHA-256 hashes for Sapling parameter files (from Zcash documentation).
 const SPEND_PARAMS_SHA256: &str =
@@ -148,34 +142,36 @@ async fn download_param_if_needed(
             .map_err(|e| CoreError::Storage(format!("Create params dir: {e}")))?;
     }
 
-    eprintln!("[ZipherX] Downloading {} ({:.1} MB)...", name, expected_size as f64 / 1_048_576.0);
+    eprintln!(
+        "[ZipherX] Downloading {} ({:.1} MB)...",
+        name,
+        expected_size as f64 / 1_048_576.0
+    );
 
     // RC-2: Use Tor-aware client to avoid leaking IP during param download.
     // Falls back to clearnet with warning if Tor is not available.
     let client = crate::boost_download::build_tor_aware_client(300)?;
 
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| CoreError::Network(zipherx_network::types::NetworkError::ConnectionFailed(
+    let response = client.get(url).send().await.map_err(|e| {
+        CoreError::Network(zipherx_network::types::NetworkError::ConnectionFailed(
             format!("Download {name}: {e}"),
-        )))?;
+        ))
+    })?;
 
     if !response.status().is_success() {
         return Err(CoreError::Network(
-            zipherx_network::types::NetworkError::ConnectionFailed(
-                format!("Download {name}: HTTP {}", response.status()),
-            ),
+            zipherx_network::types::NetworkError::ConnectionFailed(format!(
+                "Download {name}: HTTP {}",
+                response.status()
+            )),
         ));
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| CoreError::Network(zipherx_network::types::NetworkError::ConnectionFailed(
+    let bytes = response.bytes().await.map_err(|e| {
+        CoreError::Network(zipherx_network::types::NetworkError::ConnectionFailed(
             format!("Read {name}: {e}"),
-        )))?;
+        ))
+    })?;
 
     if bytes.len() as u64 != expected_size {
         return Err(CoreError::Crypto(format!(
@@ -202,7 +198,10 @@ async fn download_param_if_needed(
     .await
     .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
 
-    eprintln!("[ZipherX] {} downloaded successfully ({} bytes)", name, expected_size);
+    eprintln!(
+        "[ZipherX] {} downloaded successfully ({} bytes)",
+        name, expected_size
+    );
     Ok(())
 }
 
@@ -278,16 +277,8 @@ mod tests {
     #[tokio::test]
     async fn test_build_tx_without_prover() {
         // Don't initialize prover
-        let result = build_transaction_async(
-            vec![0u8; 32],
-            [0u8; 43],
-            1000,
-            None,
-            vec![],
-            100,
-            None,
-        )
-        .await;
+        let result =
+            build_transaction_async(vec![0u8; 32], [0u8; 43], 1000, None, vec![], 100, None).await;
         // Should fail: no spends
         assert!(result.is_err());
     }
@@ -305,10 +296,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            result,
-            Err(CoreError::TransactionBuildFailed(_))
-        ));
+        assert!(matches!(result, Err(CoreError::TransactionBuildFailed(_))));
     }
 
     #[tokio::test]

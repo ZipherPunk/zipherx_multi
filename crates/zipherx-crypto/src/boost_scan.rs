@@ -8,25 +8,26 @@
 
 use std::collections::{HashMap, HashSet};
 
+use ff::PrimeField;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use zcash_note_encryption::{
+    EphemeralKeyBytes, ShieldedOutput, COMPACT_NOTE_SIZE, ENC_CIPHERTEXT_SIZE,
+};
 use zcash_primitives::{
     consensus::BlockHeight,
     sapling::{
         note_encryption::{
-            try_sapling_note_decryption, try_sapling_compact_note_decryption,
+            try_sapling_compact_note_decryption, try_sapling_note_decryption,
             PreparedIncomingViewingKey, SaplingDomain,
         },
         Diversifier, Rseed,
     },
     zip32::sapling::ExtendedSpendingKey,
 };
-use zcash_note_encryption::{EphemeralKeyBytes, ShieldedOutput, ENC_CIPHERTEXT_SIZE, COMPACT_NOTE_SIZE};
-use ff::PrimeField;
-use rayon::prelude::*;
-use serde::{Serialize, Deserialize};
 
 use crate::types::{
-    ZclassicNetwork, CryptoError, SPENDING_KEY_LENGTH,
-    BOOST_OUTPUT_SIZE, BOOST_SPEND_SIZE,
+    CryptoError, ZclassicNetwork, BOOST_OUTPUT_SIZE, BOOST_SPEND_SIZE, SPENDING_KEY_LENGTH,
 };
 
 // ============================================================================
@@ -179,8 +180,7 @@ pub fn scan_boost_outputs(
     let nk = fvk.vk.nk;
 
     // Index spends: nullifier → (spend_height, txid)
-    let mut nullifier_map: HashMap<[u8; 32], (u32, [u8; 32])> =
-        HashMap::with_capacity(spend_count);
+    let mut nullifier_map: HashMap<[u8; 32], (u32, [u8; 32])> = HashMap::with_capacity(spend_count);
     for i in 0..spend_count {
         let offset = i * BOOST_SPEND_SIZE;
         let spend_height = u32::from_le_bytes([
@@ -235,12 +235,16 @@ pub fn scan_boost_outputs(
         for i in 0..output_count {
             let offset = i * BOOST_OUTPUT_SIZE;
             let height = u32::from_le_bytes([
-                outputs_data[offset], outputs_data[offset + 1],
-                outputs_data[offset + 2], outputs_data[offset + 3],
+                outputs_data[offset],
+                outputs_data[offset + 1],
+                outputs_data[offset + 2],
+                outputs_data[offset + 3],
             ]);
             let index_field = u32::from_le_bytes([
-                outputs_data[offset + 4], outputs_data[offset + 5],
-                outputs_data[offset + 6], outputs_data[offset + 7],
+                outputs_data[offset + 4],
+                outputs_data[offset + 5],
+                outputs_data[offset + 6],
+                outputs_data[offset + 7],
             ]);
             if index_field == i as u32 {
                 index_eq_arraypos += 1;
@@ -250,8 +254,12 @@ pub fn scan_boost_outputs(
                     first_mismatch = Some((i, index_field, height));
                 }
             }
-            if index_field < min_index { min_index = index_field; }
-            if index_field > max_index { max_index = index_field; }
+            if index_field < min_index {
+                min_index = index_field;
+            }
+            if index_field > max_index {
+                max_index = index_field;
+            }
             if sample_indices.len() < 10 {
                 sample_indices.push((i, index_field, height));
             }
@@ -281,7 +289,8 @@ pub fn scan_boost_outputs(
     let decrypted: Vec<_> = indices
         .par_iter()
         .filter_map(|&i| {
-            let (position, height, index_field, cmu, epk, ciphertext, received_txid) = parse_output(i);
+            let (position, height, index_field, cmu, epk, ciphertext, received_txid) =
+                parse_output(i);
 
             let output = BoostOutput {
                 epk,
@@ -321,7 +330,8 @@ pub fn scan_boost_outputs(
     if cfg!(debug_assertions) {
         eprintln!(
             "[ZipherX] DIAG decryption: {}/{} outputs decrypted successfully",
-            decrypted.len(), output_count,
+            decrypted.len(),
+            output_count,
         );
     }
 
@@ -336,9 +346,21 @@ pub fn scan_boost_outputs(
     let mut cmu_mismatches: u32 = 0;
     let mut zip212_count: u32 = 0;
 
-    for (array_pos, height, _index_field, value, diversifier, rcm_repr, is_zip212, boost_cmu, received_txid) in decrypted {
+    for (
+        array_pos,
+        height,
+        _index_field,
+        value,
+        diversifier,
+        rcm_repr,
+        is_zip212,
+        boost_cmu,
+        received_txid,
+    ) in decrypted
+    {
         // RCR-10: Checked add to prevent total_received overflow
-        total_received = total_received.checked_add(value)
+        total_received = total_received
+            .checked_add(value)
             .ok_or_else(|| CryptoError::InvalidData("total_received overflow".into()))?;
         if is_zip212 {
             zip212_count += 1;
@@ -349,7 +371,12 @@ pub fn scan_boost_outputs(
         let payment_address = match fvk.vk.to_payment_address(div) {
             Some(addr) => addr,
             None => {
-                if cfg!(debug_assertions) { eprintln!("[ZipherX] WARN: invalid diversifier at array_pos {}, skipping", array_pos); }
+                if cfg!(debug_assertions) {
+                    eprintln!(
+                        "[ZipherX] WARN: invalid diversifier at array_pos {}, skipping",
+                        array_pos
+                    );
+                }
                 continue;
             }
         };
@@ -363,7 +390,12 @@ pub fn scan_boost_outputs(
             let rcm_scalar = match jubjub::Fr::from_repr(rcm_repr).into_option() {
                 Some(r) => r,
                 None => {
-                    if cfg!(debug_assertions) { eprintln!("[ZipherX] WARN: rcm from_repr failed at array_pos {}, skipping", array_pos); }
+                    if cfg!(debug_assertions) {
+                        eprintln!(
+                            "[ZipherX] WARN: rcm from_repr failed at array_pos {}, skipping",
+                            array_pos
+                        );
+                    }
                     continue;
                 }
             };
@@ -426,11 +458,14 @@ pub fn scan_boost_outputs(
         // the witness-based recompute will correct anyway.
         if !is_spent {
             let mut probe_found = false;
-            for delta in &[-3i64, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-                           -10, 50, -50, 100, -100,
-                           500, -500, 1000, -1000, 5000, -5000] {
+            for delta in &[
+                -3i64, -2, -1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, -10, 50, -50, 100, -100, 500, -500,
+                1000, -1000, 5000, -5000,
+            ] {
                 let probe_pos = position as i64 + delta;
-                if probe_pos < 0 { continue; }
+                if probe_pos < 0 {
+                    continue;
+                }
                 let probe_nf = note.nf(&nk, probe_pos as u64);
                 if let Some(&(spend_h, txid)) = nullifier_map.get(&probe_nf.0) {
                     if cfg!(debug_assertions) {
@@ -451,13 +486,16 @@ pub fn scan_boost_outputs(
             if !probe_found && cfg!(debug_assertions) {
                 eprintln!(
                     "[ZipherX]     UNSPENT (confirmed): pos={}, value={} ({:.8} ZCL)",
-                    position, value, value as f64 / 1e8,
+                    position,
+                    value,
+                    value as f64 / 1e8,
                 );
             }
         }
 
         if is_spent {
-            total_spent = total_spent.checked_add(value)
+            total_spent = total_spent
+                .checked_add(value)
                 .ok_or_else(|| CryptoError::InvalidData("total_spent overflow".into()))?;
             notes_spent += 1;
         }
@@ -466,9 +504,17 @@ pub fn scan_boost_outputs(
         if cfg!(debug_assertions) {
             eprintln!(
                 "[ZipherX]   NOTE #{}: value={}, height={}, pos={}{}, spent={}, zip212={}",
-                notes.len(), value, height, final_position,
-                if final_position != position { format!(" (corrected from {})", position) } else { String::new() },
-                is_spent, is_zip212,
+                notes.len(),
+                value,
+                height,
+                final_position,
+                if final_position != position {
+                    format!(" (corrected from {})", position)
+                } else {
+                    String::new()
+                },
+                is_spent,
+                is_zip212,
             );
             if !cmu_match {
                 eprintln!(
@@ -502,7 +548,8 @@ pub fn scan_boost_outputs(
         let unique_divs: HashSet<[u8; 11]> = notes.iter().map(|n| n.diversifier).collect();
         eprintln!(
             "[ZipherX] DIAG diversifiers: {} unique across {} notes",
-            unique_divs.len(), notes.len(),
+            unique_divs.len(),
+            notes.len(),
         );
         for div in &unique_divs {
             let at_div: Vec<_> = notes.iter().filter(|n| &n.diversifier == div).collect();
@@ -511,21 +558,31 @@ pub fn scan_boost_outputs(
             let unspent_cnt = at_div.iter().filter(|n| !n.is_spent).count();
             eprintln!(
                 "[ZipherX]   div={}... : {} notes ({} unspent), total_received={}, unspent={}",
-                hex::encode(&div[..6]), at_div.len(), unspent_cnt, total_val, unspent_val,
+                hex::encode(&div[..6]),
+                at_div.len(),
+                unspent_cnt,
+                total_val,
+                unspent_val,
             );
         }
 
         // ====== DIAGNOSTIC: Sorted unspent values for cross-reference ======
-        let mut unspent_values: Vec<u64> = notes.iter().filter(|n| !n.is_spent).map(|n| n.value).collect();
+        let mut unspent_values: Vec<u64> = notes
+            .iter()
+            .filter(|n| !n.is_spent)
+            .map(|n| n.value)
+            .collect();
         unspent_values.sort();
         eprintln!(
             "[ZipherX] DIAG unspent values (sorted, {} notes): {:?}",
-            unspent_values.len(), unspent_values,
+            unspent_values.len(),
+            unspent_values,
         );
         let unspent_sum: u64 = unspent_values.iter().sum();
         eprintln!(
             "[ZipherX] DIAG unspent sum: {} zatoshis ({:.8} ZCL)",
-            unspent_sum, unspent_sum as f64 / 1e8,
+            unspent_sum,
+            unspent_sum as f64 / 1e8,
         );
 
         // ====== DIAGNOSTIC: All spent note values ======
@@ -542,13 +599,16 @@ pub fn scan_boost_outputs(
         for (val, sh, stxid, _rtxid) in &spent_values {
             eprintln!(
                 "[ZipherX]   SPENT: value={}, spent_height={}, spent_txid={}...",
-                val, sh, hex::encode(&stxid[..8]),
+                val,
+                sh,
+                hex::encode(&stxid[..8]),
             );
         }
         let spent_sum: u64 = spent_values.iter().map(|(v, _, _, _)| *v).sum();
         eprintln!(
             "[ZipherX] DIAG spent sum: {} zatoshis ({:.8} ZCL)",
-            spent_sum, spent_sum as f64 / 1e8,
+            spent_sum,
+            spent_sum as f64 / 1e8,
         );
     }
 
@@ -560,13 +620,19 @@ pub fn scan_boost_outputs(
         // Group spent notes by spending txid
         let mut spends_by_txid: HashMap<[u8; 32], Vec<&BoostScanNote>> = HashMap::new();
         for note in notes.iter().filter(|n| n.is_spent) {
-            spends_by_txid.entry(note.spent_txid).or_default().push(note);
+            spends_by_txid
+                .entry(note.spent_txid)
+                .or_default()
+                .push(note);
         }
 
         // Build received_txid → notes index
         let mut received_by_txid: HashMap<[u8; 32], Vec<&BoostScanNote>> = HashMap::new();
         for note in notes.iter() {
-            received_by_txid.entry(note.received_txid).or_default().push(note);
+            received_by_txid
+                .entry(note.received_txid)
+                .or_default()
+                .push(note);
         }
 
         eprintln!(
@@ -598,8 +664,10 @@ pub fn scan_boost_outputs(
                 eprintln!(
                     "[ZipherX]   TX {}...: {} inputs={}, {} change={}, sent_out={}",
                     hex::encode(&spent_txid[..8]),
-                    input_count, input_sum,
-                    change_count, change_sum,
+                    input_count,
+                    input_sum,
+                    change_count,
+                    change_sum,
                     input_sum.saturating_sub(change_sum),
                 );
             } else {
@@ -607,7 +675,9 @@ pub fn scan_boost_outputs(
                 eprintln!(
                     "[ZipherX]   TX {}...: {} inputs={}, NO CHANGE (all {} sent out)",
                     hex::encode(&spent_txid[..8]),
-                    input_count, input_sum, input_sum,
+                    input_count,
+                    input_sum,
+                    input_sum,
                 );
             }
         }
@@ -618,12 +688,15 @@ pub fn scan_boost_outputs(
         );
         eprintln!(
             "[ZipherX] DIAG change analysis: total_input={}, total_change={}, net_sent_out={}",
-            total_input, total_change, total_input.saturating_sub(total_change),
+            total_input,
+            total_change,
+            total_input.saturating_sub(total_change),
         );
 
         eprintln!(
             "[ZipherX] Boost scan: {} ZIP-212 (AfterZip212) notes found out of {} total",
-            zip212_count, notes.len(),
+            zip212_count,
+            notes.len(),
         );
         eprintln!(
             "[ZipherX] Boost scan nullifier stats: {} CMU mismatches out of {} notes, {} unspent, {} spends in file",
@@ -643,7 +716,8 @@ pub fn scan_boost_outputs(
         let compact_hits: Vec<_> = indices
             .par_iter()
             .filter_map(|&i| {
-                let (_array_pos, height, index_field, cmu, epk, ciphertext, received_txid) = parse_output(i);
+                let (_array_pos, height, index_field, cmu, epk, ciphertext, received_txid) =
+                    parse_output(i);
 
                 // Skip outputs already found by full decryption
                 if found_array_indices.contains(&(i as u64)) {
@@ -710,7 +784,6 @@ pub fn scan_boost_outputs(
         }
     }
 
-
     let result = BoostScanResult {
         total_received,
         total_spent,
@@ -773,6 +846,9 @@ mod tests {
             notes_spent: 1,
             spends_checked: 100,
         };
-        assert_eq!(result.unspent_balance, result.total_received - result.total_spent);
+        assert_eq!(
+            result.unspent_balance,
+            result.total_received - result.total_spent
+        );
     }
 }

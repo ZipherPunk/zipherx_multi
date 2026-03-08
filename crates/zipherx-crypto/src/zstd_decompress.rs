@@ -21,7 +21,8 @@ pub fn decompress(compressed: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let mut output = Vec::new();
     let mut buf = [0u8; DECOMPRESS_CHUNK_SIZE];
     loop {
-        let bytes_read = decoder.read(&mut buf)
+        let bytes_read = decoder
+            .read(&mut buf)
             .map_err(|e| CryptoError::DecompressionFailed(format!("Read: {e}")))?;
         if bytes_read == 0 {
             break;
@@ -56,12 +57,14 @@ pub fn decompress_file(source_path: &str, dest_path: &str) -> Result<u64, Crypto
     let mut total_written: u64 = 0;
     let mut buf = [0u8; DECOMPRESS_CHUNK_SIZE];
     loop {
-        let bytes_read = decoder.read(&mut buf)
+        let bytes_read = decoder
+            .read(&mut buf)
             .map_err(|e| CryptoError::DecompressionFailed(format!("Read: {e}")))?;
         if bytes_read == 0 {
             break;
         }
-        writer.write_all(&buf[..bytes_read])
+        writer
+            .write_all(&buf[..bytes_read])
             .map_err(|e| CryptoError::DecompressionFailed(format!("Write: {e}")))?;
         total_written += bytes_read as u64;
         if total_written > MAX_DECOMPRESS_SIZE as u64 {
@@ -72,7 +75,8 @@ pub fn decompress_file(source_path: &str, dest_path: &str) -> Result<u64, Crypto
         }
     }
 
-    writer.flush()
+    writer
+        .flush()
         .map_err(|e| CryptoError::DecompressionFailed(format!("Flush: {e}")))?;
 
     Ok(total_written)

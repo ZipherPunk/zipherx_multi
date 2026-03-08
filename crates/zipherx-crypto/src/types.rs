@@ -1,7 +1,7 @@
 //! Shared types for ZipherX crypto — network parameters, errors, constants.
 
-use zcash_primitives::consensus::{Parameters, BlockHeight, NetworkUpgrade};
 use thiserror::Error;
+use zcash_primitives::consensus::{BlockHeight, NetworkUpgrade, Parameters};
 
 // ============================================================================
 // Zclassic Network Parameters

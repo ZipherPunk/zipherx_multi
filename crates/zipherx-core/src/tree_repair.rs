@@ -172,10 +172,7 @@ mod tests {
 
     #[test]
     fn test_repair_state_from_u8() {
-        assert_eq!(
-            TreeRepairState::from_u8(0),
-            Some(TreeRepairState::Healthy)
-        );
+        assert_eq!(TreeRepairState::from_u8(0), Some(TreeRepairState::Healthy));
         assert_eq!(
             TreeRepairState::from_u8(1),
             Some(TreeRepairState::Attempting)

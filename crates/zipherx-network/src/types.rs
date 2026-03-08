@@ -6,16 +6,10 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ProtocolError {
     #[error("Invalid magic bytes: expected {expected:02x?}, got {got:02x?}")]
-    InvalidMagicBytes {
-        expected: [u8; 4],
-        got: [u8; 4],
-    },
+    InvalidMagicBytes { expected: [u8; 4], got: [u8; 4] },
 
     #[error("Payload too large: {size} bytes (max {max})")]
-    PayloadTooLarge {
-        size: u32,
-        max: u32,
-    },
+    PayloadTooLarge { size: u32, max: u32 },
 
     #[error("Invalid checksum")]
     InvalidChecksum,
@@ -24,10 +18,7 @@ pub enum ProtocolError {
     InvalidCommand(String),
 
     #[error("Insufficient data: need {needed} bytes, have {available}")]
-    InsufficientData {
-        needed: usize,
-        available: usize,
-    },
+    InsufficientData { needed: usize, available: usize },
 
     #[error("Malformed message: {0}")]
     Malformed(String),
@@ -64,25 +55,16 @@ pub enum NetworkError {
     NoPeersAvailable,
 
     #[error("Consensus threshold not met: have {have}, need {need}")]
-    ConsensusNotMet {
-        have: usize,
-        need: usize,
-    },
+    ConsensusNotMet { have: usize, need: usize },
 
     #[error("Peer banned: {address} (reason: {reason})")]
-    PeerBanned {
-        address: String,
-        reason: String,
-    },
+    PeerBanned { address: String, reason: String },
 
     #[error("Broadcast failed: {0}")]
     BroadcastFailed(String),
 
     #[error("Block fetch failed: received {received}/{expected} blocks")]
-    BlockFetchFailed {
-        received: usize,
-        expected: usize,
-    },
+    BlockFetchFailed { received: usize, expected: usize },
 
     #[error("Header sync failed: {0}")]
     HeaderSyncFailed(String),

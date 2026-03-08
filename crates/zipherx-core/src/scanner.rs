@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use zipherx_crypto::{
     notes::{self, DecryptedNote},
-    types::{SPENDING_KEY_LENGTH, ENC_CIPHERTEXT_LEN},
+    types::{ENC_CIPHERTEXT_LEN, SPENDING_KEY_LENGTH},
 };
 use zipherx_network::block_fetcher::CompactBlock;
 
@@ -304,7 +304,9 @@ mod tests {
     fn test_sk() -> Vec<u8> {
         let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
         let seed = zipherx_crypto::mnemonic::to_seed(phrase).unwrap();
-        zipherx_crypto::keys::derive_spending_key(&seed, 0).unwrap().to_vec()
+        zipherx_crypto::keys::derive_spending_key(&seed, 0)
+            .unwrap()
+            .to_vec()
     }
 
     #[test]

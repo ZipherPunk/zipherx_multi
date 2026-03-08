@@ -378,14 +378,20 @@ async fn do_handshake(
     for attempt in 0..5 {
         match tokio::time::timeout(HANDSHAKE_TIMEOUT, receive_message(reader)).await {
             Ok(Ok((cmd, payload))) => {
-                eprintln!("[ZipherX] {peer_id}: received '{cmd}' ({} bytes) [attempt {attempt}]", payload.len());
+                eprintln!(
+                    "[ZipherX] {peer_id}: received '{cmd}' ({} bytes) [attempt {attempt}]",
+                    payload.len()
+                );
                 if cmd == "version" {
                     if let Some(ver) = VersionMessage::deserialize(&payload) {
                         peer_version = ver.version;
                         peer_user_agent = ver.user_agent.clone();
                         peer_start_height = ver.start_height as u32;
 
-                        eprintln!("[ZipherX] {peer_id}: version={}, ua={}, height={}", ver.version, ver.user_agent, ver.start_height);
+                        eprintln!(
+                            "[ZipherX] {peer_id}: version={}, ua={}, height={}",
+                            ver.version, ver.user_agent, ver.start_height
+                        );
 
                         if !is_valid_zclassic_version(ver.version) {
                             eprintln!("[ZipherX] {peer_id}: WRONG CHAIN (version {})", ver.version);
@@ -395,7 +401,10 @@ async fn do_handshake(
                         received_version = true;
                         break;
                     } else {
-                        eprintln!("[ZipherX] {peer_id}: failed to deserialize version ({} bytes)", payload.len());
+                        eprintln!(
+                            "[ZipherX] {peer_id}: failed to deserialize version ({} bytes)",
+                            payload.len()
+                        );
                     }
                 } else if cmd == "reject" {
                     eprintln!("[ZipherX] {peer_id}: REJECTED");
@@ -483,9 +492,11 @@ fn configure_tcp_stream(stream: &TcpStream) -> Result<(), NetworkError> {
         .with_time(Duration::from_secs(15))
         .with_interval(Duration::from_secs(15));
 
-    socket.set_tcp_keepalive(&keepalive)
+    socket
+        .set_tcp_keepalive(&keepalive)
         .map_err(|e| NetworkError::ConnectionFailed(format!("Keepalive: {e}")))?;
-    socket.set_nodelay(true)
+    socket
+        .set_nodelay(true)
         .map_err(|e| NetworkError::ConnectionFailed(format!("NoDelay: {e}")))?;
 
     Ok(())
@@ -547,11 +558,8 @@ pub async fn receive_message(
 
                 let mut extra = vec![0u8; 4096];
                 for _ in 0..16 {
-                    match tokio::time::timeout(
-                        Duration::from_secs(2),
-                        reader.read(&mut extra),
-                    )
-                    .await
+                    match tokio::time::timeout(Duration::from_secs(2), reader.read(&mut extra))
+                        .await
                     {
                         Ok(Ok(n)) if n > 0 => {
                             scan_buf.extend_from_slice(&extra[..n]);
@@ -567,9 +575,7 @@ pub async fn receive_message(
                     }
 
                     if scan_buf.len() >= MAX_RESYNC_SCAN {
-                        return Err(NetworkError::StreamDesync(
-                            "Magic not found in scan".into(),
-                        ));
+                        return Err(NetworkError::StreamDesync("Magic not found in scan".into()));
                     }
                 }
                 // Continue to next iteration — try reading a new header
@@ -645,8 +651,8 @@ async fn handle_background_message(
             let _ = writer_taken.write_all(&frame).await;
             *writer.lock().unwrap() = Some(writer_taken);
         }
-        "inv" | "addr" | "addrv2" | "alert" | "getdata" | "notfound" | "mempool"
-        | "getblocks" | "getheaders" => {
+        "inv" | "addr" | "addrv2" | "alert" | "getdata" | "notfound" | "mempool" | "getblocks"
+        | "getheaders" => {
             // Silently ignore unsolicited messages
         }
         _ => {
@@ -708,14 +714,18 @@ mod tests {
         reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
     ) -> Result<(String, Vec<u8>), NetworkError> {
         let mut header_buf = [0u8; MESSAGE_HEADER_SIZE];
-        reader.read_exact(&mut header_buf).await
+        reader
+            .read_exact(&mut header_buf)
+            .await
             .map_err(|e| NetworkError::Io(e))?;
 
         let (command, payload_len, checksum) = protocol::parse_header(&header_buf)?;
         let len = payload_len as usize;
         let mut payload = vec![0u8; len];
         if len > 0 {
-            reader.read_exact(&mut payload).await
+            reader
+                .read_exact(&mut payload)
+                .await
                 .map_err(|e| NetworkError::Io(e))?;
         }
         assert!(protocol::verify_checksum(&payload, &checksum));

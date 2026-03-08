@@ -8,9 +8,9 @@
 //! - Delta CMU bundles
 //! - Sapling roots
 
+pub mod encryption;
 pub mod schema;
 pub mod types;
-pub mod encryption;
 
 pub mod database;
 pub mod header_store_impl;
@@ -22,5 +22,5 @@ pub mod delta_cmu;
 // pub mod migration;         // Schema migrations (Phase 4)
 
 pub use database::WalletDatabase;
-pub use header_store_impl::SqliteHeaderStore;
 pub use delta_cmu::DeltaCMUStore;
+pub use header_store_impl::SqliteHeaderStore;

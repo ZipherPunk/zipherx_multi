@@ -134,9 +134,10 @@ pub fn parse_raw_block(
     // No valid Zclassic block has more than 100,000 transactions.
     if tx_count > 100_000 {
         return Err(NetworkError::Protocol(
-            crate::types::ProtocolError::Malformed(
-                format!("Block tx_count {} exceeds maximum 100,000", tx_count),
-            ),
+            crate::types::ProtocolError::Malformed(format!(
+                "Block tx_count {} exceeds maximum 100,000",
+                tx_count
+            )),
         ));
     }
     let tx_count = tx_count as usize;
@@ -210,35 +211,51 @@ fn parse_transaction(
     // Transparent inputs (vin)
     let (vin_count, sz) = messages::read_compact_size(data, offset)?;
     // NET-002: Cap vin/vout counts to prevent memory exhaustion
-    if vin_count > 10_000 { return None; }
+    if vin_count > 10_000 {
+        return None;
+    }
     offset += sz;
     for _ in 0..vin_count {
-        if offset + 36 > data.len() { return None; }
+        if offset + 36 > data.len() {
+            return None;
+        }
         offset += 36; // prevout hash (32) + index (4)
         let (script_len, sz) = messages::read_compact_size(data, offset)?;
         offset += sz;
         // NET-002: Checked addition to prevent overflow
-        offset = offset.checked_add(script_len as usize).filter(|&o| o <= data.len())?; // scriptSig
-        if offset + 4 > data.len() { return None; }
+        offset = offset
+            .checked_add(script_len as usize)
+            .filter(|&o| o <= data.len())?; // scriptSig
+        if offset + 4 > data.len() {
+            return None;
+        }
         offset += 4; // sequence
     }
 
     // Transparent outputs (vout)
     let (vout_count, sz) = messages::read_compact_size(data, offset)?;
     // NET-002: Cap vin/vout counts to prevent memory exhaustion
-    if vout_count > 10_000 { return None; }
+    if vout_count > 10_000 {
+        return None;
+    }
     offset += sz;
     for _ in 0..vout_count {
-        if offset + 8 > data.len() { return None; }
+        if offset + 8 > data.len() {
+            return None;
+        }
         offset += 8; // value
         let (script_len, sz) = messages::read_compact_size(data, offset)?;
         offset += sz;
         // NET-002: Checked addition to prevent overflow
-        offset = offset.checked_add(script_len as usize).filter(|&o| o <= data.len())?; // scriptPubKey
+        offset = offset
+            .checked_add(script_len as usize)
+            .filter(|&o| o <= data.len())?; // scriptPubKey
     }
 
     // lock_time (4) + expiry_height (4)
-    if offset + 8 > data.len() { return None; }
+    if offset + 8 > data.len() {
+        return None;
+    }
     offset += 8;
 
     // txid is computed after we know the full TX size (see below)
@@ -248,31 +265,44 @@ fn parse_transaction(
     // Sapling v4+ specific fields
     if version >= 4 {
         // value_balance (8 bytes)
-        if offset + 8 > data.len() { return None; }
+        if offset + 8 > data.len() {
+            return None;
+        }
         offset += 8;
 
         // vShieldedSpend
         let (spend_count, sz) = messages::read_compact_size(data, offset)?;
         // NET-002: Cap spend/output counts to prevent memory exhaustion
-        if spend_count > 10_000 { return None; }
+        if spend_count > 10_000 {
+            return None;
+        }
         offset += sz;
         for _ in 0..spend_count {
             // SpendDescription: cv(32) + anchor(32) + nullifier(32) + rk(32) + zkproof(192) + sig(64) = 384
-            if offset + 384 > data.len() { return None; }
+            if offset + 384 > data.len() {
+                return None;
+            }
             let mut nullifier = [0u8; 32];
             nullifier.copy_from_slice(&data[offset + 64..offset + 96]);
-            spends.push(ShieldedSpend { txid: [0u8; 32], nullifier });
+            spends.push(ShieldedSpend {
+                txid: [0u8; 32],
+                nullifier,
+            });
             offset += 384;
         }
 
         // vShieldedOutput
         let (output_count, sz) = messages::read_compact_size(data, offset)?;
         // NET-002: Cap spend/output counts to prevent memory exhaustion
-        if output_count > 10_000 { return None; }
+        if output_count > 10_000 {
+            return None;
+        }
         offset += sz;
         for _ in 0..output_count {
             // OutputDescription: cv(32) + cmu(32) + epk(32) + enc(580) + out(80) + zkproof(192) = 948
-            if offset + 948 > data.len() { return None; }
+            if offset + 948 > data.len() {
+                return None;
+            }
             let mut cv = [0u8; 32];
             cv.copy_from_slice(&data[offset..offset + 32]);
             let mut cmu = [0u8; 32];
@@ -299,18 +329,24 @@ fn parse_transaction(
             // Skip them — we don't use Sprout
             for _ in 0..js_count {
                 // Groth16 JoinSplit: 1698 bytes
-                if offset + 1698 > data.len() { return None; }
+                if offset + 1698 > data.len() {
+                    return None;
+                }
                 offset += 1698;
             }
             // joinsplitPubKey (32) + joinsplitSig (64) if js_count > 0
-            if offset + 96 > data.len() { return None; }
+            if offset + 96 > data.len() {
+                return None;
+            }
             offset += 96;
         }
 
         // Binding signature (64 bytes) — only if shielded spends or outputs present
         // Per Zcash spec, bindingSig is the LAST field in v4 transactions
         if !spends.is_empty() || !outputs.is_empty() {
-            if offset + 64 > data.len() { return None; }
+            if offset + 64 > data.len() {
+                return None;
+            }
             offset += 64;
         }
     }
@@ -320,8 +356,12 @@ fn parse_transaction(
     let txid = compute_txid(&data[start..offset]);
 
     // Patch txid into outputs and spends (they were built with zeroed txid)
-    for o in &mut outputs { o.txid = txid; }
-    for s in &mut spends { s.txid = txid; }
+    for o in &mut outputs {
+        o.txid = txid;
+    }
+    for s in &mut spends {
+        s.txid = txid;
+    }
 
     Some((offset, txid, outputs, spends))
 }
@@ -329,7 +369,7 @@ fn parse_transaction(
 /// Compute txid: double-SHA256 of the full serialized transaction bytes.
 /// Returns internal byte order (NOT reversed — reversal happens at display time).
 fn compute_txid(tx_data: &[u8]) -> [u8; 32] {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let first_pass = Sha256::digest(tx_data);
     let second_pass = Sha256::digest(&first_pass);
     let mut txid = [0u8; 32];
@@ -339,7 +379,7 @@ fn compute_txid(tx_data: &[u8]) -> [u8; 32] {
 
 /// Calculate the block hash from a block header (double SHA-256 of base header).
 pub fn compute_block_hash(header: &BlockHeader) -> [u8; 32] {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let base = header.serialize();
     let first = Sha256::digest(&base);
     let second = Sha256::digest(&first);

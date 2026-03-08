@@ -3,11 +3,11 @@
 //! Addresses use Bech32 encoding with HRP "zs" for Zclassic mainnet.
 //! Raw address = diversifier(11 bytes) + pk_d(32 bytes) = 43 bytes.
 
+use bech32::{FromBase32, ToBase32, Variant};
 use zcash_primitives::consensus::Parameters;
 use zcash_primitives::sapling::PaymentAddress;
-use bech32::{ToBase32, FromBase32, Variant};
 
-use crate::types::{ZclassicNetwork, CryptoError, PAYMENT_ADDRESS_LENGTH};
+use crate::types::{CryptoError, ZclassicNetwork, PAYMENT_ADDRESS_LENGTH};
 
 /// Encode a raw 43-byte address to bech32 "zs1..." string.
 pub fn encode_address(address_bytes: &[u8]) -> Result<String, CryptoError> {
@@ -22,7 +22,8 @@ pub fn encode_address(address_bytes: &[u8]) -> Result<String, CryptoError> {
         ZclassicNetwork.hrp_sapling_payment_address(),
         address_bytes.to_base32(),
         Variant::Bech32,
-    ).map_err(|e| CryptoError::InvalidAddress(format!("Bech32 encode: {e}")))?;
+    )
+    .map_err(|e| CryptoError::InvalidAddress(format!("Bech32 encode: {e}")))?;
 
     Ok(encoded)
 }
@@ -58,7 +59,8 @@ pub fn decode_address(address_str: &str) -> Result<Vec<u8>, CryptoError> {
 
     // Validate that pk_d is a valid jubjub point on the curve.
     // PaymentAddress::from_bytes performs the point decompression check internally.
-    let addr_array: [u8; 43] = bytes[..43].try_into()
+    let addr_array: [u8; 43] = bytes[..43]
+        .try_into()
         .map_err(|_| CryptoError::InvalidAddress("Failed to convert to [u8; 43]".into()))?;
     if PaymentAddress::from_bytes(&addr_array).is_none() {
         return Err(CryptoError::InvalidAddress(

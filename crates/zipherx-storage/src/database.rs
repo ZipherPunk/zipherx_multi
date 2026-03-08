@@ -4,8 +4,8 @@
 //! All operations are synchronous — callers use tokio::task::spawn_blocking
 //! when integrating with async code.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -36,7 +36,8 @@ impl WalletDatabase {
                 hex_key.chars().all(|c| c.is_ascii_hexdigit()),
                 "Invalid hex key"
             );
-            let pragma_result = conn.execute_batch(&format!("PRAGMA key = \"x'{hex_key}'\""))
+            let pragma_result = conn
+                .execute_batch(&format!("PRAGMA key = \"x'{hex_key}'\""))
                 .map_err(|e| StorageError::OpenFailed(format!("PRAGMA key: {e}")));
             // STOR-002: Zero key material from memory using write_volatile to
             // prevent the compiler from optimizing away the zeroing.
@@ -262,9 +263,8 @@ impl WalletDatabase {
     /// Get all unspent notes for an account.
     pub fn get_all_unspent_notes(&self, account_id: i64) -> Result<Vec<Note>, StorageError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT * FROM notes WHERE account_id = ?1 AND is_spent = 0",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM notes WHERE account_id = ?1 AND is_spent = 0")?;
         let notes = stmt
             .query_map(params![account_id], |row| row_to_note(row))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -359,8 +359,12 @@ impl WalletDatabase {
         })();
 
         match &result {
-            Ok(_) => { conn.execute_batch("COMMIT")?; }
-            Err(_) => { let _ = conn.execute_batch("ROLLBACK"); }
+            Ok(_) => {
+                conn.execute_batch("COMMIT")?;
+            }
+            Err(_) => {
+                let _ = conn.execute_batch("ROLLBACK");
+            }
         }
 
         result
@@ -420,11 +424,7 @@ impl WalletDatabase {
     /// which point the anchor validation against the blockchain will fail.
     /// A future improvement could store a hash alongside the witness and
     /// verify it on retrieval.
-    pub fn update_note_witness(
-        &self,
-        note_id: i64,
-        witness: &[u8],
-    ) -> Result<(), StorageError> {
+    pub fn update_note_witness(&self, note_id: i64, witness: &[u8]) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE notes SET witness = ?1 WHERE id = ?2",
@@ -434,11 +434,7 @@ impl WalletDatabase {
     }
 
     /// Update anchor for a note.
-    pub fn update_note_anchor(
-        &self,
-        note_id: i64,
-        anchor: &[u8],
-    ) -> Result<(), StorageError> {
+    pub fn update_note_anchor(&self, note_id: i64, anchor: &[u8]) -> Result<(), StorageError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE notes SET anchor = ?1 WHERE id = ?2",
@@ -460,7 +456,10 @@ impl WalletDatabase {
     /// Clear all witnesses (FIX #1238). Returns count of cleared notes.
     pub fn clear_all_witnesses(&self) -> Result<usize, StorageError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let count = conn.execute("UPDATE notes SET witness = NULL WHERE witness IS NOT NULL", [])?;
+        let count = conn.execute(
+            "UPDATE notes SET witness = NULL WHERE witness IS NOT NULL",
+            [],
+        )?;
         Ok(count)
     }
 
@@ -533,7 +532,11 @@ impl WalletDatabase {
             params![account_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        Ok((count as usize, value.max(0) as u64, min_h.unwrap_or(0) as u64))
+        Ok((
+            count as usize,
+            value.max(0) as u64,
+            min_h.unwrap_or(0) as u64,
+        ))
     }
 
     // ---------------------------------------------------------------
@@ -695,7 +698,9 @@ impl WalletDatabase {
             }
 
             // Check if we already synthesized or have this in result
-            if result.iter().any(|r| &r.txid == txid && (r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer)) {
+            if result.iter().any(|r| {
+                &r.txid == txid && (r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer)
+            }) {
                 continue;
             }
 
@@ -791,10 +796,17 @@ impl WalletDatabase {
         result.sort_by(|a, b| b.height.cmp(&a.height).then(b.id.cmp(&a.id)));
 
         // Cache total counts before pagination (avoids a separate full re-fetch)
-        let sent = result.iter().filter(|r| r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer).count() as u32;
-        let received = result.iter().filter(|r| r.tx_type == TxType::Received).count() as u32;
+        let sent = result
+            .iter()
+            .filter(|r| r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer)
+            .count() as u32;
+        let received = result
+            .iter()
+            .filter(|r| r.tx_type == TxType::Received)
+            .count() as u32;
         self.cached_sent_count.store(sent, Ordering::Relaxed);
-        self.cached_received_count.store(received, Ordering::Relaxed);
+        self.cached_received_count
+            .store(received, Ordering::Relaxed);
 
         // Apply pagination
         let start = offset.min(result.len());
@@ -818,9 +830,8 @@ impl WalletDatabase {
     /// Get pending transactions.
     pub fn get_pending_transactions(&self) -> Result<Vec<TransactionRecord>, StorageError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT * FROM transaction_history WHERE status = 'pending'",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM transaction_history WHERE status = 'pending'")?;
         let records = stmt
             .query_map([], |row| row_to_tx_record(row))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -939,11 +950,9 @@ impl WalletDatabase {
     /// Get total transaction count.
     pub fn get_transaction_count(&self) -> Result<usize, StorageError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM transaction_history",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM transaction_history", [], |row| {
+            row.get(0)
+        })?;
         Ok(count as usize)
     }
 
@@ -995,11 +1004,12 @@ impl WalletDatabase {
             "SELECT r.txid, r.amount as change_amount
              FROM transaction_history r
              JOIN transaction_history s ON r.txid = s.txid AND s.tx_type = 'sent'
-             WHERE r.tx_type = 'received'"
+             WHERE r.tx_type = 'received'",
         )?;
-        let rows: Vec<(String, i64)> = stmt.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?.filter_map(|r| r.ok()).collect();
+        let rows: Vec<(String, i64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
 
         if rows.is_empty() {
             return Ok(0);
@@ -1015,7 +1025,7 @@ impl WalletDatabase {
         // Prepare statement to get total input from notes table (authoritative).
         // spent_in_tx stores the txid hex string for each spent note.
         let mut input_stmt = conn.prepare(
-            "SELECT COALESCE(SUM(value), 0) FROM notes WHERE spent_in_tx = ?1 AND is_spent = 1"
+            "SELECT COALESCE(SUM(value), 0) FROM notes WHERE spent_in_tx = ?1 AND is_spent = 1",
         )?;
 
         for (txid, change_amount) in &rows {
@@ -1048,7 +1058,10 @@ impl WalletDatabase {
                 #[cfg(debug_assertions)]
                 eprintln!(
                     "[ZipherX]   Reconciled tx {}...: input={}, change={}, net_sent={}",
-                    &txid[..16.min(txid.len())], total_input, change_amount, net_sent,
+                    &txid[..16.min(txid.len())],
+                    total_input,
+                    change_amount,
+                    net_sent,
                 );
             }
             // If total_input == 0, the notes may have been pruned or the txid
@@ -1079,7 +1092,8 @@ impl WalletDatabase {
         let hashed_nf = hash_nullifier(raw_nullifier);
 
         let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| StorageError::TransactionFailed(e.to_string()))?;
 
         // Step 1: Mark note as spent
@@ -1213,7 +1227,10 @@ impl WalletDatabase {
             "UPDATE sync_state SET tree_state = NULL, tree_height = 0 WHERE id = 1",
             [],
         )?;
-        tx.execute("UPDATE notes SET witness = NULL WHERE witness IS NOT NULL", [])?;
+        tx.execute(
+            "UPDATE notes SET witness = NULL WHERE witness IS NOT NULL",
+            [],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -1247,7 +1264,10 @@ impl WalletDatabase {
         }
 
         let tx = conn.transaction()?;
-        tx.execute("DELETE FROM notes WHERE received_txid = ?1", params![zero_txid])?;
+        tx.execute(
+            "DELETE FROM notes WHERE received_txid = ?1",
+            params![zero_txid],
+        )?;
         tx.execute(
             "DELETE FROM transaction_history WHERE txid = ?1",
             params![zero_txid],
@@ -1569,7 +1589,9 @@ impl WalletDatabase {
         )
         .map_err(|e| StorageError::SchemaFailed(format!("full_redownload_v4: {e}")))?;
 
-        eprintln!("[ZipherX] Migration full_redownload_v4: data cleared, ready for full re-download");
+        eprintln!(
+            "[ZipherX] Migration full_redownload_v4: data cleared, ready for full re-download"
+        );
         Ok(())
     }
 
@@ -2316,7 +2338,21 @@ mod tests {
         let cmu = [0xAAu8; 32];
         let nf = [0xBBu8; 32];
         let id = db
-            .insert_note(0, 100, &cmu, 50000, Some(&nf), None, None, None, None, None, None, None, None)
+            .insert_note(
+                0,
+                100,
+                &cmu,
+                50000,
+                Some(&nf),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         assert!(id > 0);
 
@@ -2330,11 +2366,15 @@ mod tests {
     fn test_insert_note_duplicate_cmu_ignored() {
         let db = test_db();
         let cmu = [0xAAu8; 32];
-        db.insert_note(0, 100, &cmu, 50000, None, None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0, 100, &cmu, 50000, None, None, None, None, None, None, None, None, None,
+        )
+        .unwrap();
         // Same CMU should be ignored (INSERT OR IGNORE)
-        db.insert_note(0, 100, &cmu, 99999, None, None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0, 100, &cmu, 99999, None, None, None, None, None, None, None, None, None,
+        )
+        .unwrap();
         assert_eq!(db.count_unspent_notes(0).unwrap(), 1);
     }
 
@@ -2343,8 +2383,22 @@ mod tests {
         let db = test_db();
         let cmu = [0xAAu8; 32];
         let raw_nf = [0xBBu8; 32];
-        db.insert_note(0, 100, &cmu, 50000, Some(&raw_nf), None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu,
+            50000,
+            Some(&raw_nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Stored nullifier should be SHA-256 hash, not raw
         let note = db.get_note_by_nullifier(&raw_nf).unwrap().unwrap();
@@ -2357,8 +2411,22 @@ mod tests {
         let db = test_db();
         let cmu = [0xAAu8; 32];
         let nf = [0xBBu8; 32];
-        db.insert_note(0, 100, &cmu, 50000, Some(&nf), None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu,
+            50000,
+            Some(&nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         let marked = db.mark_note_spent(&nf, "tx123", 200).unwrap();
         assert!(marked);
@@ -2374,8 +2442,22 @@ mod tests {
         let db = test_db();
         let cmu = [0xAAu8; 32];
         let nf = [0xBBu8; 32];
-        db.insert_note(0, 100, &cmu, 50000, Some(&nf), None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu,
+            50000,
+            Some(&nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         db.mark_note_spent(&nf, "phantom_tx", 200).unwrap();
 
         let (count, value) = db.restore_notes_spent_by_phantom_tx("phantom_tx").unwrap();
@@ -2392,16 +2474,32 @@ mod tests {
         let db = test_db();
         // Note without witness — not spendable
         let cmu1 = [0xAAu8; 32];
-        db.insert_note(0, 100, &cmu1, 50000, None, None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0, 100, &cmu1, 50000, None, None, None, None, None, None, None, None, None,
+        )
+        .unwrap();
 
         assert_eq!(db.get_balance(0).unwrap(), 0);
 
         // Note with valid witness (>= 100 bytes)
         let cmu2 = [0xBBu8; 32];
         let witness = vec![0x01u8; 200];
-        db.insert_note(0, 100, &cmu2, 30000, None, None, None, None, None, None, Some(&witness), None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu2,
+            30000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&witness),
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(db.get_balance(0).unwrap(), 30000);
     }
@@ -2411,13 +2509,29 @@ mod tests {
         let db = test_db();
         // Note without witness — still counted in total
         let cmu1 = [0xAAu8; 32];
-        db.insert_note(0, 100, &cmu1, 50000, None, None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0, 100, &cmu1, 50000, None, None, None, None, None, None, None, None, None,
+        )
+        .unwrap();
         // Note with witness
         let cmu2 = [0xBBu8; 32];
         let witness = vec![0x01u8; 200];
-        db.insert_note(0, 100, &cmu2, 30000, None, None, None, None, None, None, Some(&witness), None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu2,
+            30000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&witness),
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(db.get_total_unspent_balance(0).unwrap(), 80000);
     }
@@ -2427,8 +2541,22 @@ mod tests {
         let db = test_db();
         let cmu = [0xAAu8; 32];
         let nf = [0xBBu8; 32];
-        db.insert_note(0, 100, &cmu, 50000, Some(&nf), None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu,
+            50000,
+            Some(&nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // Simulate orphan: is_spent=1 but spent_in_tx is empty
         {
@@ -2451,11 +2579,27 @@ mod tests {
         let db = test_db();
         let cmu1 = [0xAAu8; 32];
         let cmu2 = [0xBBu8; 32];
-        db.insert_note(0, 100, &cmu1, 50000, None, None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0, 100, &cmu1, 50000, None, None, None, None, None, None, None, None, None,
+        )
+        .unwrap();
         let witness = vec![0x01u8; 200];
-        db.insert_note(0, 200, &cmu2, 30000, None, None, None, None, None, None, Some(&witness), None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            200,
+            &cmu2,
+            30000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&witness),
+            None,
+            None,
+        )
+        .unwrap();
 
         let (count, value, min_h) = db.get_notes_without_witnesses(0).unwrap();
         assert_eq!(count, 1);
@@ -2466,8 +2610,18 @@ mod tests {
     #[test]
     fn test_insert_transaction() {
         let db = test_db();
-        db.insert_transaction("tx_abc", 100, Some(1000), TxType::Sent, 50000, 10000, None, None, TxStatus::Confirmed)
-            .unwrap();
+        db.insert_transaction(
+            "tx_abc",
+            100,
+            Some(1000),
+            TxType::Sent,
+            50000,
+            10000,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
 
         let tx = db.get_transaction_by_txid("tx_abc").unwrap().unwrap();
         assert_eq!(tx.amount, 50000);
@@ -2482,8 +2636,15 @@ mod tests {
         let db = test_db();
         for i in 0..10 {
             db.insert_transaction(
-                &format!("tx_{i}"), i * 10, None, TxType::Received, 1000 * (i + 1), 10000,
-                None, None, TxStatus::Confirmed,
+                &format!("tx_{i}"),
+                i * 10,
+                None,
+                TxType::Received,
+                1000 * (i + 1),
+                10000,
+                None,
+                None,
+                TxStatus::Confirmed,
             )
             .unwrap();
         }
@@ -2499,10 +2660,30 @@ mod tests {
     #[test]
     fn test_pending_transactions() {
         let db = test_db();
-        db.insert_transaction("tx_a", 0, None, TxType::Sent, 50000, 10000, None, None, TxStatus::Pending)
-            .unwrap();
-        db.insert_transaction("tx_b", 100, None, TxType::Received, 30000, 0, None, None, TxStatus::Confirmed)
-            .unwrap();
+        db.insert_transaction(
+            "tx_a",
+            0,
+            None,
+            TxType::Sent,
+            50000,
+            10000,
+            None,
+            None,
+            TxStatus::Pending,
+        )
+        .unwrap();
+        db.insert_transaction(
+            "tx_b",
+            100,
+            None,
+            TxType::Received,
+            30000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
 
         let pending = db.get_pending_transactions().unwrap();
         assert_eq!(pending.len(), 1);
@@ -2512,8 +2693,18 @@ mod tests {
     #[test]
     fn test_update_transaction_status() {
         let db = test_db();
-        db.insert_transaction("tx_a", 0, None, TxType::Sent, 50000, 10000, None, None, TxStatus::Pending)
-            .unwrap();
+        db.insert_transaction(
+            "tx_a",
+            0,
+            None,
+            TxType::Sent,
+            50000,
+            10000,
+            None,
+            None,
+            TxStatus::Pending,
+        )
+        .unwrap();
 
         let updated = db
             .update_transaction_status("tx_a", TxStatus::Confirmed, Some(500), Some(12345))
@@ -2529,8 +2720,18 @@ mod tests {
     #[test]
     fn test_delete_phantom_transaction() {
         let db = test_db();
-        db.insert_transaction("phantom_tx", 100, None, TxType::Sent, 99000, 10000, None, None, TxStatus::Phantom)
-            .unwrap();
+        db.insert_transaction(
+            "phantom_tx",
+            100,
+            None,
+            TxType::Sent,
+            99000,
+            10000,
+            None,
+            None,
+            TxStatus::Phantom,
+        )
+        .unwrap();
 
         let amount = db.delete_phantom_transaction("phantom_tx").unwrap();
         assert_eq!(amount, Some(99000));
@@ -2540,10 +2741,30 @@ mod tests {
     #[test]
     fn test_update_all_confirmations() {
         let db = test_db();
-        db.insert_transaction("tx_a", 100, None, TxType::Received, 1000, 0, None, None, TxStatus::Confirmed)
-            .unwrap();
-        db.insert_transaction("tx_b", 200, None, TxType::Received, 2000, 0, None, None, TxStatus::Confirmed)
-            .unwrap();
+        db.insert_transaction(
+            "tx_a",
+            100,
+            None,
+            TxType::Received,
+            1000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
+        db.insert_transaction(
+            "tx_b",
+            200,
+            None,
+            TxType::Received,
+            2000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
 
         db.update_all_confirmations(300).unwrap();
 
@@ -2559,8 +2780,22 @@ mod tests {
         let cmu = [0xAAu8; 32];
         let raw_nf = [0xBBu8; 32];
         // insert_note hashes the raw nullifier internally
-        db.insert_note(0, 100, &cmu, 50000, Some(&raw_nf), None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu,
+            50000,
+            Some(&raw_nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         // record_sent_transaction_atomic now accepts the RAW nullifier
         // and hashes it internally before comparing against the DB
@@ -2604,8 +2839,22 @@ mod tests {
         // Insert note with witness
         let cmu = [0xAAu8; 32];
         let witness = vec![0x01u8; 200];
-        db.insert_note(0, 100, &cmu, 50000, None, None, None, None, None, None, Some(&witness), None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu,
+            50000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&witness),
+            None,
+            None,
+        )
+        .unwrap();
         db.save_tree_state(&[0x01], 100).unwrap();
 
         db.clear_tree_state_only().unwrap();
@@ -2623,8 +2872,22 @@ mod tests {
         let db = test_db();
         let cmu = [0xAAu8; 32];
         let witness = vec![0x01u8; 200];
-        db.insert_note(0, 100, &cmu, 50000, None, None, None, None, None, None, Some(&witness), None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu,
+            50000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&witness),
+            None,
+            None,
+        )
+        .unwrap();
         db.save_tree_state(&[0x01], 100).unwrap();
 
         db.clear_tree_state_for_rebuild().unwrap();
@@ -2665,10 +2928,26 @@ mod tests {
         let cmu1 = [0xAAu8; 32];
         let cmu2 = [0xBBu8; 32];
         let nf = [0xCCu8; 32];
-        db.insert_note(0, 100, &cmu1, 50000, Some(&nf), None, None, None, None, None, None, None, None)
-            .unwrap();
-        db.insert_note(0, 200, &cmu2, 30000, None, None, None, None, None, None, None, None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &cmu1,
+            50000,
+            Some(&nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        db.insert_note(
+            0, 200, &cmu2, 30000, None, None, None, None, None, None, None, None, None,
+        )
+        .unwrap();
 
         // Mark first as spent
         db.mark_note_spent(&nf, "tx1", 150).unwrap();
@@ -2682,10 +2961,38 @@ mod tests {
     fn test_clear_all_witnesses() {
         let db = test_db();
         let witness = vec![0x01u8; 200];
-        db.insert_note(0, 100, &[0xAAu8; 32], 50000, None, None, None, None, None, None, Some(&witness), None, None)
-            .unwrap();
-        db.insert_note(0, 200, &[0xBBu8; 32], 30000, None, None, None, None, None, None, Some(&witness), None, None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &[0xAAu8; 32],
+            50000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&witness),
+            None,
+            None,
+        )
+        .unwrap();
+        db.insert_note(
+            0,
+            200,
+            &[0xBBu8; 32],
+            30000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&witness),
+            None,
+            None,
+        )
+        .unwrap();
 
         let count = db.clear_all_witnesses().unwrap();
         assert_eq!(count, 2);
@@ -2696,10 +3003,30 @@ mod tests {
     fn test_transaction_count() {
         let db = test_db();
         assert_eq!(db.get_transaction_count().unwrap(), 0);
-        db.insert_transaction("tx1", 100, None, TxType::Sent, 1000, 10000, None, None, TxStatus::Confirmed)
-            .unwrap();
-        db.insert_transaction("tx2", 200, None, TxType::Received, 2000, 0, None, None, TxStatus::Confirmed)
-            .unwrap();
+        db.insert_transaction(
+            "tx1",
+            100,
+            None,
+            TxType::Sent,
+            1000,
+            10000,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
+        db.insert_transaction(
+            "tx2",
+            200,
+            None,
+            TxType::Received,
+            2000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
         assert_eq!(db.get_transaction_count().unwrap(), 2);
     }
 
@@ -2716,14 +3043,62 @@ mod tests {
         let db = test_db();
 
         // Insert some notes and transactions
-        db.insert_note(0, 100, &[0xAAu8; 32], 50000, None, None, None, None, None, None, None, Some("tx1"), None)
-            .unwrap();
-        db.insert_note(0, 200, &[0xBBu8; 32], 30000, None, None, None, None, None, None, None, Some("tx2"), None)
-            .unwrap();
-        db.insert_transaction("tx1", 100, None, TxType::Received, 50000, 0, None, None, TxStatus::Confirmed)
-            .unwrap();
-        db.insert_transaction("tx2", 200, None, TxType::Received, 30000, 0, None, None, TxStatus::Confirmed)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &[0xAAu8; 32],
+            50000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("tx1"),
+            None,
+        )
+        .unwrap();
+        db.insert_note(
+            0,
+            200,
+            &[0xBBu8; 32],
+            30000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("tx2"),
+            None,
+        )
+        .unwrap();
+        db.insert_transaction(
+            "tx1",
+            100,
+            None,
+            TxType::Received,
+            50000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
+        db.insert_transaction(
+            "tx2",
+            200,
+            None,
+            TxType::Received,
+            30000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
         db.save_tree_state(&[0x01, 0x02], 500).unwrap();
 
         assert_eq!(db.count_unspent_notes(0).unwrap(), 2);
@@ -2744,19 +3119,81 @@ mod tests {
         let zero_txid = "0000000000000000000000000000000000000000000000000000000000000000";
 
         // Insert notes with zero txid (simulating pre-fix scan)
-        db.insert_note(0, 100, &[0xAAu8; 32], 50000, None, None, None, None, None, None, None, Some(zero_txid), None)
-            .unwrap();
-        db.insert_note(0, 200, &[0xBBu8; 32], 30000, None, None, None, None, None, None, None, Some(zero_txid), None)
-            .unwrap();
+        db.insert_note(
+            0,
+            100,
+            &[0xAAu8; 32],
+            50000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(zero_txid),
+            None,
+        )
+        .unwrap();
+        db.insert_note(
+            0,
+            200,
+            &[0xBBu8; 32],
+            30000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(zero_txid),
+            None,
+        )
+        .unwrap();
         // One note with proper txid — should NOT be deleted
-        db.insert_note(0, 300, &[0xCCu8; 32], 10000, None, None, None, None, None, None, None, Some("abc123"), None)
-            .unwrap();
+        db.insert_note(
+            0,
+            300,
+            &[0xCCu8; 32],
+            10000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("abc123"),
+            None,
+        )
+        .unwrap();
 
         // Add TX history for zero txid
-        db.insert_transaction(zero_txid, 100, None, TxType::Received, 80000, 0, None, None, TxStatus::Confirmed)
-            .unwrap();
-        db.insert_transaction("abc123", 300, None, TxType::Received, 10000, 0, None, None, TxStatus::Confirmed)
-            .unwrap();
+        db.insert_transaction(
+            zero_txid,
+            100,
+            None,
+            TxType::Received,
+            80000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
+        db.insert_transaction(
+            "abc123",
+            300,
+            None,
+            TxType::Received,
+            10000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
 
         // Set tree state so we can verify it gets reset
         db.save_tree_state(&[0x01, 0x02], 200).unwrap();
@@ -2796,64 +3233,142 @@ mod tests {
         let input_cmu = [0x01u8; 32];
         let input_nf = [0x02u8; 32];
         db.insert_note(
-            0, 3023200, &input_cmu, 92_934_999,
-            Some(&input_nf), None, None, None, None, None, None, Some("prev_tx"), None,
-        ).unwrap();
+            0,
+            3023200,
+            &input_cmu,
+            92_934_999,
+            Some(&input_nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("prev_tx"),
+            None,
+        )
+        .unwrap();
         db.mark_note_spent(&input_nf, spend_txid, 3023247).unwrap();
 
         // Output note 1: 119,999 (sent to self — recipient address is ours)
         let out1_cmu = [0x03u8; 32];
         db.insert_note(
-            0, 3023247, &out1_cmu, 119_999,
-            None, None, None, None, None, None, None, Some(spend_txid), None,
-        ).unwrap();
+            0,
+            3023247,
+            &out1_cmu,
+            119_999,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(spend_txid),
+            None,
+        )
+        .unwrap();
 
         // Output note 2: 92,805,000 (change back to us)
         let out2_cmu = [0x04u8; 32];
         db.insert_note(
-            0, 3023247, &out2_cmu, 92_805_000,
-            None, None, None, None, None, None, None, Some(spend_txid), None,
-        ).unwrap();
+            0,
+            3023247,
+            &out2_cmu,
+            92_805_000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(spend_txid),
+            None,
+        )
+        .unwrap();
 
         // Scanner creates "received" entry (first note wins due to UNIQUE(txid, tx_type))
         db.insert_transaction(
-            spend_txid, 3023247, None, TxType::Received, 119_999, 0, None, None, TxStatus::Confirmed,
-        ).unwrap();
+            spend_txid,
+            3023247,
+            None,
+            TxType::Received,
+            119_999,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
         // Second "received" entry is dropped by INSERT OR IGNORE
         let _ = db.insert_transaction(
-            spend_txid, 3023247, None, TxType::Received, 92_805_000, 0, None, None, TxStatus::Confirmed,
+            spend_txid,
+            3023247,
+            None,
+            TxType::Received,
+            92_805_000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
         );
 
         // Scanner creates "sent" entry with raw total input
         db.insert_transaction(
-            spend_txid, 3023247, None, TxType::Sent, 92_934_999, 10_000, None, None, TxStatus::Confirmed,
-        ).unwrap();
+            spend_txid,
+            3023247,
+            None,
+            TxType::Sent,
+            92_934_999,
+            10_000,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
 
         // Query history — should show as SelfTransfer
         let history = db.get_transaction_history(50, 0).unwrap();
 
         // For send-to-self: net = 92,934,999 - (119,999 + 92,805,000) - 10,000 = 0
         // This should appear as SelfTransfer with amount = fee
-        let self_entries: Vec<_> = history.iter()
+        let self_entries: Vec<_> = history
+            .iter()
             .filter(|r| r.tx_type == TxType::SelfTransfer)
             .collect();
         assert_eq!(
-            self_entries.len(), 1,
+            self_entries.len(),
+            1,
             "Send-to-self TX should appear as SelfTransfer, got history: {:?}",
-            history.iter().map(|r| (&r.tx_type, r.amount)).collect::<Vec<_>>(),
+            history
+                .iter()
+                .map(|r| (&r.tx_type, r.amount))
+                .collect::<Vec<_>>(),
         );
-        assert_eq!(self_entries[0].amount, 10_000, "SelfTransfer amount should be the fee");
+        assert_eq!(
+            self_entries[0].amount, 10_000,
+            "SelfTransfer amount should be the fee"
+        );
 
         // No "sent" or "received" entries — only the SelfTransfer
-        let sent_entries: Vec<_> = history.iter()
+        let sent_entries: Vec<_> = history
+            .iter()
             .filter(|r| r.tx_type == TxType::Sent)
             .collect();
-        assert!(sent_entries.is_empty(), "Should have no 'sent' entries for send-to-self");
+        assert!(
+            sent_entries.is_empty(),
+            "Should have no 'sent' entries for send-to-self"
+        );
 
-        let recv_entries: Vec<_> = history.iter()
+        let recv_entries: Vec<_> = history
+            .iter()
             .filter(|r| r.tx_type == TxType::Received && r.txid == spend_txid)
             .collect();
-        assert!(recv_entries.is_empty(), "Should have no 'received' entries for send-to-self");
+        assert!(
+            recv_entries.is_empty(),
+            "Should have no 'received' entries for send-to-self"
+        );
     }
 
     #[test]
@@ -2866,30 +3381,73 @@ mod tests {
         let input_cmu = [0x11u8; 32];
         let input_nf = [0x12u8; 32];
         db.insert_note(
-            0, 3023200, &input_cmu, 92_934_999,
-            Some(&input_nf), None, None, None, None, None, None, Some("prev_tx2"), None,
-        ).unwrap();
+            0,
+            3023200,
+            &input_cmu,
+            92_934_999,
+            Some(&input_nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("prev_tx2"),
+            None,
+        )
+        .unwrap();
         db.mark_note_spent(&input_nf, spend_txid, 3023247).unwrap();
 
         // Only change output in our wallet: 92,805,000
         let change_cmu = [0x13u8; 32];
         db.insert_note(
-            0, 3023247, &change_cmu, 92_805_000,
-            None, None, None, None, None, None, None, Some(spend_txid), None,
-        ).unwrap();
+            0,
+            3023247,
+            &change_cmu,
+            92_805_000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(spend_txid),
+            None,
+        )
+        .unwrap();
 
         // Transaction history entries
         db.insert_transaction(
-            spend_txid, 3023247, None, TxType::Received, 92_805_000, 0, None, None, TxStatus::Confirmed,
-        ).unwrap();
+            spend_txid,
+            3023247,
+            None,
+            TxType::Received,
+            92_805_000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
         db.insert_transaction(
-            spend_txid, 3023247, None, TxType::Sent, 92_934_999, 10_000, None, None, TxStatus::Confirmed,
-        ).unwrap();
+            spend_txid,
+            3023247,
+            None,
+            TxType::Sent,
+            92_934_999,
+            10_000,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
 
         let history = db.get_transaction_history(50, 0).unwrap();
 
         // net = 92,934,999 - 92,805,000 - 10,000 = 119,999
-        let sent_entries: Vec<_> = history.iter()
+        let sent_entries: Vec<_> = history
+            .iter()
             .filter(|r| r.tx_type == TxType::Sent)
             .collect();
         assert_eq!(sent_entries.len(), 1);
@@ -2900,10 +3458,14 @@ mod tests {
         );
 
         // "received" entry should be hidden (it's change)
-        let recv_entries: Vec<_> = history.iter()
+        let recv_entries: Vec<_> = history
+            .iter()
             .filter(|r| r.txid == spend_txid && r.tx_type == TxType::Received)
             .collect();
-        assert!(recv_entries.is_empty(), "Change output should be hidden from history");
+        assert!(
+            recv_entries.is_empty(),
+            "Change output should be hidden from history"
+        );
     }
 
     #[test]
@@ -2917,27 +3479,61 @@ mod tests {
         let input_cmu = [0x21u8; 32];
         let input_nf = [0x22u8; 32];
         db.insert_note(
-            0, 500, &input_cmu, 100_000,
-            Some(&input_nf), None, None, None, None, None, None, Some("prev_tx3"), None,
-        ).unwrap();
+            0,
+            500,
+            &input_cmu,
+            100_000,
+            Some(&input_nf),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("prev_tx3"),
+            None,
+        )
+        .unwrap();
         db.mark_note_spent(&input_nf, spend_txid, 600).unwrap();
 
         // Change output: 60,000
         let change_cmu = [0x23u8; 32];
         db.insert_note(
-            0, 600, &change_cmu, 60_000,
-            None, None, None, None, None, None, None, Some(spend_txid), None,
-        ).unwrap();
+            0,
+            600,
+            &change_cmu,
+            60_000,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(spend_txid),
+            None,
+        )
+        .unwrap();
 
         // Only a "received" entry — NO "sent" entry (triggers synthesis)
         db.insert_transaction(
-            spend_txid, 600, None, TxType::Received, 60_000, 0, None, None, TxStatus::Confirmed,
-        ).unwrap();
+            spend_txid,
+            600,
+            None,
+            TxType::Received,
+            60_000,
+            0,
+            None,
+            None,
+            TxStatus::Confirmed,
+        )
+        .unwrap();
 
         let history = db.get_transaction_history(50, 0).unwrap();
 
         // Synthesized: net = 100,000 - 60,000 - 10,000 = 30,000
-        let sent_entries: Vec<_> = history.iter()
+        let sent_entries: Vec<_> = history
+            .iter()
             .filter(|r| r.tx_type == TxType::Sent)
             .collect();
         assert_eq!(sent_entries.len(), 1);

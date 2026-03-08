@@ -168,10 +168,7 @@ impl Dispatcher {
     ///
     /// The handler fires when a "reject" message arrives for this txid,
     /// or resolves to None (via timeout) if no reject = success.
-    pub fn register_broadcast(
-        &mut self,
-        txid: &str,
-    ) -> oneshot::Receiver<(String, Vec<u8>)> {
+    pub fn register_broadcast(&mut self, txid: &str) -> oneshot::Receiver<(String, Vec<u8>)> {
         let (tx, rx) = oneshot::channel();
         let key = format!("broadcast_{txid}");
         self.broadcast_handlers.insert(key, tx);

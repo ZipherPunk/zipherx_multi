@@ -3,21 +3,21 @@
 //! This crate contains the high-level wallet operations that coordinate
 //! between the crypto, network, storage, and platform layers.
 
-pub mod scanner;
-pub mod sync;
-pub mod send;
-pub mod wallet;
-pub mod runtime;
 pub mod async_block_fetch;
-pub mod async_sync;
-pub mod async_send;
-pub mod async_wallet;
 pub mod async_prover;
+pub mod async_send;
+pub mod async_sync;
+pub mod async_wallet;
+pub mod auto_recovery;
 pub mod boost_download;
 pub mod health_check;
-pub mod tree_repair;
 pub mod peer_watchdog;
-pub mod auto_recovery;
+pub mod runtime;
+pub mod scanner;
+pub mod send;
+pub mod sync;
+pub mod tree_repair;
+pub mod wallet;
 
 use thiserror::Error;
 

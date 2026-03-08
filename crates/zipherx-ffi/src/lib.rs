@@ -115,9 +115,7 @@ impl From<CoreError> for WalletError {
 
 impl From<zipherx_tor::TorError> for WalletError {
     fn from(e: zipherx_tor::TorError) -> Self {
-        WalletError::NetworkError {
-            msg: e.to_string(),
-        }
+        WalletError::NetworkError { msg: e.to_string() }
     }
 }
 
@@ -231,8 +229,7 @@ pub trait PlatformStorageCallback: Send + Sync {
 /// To switch wallets, the process must be restarted. A future `close_wallet()`
 /// function would require replacing `OnceLock` with a `Mutex<Option<...>>`.
 static WALLET: OnceLock<AsyncWallet> = OnceLock::new();
-static PLATFORM_STORAGE: Mutex<Option<Box<dyn PlatformStorageCallback>>> =
-    Mutex::new(None);
+static PLATFORM_STORAGE: Mutex<Option<Box<dyn PlatformStorageCallback>>> = Mutex::new(None);
 static TOR_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Concurrency guard: prevents concurrent `send_with_progress` calls.
@@ -457,7 +454,10 @@ fn initialize_wallet(config: WalletConfigFFI) -> Result<(), WalletError> {
         if !key.is_empty() && key.len() != 32 {
             WALLET_INITIALIZING.store(false, Ordering::SeqCst);
             return Err(WalletError::InvalidInput {
-                msg: format!("db_encryption_key must be exactly 32 bytes, got {}", key.len()),
+                msg: format!(
+                    "db_encryption_key must be exactly 32 bytes, got {}",
+                    key.len()
+                ),
             });
         }
     }
@@ -532,7 +532,9 @@ fn restore_wallet(words: Vec<String>) -> Result<(), WalletError> {
 fn import_wallet_from_key(sk_bytes: Vec<u8>) -> Result<(), WalletError> {
     let sk_bytes = SecureVec(sk_bytes);
     let wallet = get_wallet()?;
-    wallet.import_wallet_from_key(&sk_bytes).map_err(WalletError::from)
+    wallet
+        .import_wallet_from_key(&sk_bytes)
+        .map_err(WalletError::from)
 }
 
 /// Get the number of connected peers (lock-free atomic read).
@@ -599,12 +601,15 @@ fn get_wallet_summary() -> Result<WalletSummaryFFI, WalletError> {
     let state_str = format!("{:?}", summary.state);
     let startup_str = summary.startup_mode.map(|m| format!("{:?}", m));
     let sync_phase = sync_status_to_phase(&summary.sync_status);
-    let (total_balance, spendable_balance, note_count) =
-        if let Some(ref b) = summary.balance {
-            (b.total, b.spendable, u32::try_from(b.note_count).unwrap_or(u32::MAX))
-        } else {
-            (0, 0, 0)
-        };
+    let (total_balance, spendable_balance, note_count) = if let Some(ref b) = summary.balance {
+        (
+            b.total,
+            b.spendable,
+            u32::try_from(b.note_count).unwrap_or(u32::MAX),
+        )
+    } else {
+        (0, 0, 0)
+    };
 
     Ok(WalletSummaryFFI {
         state: state_str,
@@ -627,7 +632,10 @@ fn get_transaction_history(
     offset: u32,
 ) -> Result<Vec<TransactionDisplayFFI>, WalletError> {
     #[cfg(debug_assertions)]
-    eprintln!("[ZipherX] FFI get_transaction_history(limit={}, offset={}) called", limit, offset);
+    eprintln!(
+        "[ZipherX] FFI get_transaction_history(limit={}, offset={}) called",
+        limit, offset
+    );
     let wallet = get_wallet()?;
     let records =
         runtime::block_on(wallet.get_transaction_history(limit as usize, offset as usize))
@@ -649,12 +657,19 @@ fn get_transaction_history(
         let other_count = records.len() - sent_count - recv_count;
         eprintln!(
             "[ZipherX] FFI get_transaction_history() → {} records ({} received, {} sent, {} other)",
-            records.len(), recv_count, sent_count, other_count,
+            records.len(),
+            recv_count,
+            sent_count,
+            other_count,
         );
         for (i, r) in records.iter().take(5).enumerate() {
             eprintln!(
                 "[ZipherX]   tx[{}]: type={}, amount={}, height={}, txid={}...",
-                i, r.tx_type, r.amount, r.height, &r.txid[..16.min(r.txid.len())],
+                i,
+                r.tx_type,
+                r.amount,
+                r.height,
+                &r.txid[..16.min(r.txid.len())],
             );
         }
     }
@@ -680,10 +695,9 @@ fn get_transaction_history(
 /// BLOCKING: This function blocks the calling thread. Call from a background thread.
 fn get_transaction_counts() -> Result<TransactionCountsFFI, WalletError> {
     let wallet = get_wallet()?;
-    let (sent, received) =
-        runtime::block_on(wallet.get_transaction_counts())
-            .map_err(WalletError::from)?
-            .map_err(WalletError::from)?;
+    let (sent, received) = runtime::block_on(wallet.get_transaction_counts())
+        .map_err(WalletError::from)?
+        .map_err(WalletError::from)?;
     Ok(TransactionCountsFFI {
         sent_count: sent,
         received_count: received,
@@ -876,7 +890,8 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
         // RF-18: NEVER pause Tor when TOR_ONLY_MODE is active — user explicitly
         // requested all traffic go through Tor, even at the cost of slower sync.
         let tor_only = zipherx_tor::client::is_tor_only_mode();
-        let tor_was_running = !tor_only && is_tor_enabled() && zipherx_tor::client::is_socks_running();
+        let tor_was_running =
+            !tor_only && is_tor_enabled() && zipherx_tor::client::is_socks_running();
         if tor_was_running {
             #[cfg(debug_assertions)]
             eprintln!("[ZipherX] Pausing Tor for boost download (direct connection for speed)");
@@ -921,7 +936,8 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                     // SECURITY: Tor restart failed — P2P traffic will continue
                     // over clearnet. Notify the user via the error callback so
                     // they are aware of the privacy degradation.
-                    let msg = format!("Tor restart failed after sync: {e} — P2P continues without Tor");
+                    let msg =
+                        format!("Tor restart failed after sync: {e} — P2P continues without Tor");
                     #[cfg(debug_assertions)]
                     eprintln!("[ZipherX] {msg}");
                     cb_error.on_error(msg);
@@ -932,7 +948,10 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
         match sync_result {
             Ok(height) => {
                 #[cfg(debug_assertions)]
-                eprintln!("[ZipherX] FFI: sync succeeded, calling on_complete({})", height);
+                eprintln!(
+                    "[ZipherX] FFI: sync succeeded, calling on_complete({})",
+                    height
+                );
                 cb_complete.on_complete(height);
 
                 // Phase 2: Background monitoring loop (no progress UI)
@@ -1056,7 +1075,10 @@ fn send_with_progress(
     }
 
     // RF-12: Concurrency guard — prevent overlapping sends
-    if IS_SENDING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if IS_SENDING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Err(WalletError::SyncInProgress);
     }
 
@@ -1224,9 +1246,11 @@ fn enable_p2p_tor(socks_port: u16) -> Result<(), WalletError> {
                 // RF-14: Proxy not reachable — fail instead of silently falling back to direct
                 #[cfg(debug_assertions)]
                 eprintln!("[ZipherX-Tor] SOCKS5 proxy NOT reachable at port {socks_port}");
-                Err(CoreError::Network(zipherx_network::types::NetworkError::ConnectionFailed(
-                    "Tor SOCKS5 proxy not reachable — cannot enable Tor for P2P".into(),
-                )))
+                Err(CoreError::Network(
+                    zipherx_network::types::NetworkError::ConnectionFailed(
+                        "Tor SOCKS5 proxy not reachable — cannot enable Tor for P2P".into(),
+                    ),
+                ))
             }
         }
     })
@@ -1255,8 +1279,7 @@ fn init_hidden_service(data_dir: Option<String>) -> Result<String, WalletError> 
     let dir = data_dir
         .map(std::path::PathBuf::from)
         .unwrap_or_else(zipherx_tor::client::get_tor_data_dir);
-    zipherx_tor::hidden_service::init_hidden_service(dir)
-        .map_err(WalletError::from)
+    zipherx_tor::hidden_service::init_hidden_service(dir).map_err(WalletError::from)
 }
 
 /// Get the .onion address (None if not initialized).
@@ -1296,9 +1319,7 @@ fn sync_status_to_progress(status: &SyncStatus) -> (String, u64, u64) {
             downloaded_bytes,
             total_bytes,
         } => ("boost_download".into(), *downloaded_bytes, *total_bytes),
-        SyncStatus::BoostLoad { loaded, total } => {
-            ("boost_load".into(), *loaded, *total)
-        }
+        SyncStatus::BoostLoad { loaded, total } => ("boost_load".into(), *loaded, *total),
         SyncStatus::HeaderSync {
             current_height,
             target_height,
@@ -1312,9 +1333,11 @@ fn sync_status_to_progress(status: &SyncStatus) -> (String, u64, u64) {
             target_height,
             ..
         } => ("block_scan".into(), *current_height, *target_height),
-        SyncStatus::GapFill { gaps_remaining } => {
-            ("gap_fill".into(), u64::try_from(*gaps_remaining).unwrap_or(u64::MAX), 0)
-        }
+        SyncStatus::GapFill { gaps_remaining } => (
+            "gap_fill".into(),
+            u64::try_from(*gaps_remaining).unwrap_or(u64::MAX),
+            0,
+        ),
         SyncStatus::WitnessUpdate {
             notes_updated,
             total_notes,
@@ -1348,20 +1371,24 @@ fn sync_status_to_phase(status: &SyncStatus) -> String {
 fn send_phase_to_progress(phase: &SendPhase) -> (String, u32, u32) {
     match phase {
         SendPhase::Validating => ("validating".into(), 0, 0),
-        SendPhase::NoteSelection { count, .. } => {
-            ("note_selection".into(), u32::try_from(*count).unwrap_or(u32::MAX), 0)
-        }
+        SendPhase::NoteSelection { count, .. } => (
+            "note_selection".into(),
+            u32::try_from(*count).unwrap_or(u32::MAX),
+            0,
+        ),
         SendPhase::WitnessValidation {
             note_index, total, ..
-        } => ("witness_validation".into(), u32::try_from(*note_index).unwrap_or(u32::MAX), u32::try_from(*total).unwrap_or(u32::MAX)),
+        } => (
+            "witness_validation".into(),
+            u32::try_from(*note_index).unwrap_or(u32::MAX),
+            u32::try_from(*total).unwrap_or(u32::MAX),
+        ),
         SendPhase::Building {
             spend_index,
             total_spends,
         } => ("building".into(), *spend_index, *total_spends),
         SendPhase::Broadcasting => ("broadcasting".into(), 0, 0),
-        SendPhase::PeerResponse { accepted, total } => {
-            ("peer_response".into(), *accepted, *total)
-        }
+        SendPhase::PeerResponse { accepted, total } => ("peer_response".into(), *accepted, *total),
         SendPhase::Recording => ("recording".into(), 0, 0),
         SendPhase::Complete { .. } => ("complete".into(), 0, 0),
         SendPhase::Error { .. } => ("error".into(), 0, 0),
@@ -1519,8 +1546,7 @@ mod tests {
             sync_status_to_phase(&SyncStatus::Complete { height: 100 }),
             "complete"
         );
-        assert!(sync_status_to_phase(&SyncStatus::Failed("test".into()))
-            .starts_with("failed"));
+        assert!(sync_status_to_phase(&SyncStatus::Failed("test".into())).starts_with("failed"));
     }
 
     #[test]

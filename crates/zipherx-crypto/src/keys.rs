@@ -3,15 +3,15 @@
 //! Implements the Sapling key hierarchy:
 //! seed → spending_key → full_viewing_key → incoming_viewing_key → payment_address
 
+use bech32::{FromBase32, ToBase32, Variant};
 use zcash_primitives::{
     consensus::Parameters,
     sapling::keys::FullViewingKey,
-    zip32::{ChildIndex, DiversifierIndex, sapling::ExtendedSpendingKey},
+    zip32::{sapling::ExtendedSpendingKey, ChildIndex, DiversifierIndex},
 };
-use bech32::{ToBase32, FromBase32, Variant};
 use zeroize::Zeroizing;
 
-use crate::types::{ZclassicNetwork, CryptoError, SPENDING_KEY_LENGTH};
+use crate::types::{CryptoError, ZclassicNetwork, SPENDING_KEY_LENGTH};
 
 /// Derive a Sapling extended spending key from seed.
 ///
@@ -32,7 +32,8 @@ pub fn derive_spending_key(seed: &[u8], account: u32) -> Result<Zeroizing<Vec<u8
         .derive_child(ChildIndex::Hardened(account));
 
     let mut buf = Vec::new();
-    account_key.write(&mut buf)
+    account_key
+        .write(&mut buf)
         .map_err(|e| CryptoError::InvalidData(format!("SK serialize: {e}")))?;
 
     // Defense-in-depth: explicitly drop key material to shorten its lifetime.
@@ -58,7 +59,10 @@ pub fn derive_spending_key(seed: &[u8], account: u32) -> Result<Zeroizing<Vec<u8
 /// Returns (address_bytes[43], actual_diversifier_index).
 /// The actual index may differ from requested if the requested index produces
 /// an invalid diversifier (not all diversifier indices are valid).
-pub fn derive_address(sk_bytes: &[u8], diversifier_index: u64) -> Result<(Vec<u8>, u64), CryptoError> {
+pub fn derive_address(
+    sk_bytes: &[u8],
+    diversifier_index: u64,
+) -> Result<(Vec<u8>, u64), CryptoError> {
     if sk_bytes.len() != SPENDING_KEY_LENGTH {
         return Err(CryptoError::InvalidSpendingKey);
     }
@@ -132,7 +136,8 @@ pub fn encode_spending_key(sk_bytes: &[u8]) -> Result<String, CryptoError> {
         ZclassicNetwork.hrp_sapling_extended_spending_key(),
         sk_bytes.to_base32(),
         Variant::Bech32,
-    ).map_err(|e| CryptoError::InvalidData(format!("Bech32 encode: {e}")))?;
+    )
+    .map_err(|e| CryptoError::InvalidData(format!("Bech32 encode: {e}")))?;
 
     Ok(encoded)
 }
@@ -234,5 +239,4 @@ mod tests {
         let result = derive_spending_key(&[0u8; 16], 0);
         assert!(matches!(result, Err(CryptoError::InvalidSeed(16))));
     }
-
 }

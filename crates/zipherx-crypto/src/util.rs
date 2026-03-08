@@ -1,10 +1,10 @@
 //! Utility functions — version, branch ID, hashing, memory management.
 
-use sha2::{Sha256, Digest};
 use ff::PrimeField;
-use zcash_primitives::consensus::{Parameters, BlockHeight, BranchId};
+use sha2::{Digest, Sha256};
+use zcash_primitives::consensus::{BlockHeight, BranchId, Parameters};
 
-use crate::types::{ZclassicNetwork, CryptoError};
+use crate::types::{CryptoError, ZclassicNetwork};
 
 /// Get the library version.
 pub fn version() -> u32 {
@@ -16,7 +16,8 @@ pub fn get_branch_id(height: u64) -> Result<u32, CryptoError> {
     // L-5: Guard against height truncation
     if height > u32::MAX as u64 {
         return Err(CryptoError::InvalidData(format!(
-            "Block height {} exceeds u32::MAX", height
+            "Block height {} exceeds u32::MAX",
+            height
         )));
     }
     let bh = BlockHeight::from_u32(height as u32);
@@ -27,7 +28,9 @@ pub fn get_branch_id(height: u64) -> Result<u32, CryptoError> {
 /// Check if the Buttercup upgrade is supported by this build.
 pub fn verify_buttercup_support() -> bool {
     use zcash_primitives::consensus::NetworkUpgrade;
-    ZclassicNetwork.activation_height(NetworkUpgrade::ZclassicButtercup).is_some()
+    ZclassicNetwork
+        .activation_height(NetworkUpgrade::ZclassicButtercup)
+        .is_some()
 }
 
 /// Compute double-SHA256 hash.

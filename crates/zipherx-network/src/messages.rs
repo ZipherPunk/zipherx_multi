@@ -4,7 +4,7 @@
 //! All multi-byte integers are little-endian unless noted (port = big-endian).
 
 use crate::constants::*;
-use crate::types::{InvVector, InvType, NetworkAddress, RejectCode, AddrV2Network};
+use crate::types::{AddrV2Network, InvType, InvVector, NetworkAddress, RejectCode};
 
 // ---------------------------------------------------------------------------
 // CompactSize (varint) encoding — Bitcoin protocol
@@ -36,23 +36,35 @@ pub fn read_compact_size(data: &[u8], offset: usize) -> Option<(u64, usize)> {
     if first < 0xFD {
         Some((first as u64, 1))
     } else if first == 0xFD {
-        if offset + 3 > data.len() { return None; }
+        if offset + 3 > data.len() {
+            return None;
+        }
         let val = u16::from_le_bytes([data[offset + 1], data[offset + 2]]);
         Some((val as u64, 3))
     } else if first == 0xFE {
-        if offset + 5 > data.len() { return None; }
+        if offset + 5 > data.len() {
+            return None;
+        }
         let val = u32::from_le_bytes([
-            data[offset + 1], data[offset + 2],
-            data[offset + 3], data[offset + 4],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+            data[offset + 4],
         ]);
         Some((val as u64, 5))
     } else {
-        if offset + 9 > data.len() { return None; }
+        if offset + 9 > data.len() {
+            return None;
+        }
         let val = u64::from_le_bytes([
-            data[offset + 1], data[offset + 2],
-            data[offset + 3], data[offset + 4],
-            data[offset + 5], data[offset + 6],
-            data[offset + 7], data[offset + 8],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+            data[offset + 4],
+            data[offset + 5],
+            data[offset + 6],
+            data[offset + 7],
+            data[offset + 8],
         ]);
         Some((val, 9))
     }
@@ -75,10 +87,14 @@ pub fn write_var_string(buf: &mut Vec<u8>, s: &str) {
 pub fn read_var_string(data: &[u8], offset: usize) -> Option<(String, usize)> {
     let (len, varint_size) = read_compact_size(data, offset)?;
     // NET-004: Guard against u64→usize truncation on 32-bit platforms
-    if len > data.len() as u64 { return None; }
+    if len > data.len() as u64 {
+        return None;
+    }
     let str_start = offset + varint_size;
     let str_end = str_start + len as usize;
-    if str_end > data.len() { return None; }
+    if str_end > data.len() {
+        return None;
+    }
     let s = String::from_utf8_lossy(&data[str_start..str_end]).to_string();
     Some((s, varint_size + len as usize))
 }
@@ -156,7 +172,9 @@ impl VersionMessage {
         let offset = 80 + ua_size;
 
         // Start height (4 bytes)
-        if offset + 4 > data.len() { return None; }
+        if offset + 4 > data.len() {
+            return None;
+        }
         let start_height = i32::from_le_bytes(data[offset..offset + 4].try_into().ok()?);
 
         // Relay flag (1 byte, optional — defaults to true)
@@ -199,13 +217,17 @@ pub fn serialize_inv(items: &[InvVector]) -> Vec<u8> {
 pub fn deserialize_inv(data: &[u8]) -> Option<Vec<InvVector>> {
     let (count, varint_size) = read_compact_size(data, 0)?;
     // Guard against unbounded allocation from malicious peers
-    if count > 50_000 { return None; }
+    if count > 50_000 {
+        return None;
+    }
     let count = count as usize;
     let mut offset = varint_size;
     let mut items = Vec::with_capacity(count);
 
     for _ in 0..count {
-        if offset + 36 > data.len() { return None; }
+        if offset + 36 > data.len() {
+            return None;
+        }
         let type_val = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?);
         let inv_type = InvType::from_u32(type_val)?;
         let mut hash = [0u8; 32];
@@ -253,29 +275,41 @@ impl GetHeadersMessage {
 
     /// Deserialize from wire format payload.
     pub fn deserialize(data: &[u8]) -> Option<Self> {
-        if data.len() < 4 { return None; }
+        if data.len() < 4 {
+            return None;
+        }
         let version = u32::from_le_bytes(data[0..4].try_into().ok()?);
 
         let (count, varint_size) = read_compact_size(data, 4)?;
         // NET-001: Cap locator hash count (Bitcoin Core caps at 101)
-        if count > 101 { return None; }
+        if count > 101 {
+            return None;
+        }
         let count = count as usize;
         let mut offset = 4 + varint_size;
         let mut locator_hashes = Vec::with_capacity(count);
 
         for _ in 0..count {
-            if offset + 32 > data.len() { return None; }
+            if offset + 32 > data.len() {
+                return None;
+            }
             let mut hash = [0u8; 32];
             hash.copy_from_slice(&data[offset..offset + 32]);
             locator_hashes.push(hash);
             offset += 32;
         }
 
-        if offset + 32 > data.len() { return None; }
+        if offset + 32 > data.len() {
+            return None;
+        }
         let mut stop_hash = [0u8; 32];
         stop_hash.copy_from_slice(&data[offset..offset + 32]);
 
-        Some(Self { version, locator_hashes, stop_hash })
+        Some(Self {
+            version,
+            locator_hashes,
+            stop_hash,
+        })
     }
 }
 
@@ -332,7 +366,9 @@ impl BlockHeader {
 
     /// Deserialize from wire format.
     pub fn deserialize(data: &[u8]) -> Option<(Self, usize)> {
-        if data.len() < Self::BASE_SIZE { return None; }
+        if data.len() < Self::BASE_SIZE {
+            return None;
+        }
 
         let version = i32::from_le_bytes(data[0..4].try_into().ok()?);
         let mut prev_hash = [0u8; 32];
@@ -350,21 +386,26 @@ impl BlockHeader {
         let (sol_len, varint_size) = read_compact_size(data, Self::BASE_SIZE)?;
         let sol_start = Self::BASE_SIZE + varint_size;
         let sol_end = sol_start + sol_len as usize;
-        if sol_end > data.len() { return None; }
+        if sol_end > data.len() {
+            return None;
+        }
         let solution = data[sol_start..sol_end].to_vec();
 
         let total_consumed = sol_end;
 
-        Some((Self {
-            version,
-            prev_hash,
-            merkle_root,
-            final_sapling_root,
-            timestamp,
-            bits,
-            nonce,
-            solution,
-        }, total_consumed))
+        Some((
+            Self {
+                version,
+                prev_hash,
+                merkle_root,
+                final_sapling_root,
+                timestamp,
+                bits,
+                nonce,
+                solution,
+            },
+            total_consumed,
+        ))
     }
 }
 
@@ -376,7 +417,9 @@ const MAX_HEADERS_PER_RESPONSE: u64 = 2000;
 pub fn deserialize_headers(data: &[u8]) -> Option<Vec<BlockHeader>> {
     let (count, varint_size) = read_compact_size(data, 0)?;
     // Guard against unbounded allocation from malicious peers
-    if count > MAX_HEADERS_PER_RESPONSE { return None; }
+    if count > MAX_HEADERS_PER_RESPONSE {
+        return None;
+    }
     let count = count as usize;
     let mut offset = varint_size;
     let mut headers = Vec::with_capacity(count);
@@ -385,7 +428,9 @@ pub fn deserialize_headers(data: &[u8]) -> Option<Vec<BlockHeader>> {
         let (header, consumed) = BlockHeader::deserialize(&data[offset..])?;
         offset += consumed;
         // Skip tx_count byte (always 0 in headers message)
-        if offset >= data.len() { return None; }
+        if offset >= data.len() {
+            return None;
+        }
         offset += 1; // tx_count
         headers.push(header);
     }
@@ -404,7 +449,9 @@ pub fn serialize_ping(nonce: u64) -> [u8; 8] {
 
 /// Deserialize a ping or pong payload.
 pub fn deserialize_ping(data: &[u8]) -> Option<u64> {
-    if data.len() < 8 { return None; }
+    if data.len() < 8 {
+        return None;
+    }
     Some(u64::from_le_bytes(data[0..8].try_into().ok()?))
 }
 
@@ -435,7 +482,9 @@ impl RejectMessage {
         offset += msg_size;
 
         // Reject code (1 byte)
-        if offset >= payload.len() { return None; }
+        if offset >= payload.len() {
+            return None;
+        }
         let code = RejectCode::from_u8(payload[offset])?;
         offset += 1;
 
@@ -450,7 +499,12 @@ impl RejectMessage {
             Vec::new()
         };
 
-        Some(Self { message, code, reason, data })
+        Some(Self {
+            message,
+            code,
+            reason,
+            data,
+        })
     }
 }
 
@@ -472,14 +526,18 @@ pub fn deserialize_addr(data: &[u8]) -> Option<Vec<TimestampedAddress>> {
     let (count, varint_size) = read_compact_size(data, 0)?;
     let count = count as usize;
     // Cap at MAX_ADDRESSES_PER_PEER to prevent abuse (NET-005)
-    if count > MAX_ADDRESSES_PER_PEER { return None; }
+    if count > MAX_ADDRESSES_PER_PEER {
+        return None;
+    }
 
     let mut offset = varint_size;
     let mut addrs = Vec::with_capacity(count);
 
     for _ in 0..count {
         // timestamp (4) + address (26) = 30 bytes
-        if offset + 30 > data.len() { return None; }
+        if offset + 30 > data.len() {
+            return None;
+        }
         let timestamp = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?);
         let address = NetworkAddress::deserialize(data[offset + 4..offset + 30].try_into().ok()?);
         addrs.push(TimestampedAddress { timestamp, address });
@@ -512,14 +570,18 @@ pub struct AddrV2Entry {
 pub fn deserialize_addrv2(data: &[u8]) -> Option<Vec<AddrV2Entry>> {
     let (count, varint_size) = read_compact_size(data, 0)?;
     let count = count as usize;
-    if count > MAX_ADDRESSES_PER_PEER { return None; }
+    if count > MAX_ADDRESSES_PER_PEER {
+        return None;
+    }
 
     let mut offset = varint_size;
     let mut addrs = Vec::with_capacity(count);
 
     for _ in 0..count {
         // Timestamp (4 bytes)
-        if offset + 4 > data.len() { return None; }
+        if offset + 4 > data.len() {
+            return None;
+        }
         let timestamp = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?);
         offset += 4;
 
@@ -528,7 +590,9 @@ pub fn deserialize_addrv2(data: &[u8]) -> Option<Vec<AddrV2Entry>> {
         offset += svc_size;
 
         // Network ID (1 byte)
-        if offset >= data.len() { return None; }
+        if offset >= data.len() {
+            return None;
+        }
         let network = AddrV2Network::from_u8(data[offset])?;
         offset += 1;
 
@@ -536,12 +600,16 @@ pub fn deserialize_addrv2(data: &[u8]) -> Option<Vec<AddrV2Entry>> {
         let (addr_len, addr_varint_size) = read_compact_size(data, offset)?;
         offset += addr_varint_size;
         let addr_end = offset + addr_len as usize;
-        if addr_end > data.len() { return None; }
+        if addr_end > data.len() {
+            return None;
+        }
         let address = data[offset..addr_end].to_vec();
         offset = addr_end;
 
         // Port (2 bytes, big-endian)
-        if offset + 2 > data.len() { return None; }
+        if offset + 2 > data.len() {
+            return None;
+        }
         let port = u16::from_be_bytes([data[offset], data[offset + 1]]);
         offset += 2;
 
@@ -567,7 +635,17 @@ mod tests {
 
     #[test]
     fn test_compact_size_roundtrip() {
-        for value in [0u64, 1, 252, 253, 0xFFFE, 0xFFFF, 0x10000, 0xFFFF_FFFF, 0x1_0000_0000] {
+        for value in [
+            0u64,
+            1,
+            252,
+            253,
+            0xFFFE,
+            0xFFFF,
+            0x10000,
+            0xFFFF_FFFF,
+            0x1_0000_0000,
+        ] {
             let mut buf = Vec::new();
             write_compact_size(&mut buf, value);
             let (decoded, _) = read_compact_size(&buf, 0).unwrap();

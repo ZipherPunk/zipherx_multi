@@ -146,7 +146,8 @@ mod tests {
         conn.execute(
             "INSERT INTO notes (height, cmu, value) VALUES (?1, ?2, ?3)",
             rusqlite::params![100, vec![0xAAu8; 32], 50000i64],
-        ).unwrap();
+        )
+        .unwrap();
 
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
@@ -163,7 +164,8 @@ mod tests {
         conn.execute(
             "INSERT INTO sync_state (id, last_scanned_height) VALUES (1, 0)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Second insert should fail (CHECK constraint id = 1)
         let result = conn.execute(

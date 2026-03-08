@@ -6,13 +6,10 @@
 //!
 //! Solution size auto-detection determines which parameters to use.
 
-use sha2::{Sha256, Digest};
 use crate::types::{
-    CryptoError,
-    EQUIHASH_SOLUTION_SIZE_192_7,
-    EQUIHASH_SOLUTION_SIZE_200_9,
-    BLOCK_HEADER_BASE_SIZE,
+    CryptoError, BLOCK_HEADER_BASE_SIZE, EQUIHASH_SOLUTION_SIZE_192_7, EQUIHASH_SOLUTION_SIZE_200_9,
 };
+use sha2::{Digest, Sha256};
 
 /// Verify an Equihash solution for a block header.
 ///
@@ -21,7 +18,10 @@ use crate::types::{
 /// * `solution` - Equihash solution (400 or 1344 bytes)
 ///
 /// Auto-detects Equihash parameters from solution length.
-pub fn verify(header_bytes: &[u8; BLOCK_HEADER_BASE_SIZE], solution: &[u8]) -> Result<bool, CryptoError> {
+pub fn verify(
+    header_bytes: &[u8; BLOCK_HEADER_BASE_SIZE],
+    solution: &[u8],
+) -> Result<bool, CryptoError> {
     let (n, k) = match solution.len() {
         EQUIHASH_SOLUTION_SIZE_192_7 => (192u32, 7u32),
         EQUIHASH_SOLUTION_SIZE_200_9 => (200u32, 9u32),
@@ -89,7 +89,9 @@ pub fn verify_header_chain(
     }
 
     if header_offsets.len() != header_count || header_sizes.len() != header_count {
-        return Err(CryptoError::InvalidData("Offset/size array mismatch".into()));
+        return Err(CryptoError::InvalidData(
+            "Offset/size array mismatch".into(),
+        ));
     }
 
     let mut prev_hash = *expected_prev_hash;
@@ -97,7 +99,9 @@ pub fn verify_header_chain(
     for i in 0..header_count {
         let offset = header_offsets[i];
         let size = header_sizes[i];
-        let end = offset.checked_add(size).ok_or(CryptoError::InvalidBlockHeader)?;
+        let end = offset
+            .checked_add(size)
+            .ok_or(CryptoError::InvalidBlockHeader)?;
 
         if end > headers_data.len() || size < BLOCK_HEADER_BASE_SIZE {
             return Err(CryptoError::InvalidBlockHeader);

@@ -115,28 +115,36 @@ pub async fn connect_via_socks5(
     match resp_header[3] {
         ATYP_IPV4 => {
             let mut addr = [0u8; 6]; // 4 IP + 2 port
-            stream.read_exact(&mut addr).await
+            stream
+                .read_exact(&mut addr)
+                .await
                 .map_err(|e| NetworkError::Socks5Error(format!("Read bound addr (IPv4): {e}")))?;
         }
         ATYP_DOMAIN => {
             let mut len = [0u8; 1];
-            stream.read_exact(&mut len).await
-                .map_err(|e| NetworkError::Socks5Error(format!("Read bound addr domain len: {e}")))?;
+            stream.read_exact(&mut len).await.map_err(|e| {
+                NetworkError::Socks5Error(format!("Read bound addr domain len: {e}"))
+            })?;
             let mut addr = vec![0u8; len[0] as usize + 2];
-            stream.read_exact(&mut addr).await
+            stream
+                .read_exact(&mut addr)
+                .await
                 .map_err(|e| NetworkError::Socks5Error(format!("Read bound addr (domain): {e}")))?;
         }
         0x04 => {
             // IPv6
             let mut addr = [0u8; 18]; // 16 IP + 2 port
-            stream.read_exact(&mut addr).await
+            stream
+                .read_exact(&mut addr)
+                .await
                 .map_err(|e| NetworkError::Socks5Error(format!("Read bound addr (IPv6): {e}")))?;
         }
         other => {
             // NET-003: Unknown address type leaves unread bytes on the stream —
             // return an error instead of proceeding with a corrupted stream.
             return Err(NetworkError::Socks5Error(format!(
-                "Unknown SOCKS5 address type: 0x{:02x}", other
+                "Unknown SOCKS5 address type: 0x{:02x}",
+                other
             )));
         }
     }
@@ -159,7 +167,10 @@ mod tests {
         assert_eq!(greeting[0], SOCKS5_VERSION);
 
         // Send response: no auth required
-        stream.write_all(&[SOCKS5_VERSION, AUTH_NO_AUTH]).await.unwrap();
+        stream
+            .write_all(&[SOCKS5_VERSION, AUTH_NO_AUTH])
+            .await
+            .unwrap();
 
         // Read connect request (variable length)
         let mut header = [0u8; 4];
@@ -189,8 +200,12 @@ mod tests {
                 REPLY_SUCCEEDED,
                 0x00,
                 ATYP_IPV4,
-                0, 0, 0, 0, // IP
-                0, 0, // port
+                0,
+                0,
+                0,
+                0, // IP
+                0,
+                0, // port
             ])
             .await
             .unwrap();
@@ -204,14 +219,8 @@ mod tests {
 
         tokio::spawn(mock_socks5_server(listener));
 
-        let stream = connect_via_socks5(
-            proxy_addr,
-            "1.2.3.4",
-            8233,
-            &sem,
-            Duration::from_secs(5),
-        )
-        .await;
+        let stream =
+            connect_via_socks5(proxy_addr, "1.2.3.4", 8233, &sem, Duration::from_secs(5)).await;
 
         assert!(stream.is_ok());
     }

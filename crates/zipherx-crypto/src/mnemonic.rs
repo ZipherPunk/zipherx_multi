@@ -1,7 +1,7 @@
 //! BIP-39 mnemonic generation, validation, and seed derivation.
 
-use bip0039::{Count, English, Mnemonic};
 use crate::types::CryptoError;
+use bip0039::{Count, English, Mnemonic};
 
 /// Generate a new 24-word BIP-39 mnemonic.
 pub fn generate() -> Result<String, CryptoError> {
@@ -25,8 +25,8 @@ pub fn validate(phrase: &str) -> bool {
 /// If passphrase support is needed in the future, a separate `to_seed_with_passphrase`
 /// function should be added.
 pub fn to_seed(phrase: &str) -> Result<[u8; 64], CryptoError> {
-    let mnemonic: Mnemonic<English> = Mnemonic::from_phrase(phrase)
-        .map_err(|e| CryptoError::MnemonicError(format!("{e:?}")))?;
+    let mnemonic: Mnemonic<English> =
+        Mnemonic::from_phrase(phrase).map_err(|e| CryptoError::MnemonicError(format!("{e:?}")))?;
     let seed = mnemonic.to_seed("");
     let mut result = [0u8; 64];
     result.copy_from_slice(&seed[..64]);

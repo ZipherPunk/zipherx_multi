@@ -4,7 +4,10 @@
 //! It holds Arc references to shared state (DB, header store, delta store,
 //! peer manager) and delegates to the async sync, send, and scan modules.
 
-use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 
 use tokio::sync::Mutex as TokioMutex;
 use tokio::task::JoinHandle;
@@ -14,7 +17,9 @@ use crate::async_send::{self, SendProgressFn};
 use crate::async_sync::{self, SyncProgressFn};
 use crate::send::SendRequest;
 use crate::sync::SyncStatus;
-use crate::wallet::{BalanceInfo, TransactionDisplay, WalletConfig, WalletCore, WalletLifecycleState, WalletSummary};
+use crate::wallet::{
+    BalanceInfo, TransactionDisplay, WalletConfig, WalletCore, WalletLifecycleState, WalletSummary,
+};
 use crate::CoreError;
 use zipherx_network::header_sync::HeaderStore;
 use zipherx_network::peer_manager::PeerManager;
@@ -109,10 +114,9 @@ impl AsyncWallet {
     /// Discovers peers via DNS, connects, and performs handshakes.
     pub async fn connect_network(&self) -> Result<(), CoreError> {
         let mut pm = self.peer_manager.lock().await;
-        pm.connect()
-            .await
-            .map_err(|e| CoreError::Network(e))?;
-        self.connected_peer_count.store(pm.connected_count() as u32, Ordering::Relaxed);
+        pm.connect().await.map_err(|e| CoreError::Network(e))?;
+        self.connected_peer_count
+            .store(pm.connected_count() as u32, Ordering::Relaxed);
         Ok(())
     }
 
@@ -223,11 +227,10 @@ impl AsyncWallet {
     /// Get the current balance.
     pub async fn get_balance(&self) -> Result<BalanceInfo, CoreError> {
         let db_clone = self.db.clone();
-        let notes =
-            tokio::task::spawn_blocking(move || db_clone.get_all_unspent_notes(0))
-                .await
-                .map_err(|e| CoreError::RuntimeError(e.to_string()))?
-                .map_err(|e| CoreError::Storage(e.to_string()))?;
+        let notes = tokio::task::spawn_blocking(move || db_clone.get_all_unspent_notes(0))
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
 
         Ok(WalletCore::compute_balance(&notes))
     }
@@ -239,12 +242,11 @@ impl AsyncWallet {
         offset: usize,
     ) -> Result<Vec<TransactionDisplay>, CoreError> {
         let db_clone = self.db.clone();
-        let records = tokio::task::spawn_blocking(move || {
-            db_clone.get_transaction_history(limit, offset)
-        })
-        .await
-        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
-        .map_err(|e| CoreError::Storage(e.to_string()))?;
+        let records =
+            tokio::task::spawn_blocking(move || db_clone.get_transaction_history(limit, offset))
+                .await
+                .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+                .map_err(|e| CoreError::Storage(e.to_string()))?;
 
         Ok(records
             .iter()
@@ -265,11 +267,10 @@ impl AsyncWallet {
     pub async fn get_summary(&self) -> Result<WalletSummary, CoreError> {
         let state = self.core.state();
         let db_clone = self.db.clone();
-        let sync_state =
-            tokio::task::spawn_blocking(move || db_clone.get_sync_state())
-                .await
-                .map_err(|e| CoreError::RuntimeError(e.to_string()))?
-                .map_err(|e| CoreError::Storage(e.to_string()))?;
+        let sync_state = tokio::task::spawn_blocking(move || db_clone.get_sync_state())
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
 
         let header_height = self
             .header_store
@@ -337,7 +338,12 @@ impl AsyncWallet {
 
                 let mut pm_lock = pm.lock().await;
                 match async_sync::background_sync(
-                    &mut pm_lock, &hs, &ds, db.clone(), &sk_bytes, &guards,
+                    &mut pm_lock,
+                    &hs,
+                    &ds,
+                    db.clone(),
+                    &sk_bytes,
+                    &guards,
                 )
                 .await
                 {

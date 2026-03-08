@@ -40,8 +40,7 @@ pub fn encrypt(plaintext: &[u8], key: &[u8]) -> Result<Vec<u8>, EncryptionError>
         return Err(EncryptionError::InvalidKeyLength(key.len()));
     }
 
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|_| EncryptionError::EncryptionFailed)?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| EncryptionError::EncryptionFailed)?;
 
     // Generate random 12-byte nonce using OS-level CSPRNG (H-6: avoid thread_rng)
     let mut nonce_bytes = [0u8; NONCE_SIZE];
@@ -74,8 +73,7 @@ pub fn decrypt(encrypted: &[u8], key: &[u8]) -> Result<Vec<u8>, EncryptionError>
         return Err(EncryptionError::CiphertextTooShort);
     }
 
-    let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|_| EncryptionError::DecryptionFailed)?;
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| EncryptionError::DecryptionFailed)?;
 
     let nonce = Nonce::from_slice(&encrypted[..NONCE_SIZE]);
     let ciphertext = &encrypted[NONCE_SIZE..];

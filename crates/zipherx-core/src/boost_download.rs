@@ -20,12 +20,15 @@ use zipherx_storage::database::WalletDatabase;
 pub(crate) fn build_tor_aware_client(timeout_secs: u64) -> Result<reqwest::Client, CoreError> {
     let socks_port = zipherx_tor::client::get_socks_port();
 
-    let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs));
+    let mut builder =
+        reqwest::Client::builder().timeout(std::time::Duration::from_secs(timeout_secs));
 
     if socks_port > 0 && zipherx_tor::client::is_socks_running() {
         let proxy_url = format!("socks5h://127.0.0.1:{}", socks_port);
-        eprintln!("[ZipherX] Boost download: routing through Tor SOCKS5 proxy (port {})", socks_port);
+        eprintln!(
+            "[ZipherX] Boost download: routing through Tor SOCKS5 proxy (port {})",
+            socks_port
+        );
         let proxy = reqwest::Proxy::all(&proxy_url)
             .map_err(|e| CoreError::Storage(format!("Tor proxy config failed: {e}")))?;
         builder = builder.proxy(proxy);
@@ -129,7 +132,10 @@ pub fn parse_manifest(path: &str) -> Result<BoostManifest, CoreError> {
 
 /// Find a section by type in the manifest.
 pub fn get_section(manifest: &BoostManifest, section_type: u32) -> Option<&BoostSection> {
-    manifest.sections.iter().find(|s| s.section_type == section_type)
+    manifest
+        .sections
+        .iter()
+        .find(|s| s.section_type == section_type)
 }
 
 /// Read a section's raw bytes from the boost file using seek (not loading entire file).
@@ -168,10 +174,13 @@ pub fn mmap_section(
         .map_err(|e| CoreError::Storage(format!("Cannot open boost file: {e}")))?;
 
     // Verify file size covers the requested section before mapping
-    let file_size = file.metadata()
+    let file_size = file
+        .metadata()
         .map_err(|e| CoreError::Storage(format!("Cannot stat boost file: {e}")))?
         .len();
-    let section_end = section.offset.checked_add(section.size)
+    let section_end = section
+        .offset
+        .checked_add(section.size)
         .ok_or_else(|| CoreError::Storage("Section offset+size overflow".into()))?;
     if section_end > file_size {
         return Err(CoreError::Storage(format!(
@@ -195,8 +204,11 @@ pub fn mmap_section(
     unsafe {
         memmap2::MmapOptions::new()
             .offset(section.offset)
-            .len(usize::try_from(section.size)
-                .map_err(|_| CoreError::Storage("Section too large for this platform".into()))?)
+            .len(
+                usize::try_from(section.size).map_err(|_| {
+                    CoreError::Storage("Section too large for this platform".into())
+                })?,
+            )
             .map(&file)
             .map_err(|e| CoreError::Storage(format!("mmap section failed: {e}")))
     }
@@ -252,7 +264,9 @@ pub fn load_boost_headers_with_progress(
 
     eprintln!(
         "[ZipherX] Loading {} headers from boost file (heights {}–{})...",
-        count, start_height, start_height + count as u64 - 1
+        count,
+        start_height,
+        start_height + count as u64 - 1
     );
 
     // Read Section 3: block hashes (32 bytes each, ~81 MB)
@@ -320,9 +334,7 @@ pub fn load_boost_headers_with_progress(
 
         // Get timestamp from Section 4
         let ts_off = i * 4;
-        let timestamp = u32::from_le_bytes(
-            timestamps_data[ts_off..ts_off + 4].try_into().unwrap(),
-        );
+        let timestamp = u32::from_le_bytes(timestamps_data[ts_off..ts_off + 4].try_into().unwrap());
 
         let height = start_height + i as u64;
         batch.push((
@@ -528,9 +540,7 @@ pub async fn download_boost_file_if_needed(
 
     // Already downloaded?
     if boost_file.exists() && manifest_file.exists() {
-        let size = std::fs::metadata(&boost_file)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let size = std::fs::metadata(&boost_file).map(|m| m.len()).unwrap_or(0);
         if size > 100_000_000 {
             // >100MB = likely valid
             eprintln!(
@@ -595,7 +605,10 @@ pub async fn download_boost_file_if_needed(
         .map_err(|e| CoreError::RuntimeError(e.to_string()))?
         .map_err(|e| CoreError::Storage(format!("Manifest write failed: {e}")))?;
 
-    eprintln!("[ZipherX] Manifest downloaded ({} bytes)", manifest_bytes.len());
+    eprintln!(
+        "[ZipherX] Manifest downloaded ({} bytes)",
+        manifest_bytes.len()
+    );
 
     // Step 2: Download split .zst parts
     let zst_combined = boost_cache_dir.join("zipherx_boost_v1.bin.zst");
@@ -653,11 +666,9 @@ pub async fn download_boost_file_if_needed(
                     url.rsplit('/').next().unwrap_or(&url),
                 );
 
-                let mut response = client
-                    .get(url.as_str())
-                    .send()
-                    .await
-                    .map_err(|e| CoreError::Storage(format!("Download part {} failed: {e}", part_idx + 1)))?;
+                let mut response = client.get(url.as_str()).send().await.map_err(|e| {
+                    CoreError::Storage(format!("Download part {} failed: {e}", part_idx + 1))
+                })?;
 
                 if !response.status().is_success() {
                     return Err(CoreError::Storage(format!(
@@ -694,9 +705,11 @@ pub async fn download_boost_file_if_needed(
 
                     // Flush buffer to disk when >= 4MB
                     if local_buf.len() >= 4 * 1024 * 1024 {
-                        let buf_data = std::mem::replace(&mut local_buf, Vec::with_capacity(4 * 1024 * 1024));
+                        let buf_data =
+                            std::mem::replace(&mut local_buf, Vec::with_capacity(4 * 1024 * 1024));
                         writer = tokio::task::spawn_blocking(move || {
-                            writer.write_all(&buf_data)
+                            writer
+                                .write_all(&buf_data)
                                 .map_err(|e| CoreError::Storage(format!("Write chunk: {e}")))?;
                             Ok::<_, CoreError>(writer)
                         })
@@ -725,7 +738,8 @@ pub async fn download_boost_file_if_needed(
                 if !local_buf.is_empty() {
                     let buf_data = local_buf;
                     writer = tokio::task::spawn_blocking(move || {
-                        writer.write_all(&buf_data)
+                        writer
+                            .write_all(&buf_data)
                             .map_err(|e| CoreError::Storage(format!("Write final chunk: {e}")))?;
                         Ok::<_, CoreError>(writer)
                     })
@@ -735,16 +749,14 @@ pub async fn download_boost_file_if_needed(
 
                 // Flush BufWriter
                 tokio::task::spawn_blocking(move || {
-                    writer.flush().map_err(|e| CoreError::Storage(format!("Flush: {e}")))
+                    writer
+                        .flush()
+                        .map_err(|e| CoreError::Storage(format!("Flush: {e}")))
                 })
                 .await
                 .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
 
-                eprintln!(
-                    "[ZipherX] Part {}/{} complete",
-                    part_idx + 1,
-                    num_parts,
-                );
+                eprintln!("[ZipherX] Part {}/{} complete", part_idx + 1, num_parts,);
 
                 Ok::<String, CoreError>(part_path_str)
             });
@@ -780,12 +792,13 @@ pub async fn download_boost_file_if_needed(
                 // Remove temp part file
                 let _ = std::fs::remove_file(part_path);
             }
-            output.flush().map_err(|e| CoreError::Storage(format!("Flush: {e}")))?;
+            output
+                .flush()
+                .map_err(|e| CoreError::Storage(format!("Flush: {e}")))?;
             Ok::<(), CoreError>(())
         })
         .await
         .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
-
     }
 
     let zst_size = std::fs::metadata(&zst_combined)
@@ -850,7 +863,7 @@ pub fn validate_boost_file(path: &str) -> Result<BoostFileInfo, CoreError> {
         file_path: path.to_string(),
         file_size: metadata.len(),
         boost_height: 0, // Determined after parsing manifest
-        cmu_count: 0,     // Determined after parsing manifest
+        cmu_count: 0,    // Determined after parsing manifest
         was_resumed: false,
     })
 }
@@ -875,7 +888,8 @@ pub async fn load_boost_file(
     // RC-18: Memory-map the compressed boost file instead of reading into heap.
     let file = std::fs::File::open(path)
         .map_err(|e| CoreError::Storage(format!("Cannot open boost file: {e}")))?;
-    let file_len = file.metadata()
+    let file_len = file
+        .metadata()
         .map_err(|e| CoreError::Storage(format!("Cannot stat boost file: {e}")))?
         .len();
     if file_len == 0 {

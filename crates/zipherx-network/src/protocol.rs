@@ -3,9 +3,9 @@
 //! Bitcoin-derived message format:
 //! [magic (4 bytes)] [command (12 bytes, null-padded)] [length (4 bytes LE)] [checksum (4 bytes)] [payload]
 
-use sha2::{Sha256, Digest};
 use crate::constants::*;
 use crate::types::ProtocolError;
+use sha2::{Digest, Sha256};
 
 /// Frame a P2P message with header.
 ///
@@ -39,7 +39,9 @@ pub fn frame_message(command: &str, payload: &[u8]) -> Vec<u8> {
 /// Parse a P2P message header (24 bytes).
 ///
 /// Returns (command, payload_length, checksum) or error.
-pub fn parse_header(data: &[u8; MESSAGE_HEADER_SIZE]) -> Result<(String, u32, [u8; 4]), ProtocolError> {
+pub fn parse_header(
+    data: &[u8; MESSAGE_HEADER_SIZE],
+) -> Result<(String, u32, [u8; 4]), ProtocolError> {
     // Validate magic bytes
     if data[..4] != MAGIC_BYTES {
         return Err(ProtocolError::InvalidMagicBytes {
@@ -50,7 +52,10 @@ pub fn parse_header(data: &[u8; MESSAGE_HEADER_SIZE]) -> Result<(String, u32, [u
 
     // Extract command (strip null padding)
     let cmd_bytes = &data[4..16];
-    let cmd_end = cmd_bytes.iter().position(|&b| b == 0).unwrap_or(COMMAND_SIZE);
+    let cmd_end = cmd_bytes
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(COMMAND_SIZE);
     // RN-9: Validate that command bytes are ASCII-printable or NUL padding.
     // Non-ASCII bytes in a command name indicate a corrupted or malicious message.
     if !cmd_bytes.iter().all(|b| b.is_ascii_graphic() || *b == 0) {
@@ -138,7 +143,10 @@ mod tests {
         let mut header = [0u8; MESSAGE_HEADER_SIZE];
         header[0..4].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
         let result = parse_header(&header);
-        assert!(matches!(result, Err(ProtocolError::InvalidMagicBytes { .. })));
+        assert!(matches!(
+            result,
+            Err(ProtocolError::InvalidMagicBytes { .. })
+        ));
     }
 
     #[test]

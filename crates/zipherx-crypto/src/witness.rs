@@ -11,8 +11,8 @@
 use std::io::Cursor;
 
 use incrementalmerkletree::witness::IncrementalWitness;
-use zcash_primitives::sapling::Node;
 use zcash_primitives::merkle_tree::{read_incremental_witness, write_incremental_witness, HashSer};
+use zcash_primitives::sapling::Node;
 
 use crate::types::CryptoError;
 
@@ -71,12 +71,11 @@ pub fn verify_anchor(witness_data: &[u8], expected_root: &[u8; 32]) -> Result<bo
 pub fn update_witness(witness_data: &[u8], cmu: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
     let mut witness = deserialize_witness(witness_data)?;
 
-    let node = Node::read(&cmu[..])
-        .map_err(|_| CryptoError::InvalidCommitment)?;
+    let node = Node::read(&cmu[..]).map_err(|_| CryptoError::InvalidCommitment)?;
 
-    witness.append(node).map_err(|e| {
-        CryptoError::WitnessError(format!("Witness append failed: {:?}", e))
-    })?;
+    witness
+        .append(node)
+        .map_err(|e| CryptoError::WitnessError(format!("Witness append failed: {:?}", e)))?;
 
     serialize_witness(&witness)
 }
@@ -97,8 +96,7 @@ pub fn update_witness_batch(witness_data: &[u8], cmus: &[u8]) -> Result<Vec<u8>,
 
     for i in 0..count {
         let cmu_slice = &cmus[i * 32..(i + 1) * 32];
-        let node = Node::read(cmu_slice)
-            .map_err(|_| CryptoError::InvalidCommitment)?;
+        let node = Node::read(cmu_slice).map_err(|_| CryptoError::InvalidCommitment)?;
         witness.append(node).map_err(|e| {
             CryptoError::WitnessError(format!("Witness append failed in batch: {:?}", e))
         })?;

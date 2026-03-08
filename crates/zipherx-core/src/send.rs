@@ -158,9 +158,9 @@ pub fn select_notes(
 /// RC-7: Uses checked arithmetic to detect overflow instead of silently saturating.
 /// Returns `CoreError` if amount + fee overflows or exceeds total_input.
 pub fn calculate_change(total_input: u64, amount: u64, fee: u64) -> Result<u64, CoreError> {
-    let spend_total = amount.checked_add(fee).ok_or_else(|| {
-        CoreError::Crypto("Overflow: amount + fee exceeds u64 range".into())
-    })?;
+    let spend_total = amount
+        .checked_add(fee)
+        .ok_or_else(|| CoreError::Crypto("Overflow: amount + fee exceeds u64 range".into()))?;
     total_input.checked_sub(spend_total).ok_or_else(|| {
         CoreError::Crypto(format!(
             "Insufficient input: total_input={} < amount({}) + fee({})",
@@ -212,8 +212,10 @@ pub fn note_to_spendable(note: &zipherx_storage::types::Note) -> Option<Spendabl
     let anchor_data = note.anchor.as_ref()?;
     let nullifier_data = note.nullifier.as_ref()?;
 
-    if rcm_data.len() != 32 || diversifier_data.len() != 11
-        || anchor_data.len() != 32 || nullifier_data.len() != 32
+    if rcm_data.len() != 32
+        || diversifier_data.len() != 11
+        || anchor_data.len() != 32
+        || nullifier_data.len() != 32
     {
         return None;
     }
@@ -248,9 +250,7 @@ pub fn note_to_spendable(note: &zipherx_storage::types::Note) -> Option<Spendabl
 ///
 /// These occur when a broadcast fails but notes were already marked (FIX #1169).
 /// Returns note IDs that are phantom-spent and should be restored.
-pub fn detect_phantom_spent_notes(
-    notes: &[zipherx_storage::types::Note],
-) -> Vec<i64> {
+pub fn detect_phantom_spent_notes(notes: &[zipherx_storage::types::Note]) -> Vec<i64> {
     notes
         .iter()
         .filter(|n| {
@@ -303,9 +303,8 @@ pub fn validate_shielded_address(address: &str) -> Result<(), CoreError> {
 
     // RC-3: Verify bech32 checksum — reject addresses with bit errors or typos.
     // bech32::decode() validates the HRP, charset, and checksum in one pass.
-    let (hrp, data, _variant) = bech32::decode(address).map_err(|e| {
-        CoreError::Crypto(format!("Invalid bech32 address (checksum failed): {e}"))
-    })?;
+    let (hrp, data, _variant) = bech32::decode(address)
+        .map_err(|e| CoreError::Crypto(format!("Invalid bech32 address (checksum failed): {e}")))?;
 
     if hrp != "zs" {
         return Err(CoreError::Crypto(format!(
@@ -315,9 +314,8 @@ pub fn validate_shielded_address(address: &str) -> Result<(), CoreError> {
     }
 
     // Verify base32 data decodes to valid bytes (43 bytes for Sapling payment address)
-    let _decoded = Vec::<u8>::from_base32(&data).map_err(|e| {
-        CoreError::Crypto(format!("Invalid bech32 address data: {e}"))
-    })?;
+    let _decoded = Vec::<u8>::from_base32(&data)
+        .map_err(|e| CoreError::Crypto(format!("Invalid bech32 address data: {e}")))?;
 
     Ok(())
 }
@@ -579,8 +577,12 @@ mod tests {
 
     #[test]
     fn test_is_boost_placeholder() {
-        assert!(is_boost_placeholder_txid("626f6f73740000000000000000000000"));
-        assert!(is_boost_placeholder_txid("626F6F73740000000000000000000000"));
+        assert!(is_boost_placeholder_txid(
+            "626f6f73740000000000000000000000"
+        ));
+        assert!(is_boost_placeholder_txid(
+            "626F6F73740000000000000000000000"
+        ));
         assert!(!is_boost_placeholder_txid("abcdef0123456789"));
     }
 

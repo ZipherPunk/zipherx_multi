@@ -8,14 +8,14 @@
 //! - Transaction broadcast
 //! - SOCKS5 proxy for Tor routing
 
-pub mod constants;
-pub mod protocol;
-pub mod messages;
-pub mod types;
-pub mod socks5;
-pub mod dispatcher;
-pub mod peer;
-pub mod peer_manager;
-pub mod header_sync;
 pub mod block_fetcher;
 pub mod broadcast;
+pub mod constants;
+pub mod dispatcher;
+pub mod header_sync;
+pub mod messages;
+pub mod peer;
+pub mod peer_manager;
+pub mod protocol;
+pub mod socks5;
+pub mod types;

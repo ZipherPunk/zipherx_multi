@@ -8,8 +8,8 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use crate::TorError;
 use crate::client;
+use crate::TorError;
 
 /// Download error codes (matches existing FFI interface).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,8 +212,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicU32;
+    use std::sync::Arc;
 
     #[test]
     fn test_progress_state() {

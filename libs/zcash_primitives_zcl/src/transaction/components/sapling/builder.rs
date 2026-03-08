@@ -442,8 +442,10 @@ impl<P: consensus::Parameters> SaplingBuilder<P> {
                 GROTH16_PROOF_THREADS.store(1, Ordering::Relaxed);
 
                 let phase2_start = std::time::Instant::now();
-                eprintln!("FIX #1329: Sequential proofs: {} spends, bellman multicore ON",
-                    prepared.len());
+                eprintln!(
+                    "FIX #1329: Sequential proofs: {} spends, bellman multicore ON",
+                    prepared.len()
+                );
 
                 // Generate proofs sequentially — each uses full rayon pool internally
                 let proof_results: Vec<Result<_, ()>> = prepared
@@ -473,8 +475,11 @@ impl<P: consensus::Parameters> SaplingBuilder<P> {
                     })
                     .collect();
 
-                eprintln!("FIX #1329: Total: {:.3}s for {} proofs (sequential, bellman multicore)",
-                    phase2_start.elapsed().as_secs_f64(), prepared.len());
+                eprintln!(
+                    "FIX #1329: Total: {:.3}s for {} proofs (sequential, bellman multicore)",
+                    phase2_start.elapsed().as_secs_f64(),
+                    prepared.len()
+                );
 
                 // FIX #1328: Check if proofs were cancelled
                 if GROTH16_CANCEL.load(Ordering::Relaxed) {

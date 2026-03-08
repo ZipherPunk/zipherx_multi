@@ -168,7 +168,15 @@ impl SaplingProvingContext {
         merkle_path: MerklePath,
         proving_key: &Parameters<Bls12>,
         verifying_key: &PreparedVerifyingKey<Bls12>,
-    ) -> Result<(Proof<Bls12>, ValueCommitment, PublicKey, ValueCommitTrapdoor), ()> {
+    ) -> Result<
+        (
+            Proof<Bls12>,
+            ValueCommitment,
+            PublicKey,
+            ValueCommitTrapdoor,
+        ),
+        (),
+    > {
         // Initialize secure RNG — OsRng is thread-safe (uses kernel getentropy/SecRandomCopyBytes)
         let mut rng = OsRng;
 

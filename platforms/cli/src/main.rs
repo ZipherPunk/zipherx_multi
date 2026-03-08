@@ -23,7 +23,7 @@ mod platform;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{atomic::Ordering, Arc};
 
 use zipherx_core::async_wallet::AsyncWallet;
 use zipherx_core::send::SendRequest;
@@ -57,7 +57,10 @@ fn print_banner() {
     println!("║  {BRIGHT_GREEN} ███╔╝  ██║██╔═══╝ ██╔══██║██╔══╝  ██╔══██╗ ██╔██╗ {GREEN}║");
     println!("║  {BRIGHT_GREEN}███████╗██║██║     ██║  ██║███████╗██║  ██║██╔╝ ██╗{GREEN}║");
     println!("║  {BRIGHT_GREEN}╚══════╝╚═╝╚═╝     ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝{GREEN}║");
-    println!("║  {DIM}Privacy-first Zclassic wallet       v{}{GREEN}          ║", env!("CARGO_PKG_VERSION"));
+    println!(
+        "║  {DIM}Privacy-first Zclassic wallet       v{}{GREEN}          ║",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("║  {DIM}\"Privacy is the power to selectively reveal oneself\"{GREEN} ║");
     println!("╚══════════════════════════════════════════════════════════╝{RESET}");
     println!();
@@ -88,7 +91,9 @@ fn parse_zcl(input: &str) -> Option<u64> {
         2 => {
             let whole: u64 = parts[0].parse().ok()?;
             let frac_str = format!("{:0<8}", parts[1]);
-            if frac_str.len() > 8 { return None; }
+            if frac_str.len() > 8 {
+                return None;
+            }
             let frac: u64 = frac_str.parse().ok()?;
             Some(whole * 100_000_000 + frac)
         }
@@ -120,7 +125,10 @@ impl WalletState {
 
     fn require_wallet(&self) -> bool {
         if !self.is_wallet_loaded() {
-            println!("{}No wallet loaded. Use 'create' or 'restore' first.{}", YELLOW, RESET);
+            println!(
+                "{}No wallet loaded. Use 'create' or 'restore' first.{}",
+                YELLOW, RESET
+            );
             return false;
         }
         true
@@ -137,13 +145,21 @@ impl WalletState {
             db_path: data_dir.join("wallet.db").to_string_lossy().into(),
             header_store_path: data_dir.join("headers.db").to_string_lossy().into(),
             delta_store_dir: data_dir.join("delta").to_string_lossy().into(),
-            spend_params_path: data_dir.join("sapling-spend.params").to_string_lossy().into(),
-            output_params_path: data_dir.join("sapling-output.params").to_string_lossy().into(),
+            spend_params_path: data_dir
+                .join("sapling-spend.params")
+                .to_string_lossy()
+                .into(),
+            output_params_path: data_dir
+                .join("sapling-output.params")
+                .to_string_lossy()
+                .into(),
             account_index: 0,
             db_encryption_key: self.db_encryption_key.clone(),
         };
 
-        let wallet = self.runtime.block_on(AsyncWallet::initialize(config))
+        let wallet = self
+            .runtime
+            .block_on(AsyncWallet::initialize(config))
             .map_err(|e| format!("Wallet init failed: {}", e))?;
 
         self.wallet = Some(wallet);
@@ -158,11 +174,20 @@ impl WalletState {
             match self.runtime.block_on(wallet.connect_network()) {
                 Ok(()) => {
                     let count = wallet.get_connected_peer_count();
-                    println!("\r{}[network]{} Connected to {} peer(s)          ", GREEN, RESET, count);
+                    println!(
+                        "\r{}[network]{} Connected to {} peer(s)          ",
+                        GREEN, RESET, count
+                    );
                 }
                 Err(e) => {
-                    println!("\r{}[network]{} Connection failed: {}          ", RED, RESET, e);
-                    println!("{}Wallet will work offline. Use 'sync' to retry.{}", DIM, RESET);
+                    println!(
+                        "\r{}[network]{} Connection failed: {}          ",
+                        RED, RESET, e
+                    );
+                    println!(
+                        "{}Wallet will work offline. Use 'sync' to retry.{}",
+                        DIM, RESET
+                    );
                 }
             }
         }
@@ -172,14 +197,17 @@ impl WalletState {
     fn ensure_db_key(&mut self) -> Result<(), String> {
         let db_key_id = "db_encryption_key";
         if self.storage.has_key(db_key_id) {
-            let key = self.storage.load_key(db_key_id)
+            let key = self
+                .storage
+                .load_key(db_key_id)
                 .map_err(|e| format!("Failed to load DB key: {}", e))?;
             self.db_encryption_key = Some(key);
         } else {
             // Generate new 32-byte key
             let mut key = vec![0u8; 32];
             rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
-            self.storage.store_key(db_key_id, &key)
+            self.storage
+                .store_key(db_key_id, &key)
                 .map_err(|e| format!("Failed to store DB key: {}", e))?;
             self.db_encryption_key = Some(key);
         }
@@ -197,8 +225,19 @@ fn main() {
     // Initialize platform
     let platform_info = CliPlatformInfo::new();
     let data_dir = platform_info.data_directory();
-    println!("{}[init]{} Data directory: {}", DIM, RESET, data_dir.display());
-    println!("{}[init]{} OS: {} / {}", DIM, RESET, std::env::consts::OS, std::env::consts::ARCH);
+    println!(
+        "{}[init]{} Data directory: {}",
+        DIM,
+        RESET,
+        data_dir.display()
+    );
+    println!(
+        "{}[init]{} OS: {} / {}",
+        DIM,
+        RESET,
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
 
     let storage = Arc::new(platform::create_secure_storage(&data_dir));
 
@@ -206,7 +245,10 @@ fn main() {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("{}[fatal]{} Failed to create async runtime: {}", RED, RESET, e);
+            eprintln!(
+                "{}[fatal]{} Failed to create async runtime: {}",
+                RED, RESET, e
+            );
             return;
         }
     };
@@ -244,7 +286,10 @@ fn main() {
                 match zipherx_crypto::keys::derive_address(&sk, 0) {
                     Ok((addr_bytes, _)) => {
                         if let Ok(addr) = zipherx_crypto::address::encode_address(&addr_bytes) {
-                            println!("{}[wallet]{} Address: {}{}{}", DIM, RESET, BRIGHT_GREEN, addr, RESET);
+                            println!(
+                                "{}[wallet]{} Address: {}{}{}",
+                                DIM, RESET, BRIGHT_GREEN, addr, RESET
+                            );
                         }
                     }
                     Err(_) => {}
@@ -266,18 +311,29 @@ fn main() {
                 }
             }
             Err(_) => {
-                println!("{}[error]{} Wrong password or corrupted key file.", RED, RESET);
-                println!("{}You can 'create' a new wallet or 'restore' from mnemonic.{}", DIM, RESET);
+                println!(
+                    "{}[error]{} Wrong password or corrupted key file.",
+                    RED, RESET
+                );
+                println!(
+                    "{}You can 'create' a new wallet or 'restore' from mnemonic.{}",
+                    DIM, RESET
+                );
             }
         }
     } else {
         println!();
-        println!("{}No wallet found.{} Use '{}create{}' or '{}restore{}' to get started.",
-            YELLOW, RESET, BRIGHT_GREEN, RESET, BRIGHT_GREEN, RESET);
+        println!(
+            "{}No wallet found.{} Use '{}create{}' or '{}restore{}' to get started.",
+            YELLOW, RESET, BRIGHT_GREEN, RESET, BRIGHT_GREEN, RESET
+        );
     }
 
     println!();
-    println!("Type '{}help{}' for available commands.", BRIGHT_GREEN, RESET);
+    println!(
+        "Type '{}help{}' for available commands.",
+        BRIGHT_GREEN, RESET
+    );
     println!();
 
     // Interactive REPL
@@ -300,7 +356,9 @@ fn main() {
         match rl.readline(&prompt) {
             Ok(line) => {
                 let line = line.trim();
-                if line.is_empty() { continue; }
+                if line.is_empty() {
+                    continue;
+                }
                 let _ = rl.add_history_entry(line);
                 if !handle_command(line, &mut state) {
                     break;
@@ -352,7 +410,10 @@ fn handle_command(input: &str, state: &mut WalletState) -> bool {
         "repair" => cmd_repair(state),
         "validate" => cmd_validate(&parts[1..]),
         "quit" | "exit" | "q" => return false,
-        _ => println!("{}Unknown command: '{}'{}.  Type 'help' for available commands.", YELLOW, cmd, RESET),
+        _ => println!(
+            "{}Unknown command: '{}'{}.  Type 'help' for available commands.",
+            YELLOW, cmd, RESET
+        ),
     }
 
     true
@@ -360,26 +421,76 @@ fn handle_command(input: &str, state: &mut WalletState) -> bool {
 
 fn print_help() {
     println!("{}Available commands:{}", BOLD, RESET);
-    println!("  {}create{}              Create a new wallet (24-word mnemonic)", BRIGHT_GREEN, RESET);
-    println!("  {}restore{} <words>     Restore wallet from mnemonic", BRIGHT_GREEN, RESET);
-    println!("  {}import{} <key>        Import private key (hex)", BRIGHT_GREEN, RESET);
-    println!("  {}address{}             Show wallet shielded address", BRIGHT_GREEN, RESET);
-    println!("  {}balance{}             Show balance (total, spendable, notes)", BRIGHT_GREEN, RESET);
-    println!("  {}send{} <addr> <amt>   Send ZCL (e.g. send zs1... 1.5 [memo])", BRIGHT_GREEN, RESET);
-    println!("  {}sync{}                Sync wallet to chain tip", BRIGHT_GREEN, RESET);
-    println!("  {}history{}             Show recent transactions", BRIGHT_GREEN, RESET);
-    println!("  {}peers{}               Show connected peer count", BRIGHT_GREEN, RESET);
-    println!("  {}tor{}                 Show Tor status", BRIGHT_GREEN, RESET);
-    println!("  {}export{}              Export spending key (requires password)", BRIGHT_GREEN, RESET);
-    println!("  {}delete{}              Delete all wallet data", BRIGHT_GREEN, RESET);
-    println!("  {}repair{}              Run database repair", BRIGHT_GREEN, RESET);
-    println!("  {}validate{} <addr>     Validate a Zclassic address", BRIGHT_GREEN, RESET);
-    println!("  {}version{}             Show version info", BRIGHT_GREEN, RESET);
+    println!(
+        "  {}create{}              Create a new wallet (24-word mnemonic)",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}restore{} <words>     Restore wallet from mnemonic",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}import{} <key>        Import private key (hex)",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}address{}             Show wallet shielded address",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}balance{}             Show balance (total, spendable, notes)",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}send{} <addr> <amt>   Send ZCL (e.g. send zs1... 1.5 [memo])",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}sync{}                Sync wallet to chain tip",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}history{}             Show recent transactions",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}peers{}               Show connected peer count",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}tor{}                 Show Tor status",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}export{}              Export spending key (requires password)",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}delete{}              Delete all wallet data",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}repair{}              Run database repair",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}validate{} <addr>     Validate a Zclassic address",
+        BRIGHT_GREEN, RESET
+    );
+    println!(
+        "  {}version{}             Show version info",
+        BRIGHT_GREEN, RESET
+    );
     println!("  {}quit{}                Exit", BRIGHT_GREEN, RESET);
 }
 
 fn cmd_version() {
-    println!("{}ZipherX CLI{} v{}", BOLD, RESET, env!("CARGO_PKG_VERSION"));
+    println!(
+        "{}ZipherX CLI{} v{}",
+        BOLD,
+        RESET,
+        env!("CARGO_PKG_VERSION")
+    );
     println!("OS: {} / {}", std::env::consts::OS, std::env::consts::ARCH);
 }
 
@@ -389,7 +500,10 @@ fn cmd_version() {
 
 fn cmd_create(state: &mut WalletState) {
     if state.is_wallet_loaded() {
-        println!("{}A wallet is already loaded.{} Use 'delete' first to create a new one.", YELLOW, RESET);
+        println!(
+            "{}A wallet is already loaded.{} Use 'delete' first to create a new one.",
+            YELLOW, RESET
+        );
         return;
     }
 
@@ -405,12 +519,17 @@ fn cmd_create(state: &mut WalletState) {
 
     let words: Vec<&str> = phrase.split_whitespace().collect();
     println!();
-    println!("{}{}=== YOUR 24-WORD RECOVERY PHRASE ==={}", BOLD, YELLOW, RESET);
+    println!(
+        "{}{}=== YOUR 24-WORD RECOVERY PHRASE ==={}",
+        BOLD, YELLOW, RESET
+    );
     println!("{}WRITE THESE DOWN AND KEEP THEM SAFE!{}", RED, RESET);
     println!();
     for (i, word) in words.iter().enumerate() {
         print!("  {}{:>2}.{} {:<14}", DIM, i + 1, RESET, word);
-        if (i + 1) % 4 == 0 { println!(); }
+        if (i + 1) % 4 == 0 {
+            println!();
+        }
     }
     println!();
     println!("{}{}=== END OF RECOVERY PHRASE ==={}", BOLD, YELLOW, RESET);
@@ -419,7 +538,10 @@ fn cmd_create(state: &mut WalletState) {
     // Ask for password
     let password = prompt_new_password();
     if password.is_empty() {
-        println!("{}Password is required to encrypt your wallet.{}", RED, RESET);
+        println!(
+            "{}Password is required to encrypt your wallet.{}",
+            RED, RESET
+        );
         return;
     }
 
@@ -452,7 +574,10 @@ fn cmd_create(state: &mut WalletState) {
     match zipherx_crypto::keys::derive_address(&sk_bytes, 0) {
         Ok((addr_bytes, _)) => {
             if let Ok(addr) = zipherx_crypto::address::encode_address(&addr_bytes) {
-                println!("{}[wallet]{} Address: {}{}{}", GREEN, RESET, BRIGHT_GREEN, addr, RESET);
+                println!(
+                    "{}[wallet]{} Address: {}{}{}",
+                    GREEN, RESET, BRIGHT_GREEN, addr, RESET
+                );
             }
         }
         Err(e) => println!("{}[warn]{} Address derivation: {}", YELLOW, RESET, e),
@@ -475,7 +600,10 @@ fn cmd_create(state: &mut WalletState) {
 
     println!();
     println!("{}Wallet created successfully!{}", BRIGHT_GREEN, RESET);
-    println!("{}Save your recovery phrase — it is the ONLY way to recover your funds.{}", YELLOW, RESET);
+    println!(
+        "{}Save your recovery phrase — it is the ONLY way to recover your funds.{}",
+        YELLOW, RESET
+    );
 }
 
 // ============================================================================
@@ -484,7 +612,10 @@ fn cmd_create(state: &mut WalletState) {
 
 fn cmd_restore(args: &[&str], state: &mut WalletState) {
     if state.is_wallet_loaded() {
-        println!("{}A wallet is already loaded.{} Use 'delete' first.", YELLOW, RESET);
+        println!(
+            "{}A wallet is already loaded.{} Use 'delete' first.",
+            YELLOW, RESET
+        );
         return;
     }
 
@@ -501,7 +632,10 @@ fn cmd_restore(args: &[&str], state: &mut WalletState) {
 
     let word_count = words_str.split_whitespace().count();
     if word_count != 24 {
-        println!("{}[error]{} Expected 24 words, got {}", RED, RESET, word_count);
+        println!(
+            "{}[error]{} Expected 24 words, got {}",
+            RED, RESET, word_count
+        );
         return;
     }
 
@@ -545,7 +679,10 @@ fn cmd_restore(args: &[&str], state: &mut WalletState) {
     match zipherx_crypto::keys::derive_address(&sk_bytes, 0) {
         Ok((addr_bytes, _)) => {
             if let Ok(addr) = zipherx_crypto::address::encode_address(&addr_bytes) {
-                println!("{}[wallet]{} Address: {}{}{}", GREEN, RESET, BRIGHT_GREEN, addr, RESET);
+                println!(
+                    "{}[wallet]{} Address: {}{}{}",
+                    GREEN, RESET, BRIGHT_GREEN, addr, RESET
+                );
             }
         }
         Err(e) => println!("{}[warn]{} Address derivation: {}", YELLOW, RESET, e),
@@ -565,7 +702,10 @@ fn cmd_restore(args: &[&str], state: &mut WalletState) {
         Err(e) => println!("{}[error]{} {}", RED, RESET, e),
     }
 
-    println!("{}Wallet restored. Run 'sync' to scan for your transactions.{}", BRIGHT_GREEN, RESET);
+    println!(
+        "{}Wallet restored. Run 'sync' to scan for your transactions.{}",
+        BRIGHT_GREEN, RESET
+    );
 }
 
 // ============================================================================
@@ -574,7 +714,10 @@ fn cmd_restore(args: &[&str], state: &mut WalletState) {
 
 fn cmd_import(args: &[&str], state: &mut WalletState) {
     if state.is_wallet_loaded() {
-        println!("{}A wallet is already loaded.{} Use 'delete' first.", YELLOW, RESET);
+        println!(
+            "{}A wallet is already loaded.{} Use 'delete' first.",
+            YELLOW, RESET
+        );
         return;
     }
 
@@ -593,7 +736,12 @@ fn cmd_import(args: &[&str], state: &mut WalletState) {
     };
 
     if sk_bytes.len() != 32 {
-        println!("{}[error]{} Spending key must be 32 bytes (got {})", RED, RESET, sk_bytes.len());
+        println!(
+            "{}[error]{} Spending key must be 32 bytes (got {})",
+            RED,
+            RESET,
+            sk_bytes.len()
+        );
         return;
     }
 
@@ -601,7 +749,10 @@ fn cmd_import(args: &[&str], state: &mut WalletState) {
     match zipherx_crypto::keys::derive_address(&sk_bytes, 0) {
         Ok((addr_bytes, _)) => {
             if let Ok(addr) = zipherx_crypto::address::encode_address(&addr_bytes) {
-                println!("{}[wallet]{} Address: {}{}{}", GREEN, RESET, BRIGHT_GREEN, addr, RESET);
+                println!(
+                    "{}[wallet]{} Address: {}{}{}",
+                    GREEN, RESET, BRIGHT_GREEN, addr, RESET
+                );
             }
         }
         Err(e) => {
@@ -637,7 +788,10 @@ fn cmd_import(args: &[&str], state: &mut WalletState) {
         Err(e) => println!("{}[error]{} {}", RED, RESET, e),
     }
 
-    println!("{}Key imported. Run 'sync' to scan for your transactions.{}", BRIGHT_GREEN, RESET);
+    println!(
+        "{}Key imported. Run 'sync' to scan for your transactions.{}",
+        BRIGHT_GREEN, RESET
+    );
 }
 
 // ============================================================================
@@ -645,16 +799,19 @@ fn cmd_import(args: &[&str], state: &mut WalletState) {
 // ============================================================================
 
 fn cmd_address(state: &WalletState) {
-    if !state.require_wallet() { return; }
+    if !state.require_wallet() {
+        return;
+    }
 
     let sk = state.sk_bytes.as_ref().unwrap();
     match zipherx_crypto::keys::derive_address(sk, 0) {
-        Ok((addr_bytes, _)) => {
-            match zipherx_crypto::address::encode_address(&addr_bytes) {
-                Ok(addr) => println!("{}Address:{} {}{}{}", BOLD, RESET, BRIGHT_GREEN, addr, RESET),
-                Err(e) => println!("{}[error]{} Encoding: {}", RED, RESET, e),
-            }
-        }
+        Ok((addr_bytes, _)) => match zipherx_crypto::address::encode_address(&addr_bytes) {
+            Ok(addr) => println!(
+                "{}Address:{} {}{}{}",
+                BOLD, RESET, BRIGHT_GREEN, addr, RESET
+            ),
+            Err(e) => println!("{}[error]{} Encoding: {}", RED, RESET, e),
+        },
         Err(e) => println!("{}[error]{} Derivation: {}", RED, RESET, e),
     }
 }
@@ -664,15 +821,30 @@ fn cmd_address(state: &WalletState) {
 // ============================================================================
 
 fn cmd_balance(state: &WalletState) {
-    if !state.require_wallet() { return; }
+    if !state.require_wallet() {
+        return;
+    }
 
     let wallet = state.wallet.as_ref().unwrap();
     match state.runtime.block_on(wallet.get_balance()) {
         Ok(balance) => {
             println!("{}Balance:{}", BOLD, RESET);
-            println!("  {}Total:{}     {} ZCL", BRIGHT_GREEN, RESET, format_zcl(balance.total));
-            println!("  {}Spendable:{} {} ZCL", GREEN, RESET, format_zcl(balance.spendable));
-            println!("  {}Notes:{}     {} total, {} spendable", DIM, RESET, balance.note_count, balance.spendable_note_count);
+            println!(
+                "  {}Total:{}     {} ZCL",
+                BRIGHT_GREEN,
+                RESET,
+                format_zcl(balance.total)
+            );
+            println!(
+                "  {}Spendable:{} {} ZCL",
+                GREEN,
+                RESET,
+                format_zcl(balance.spendable)
+            );
+            println!(
+                "  {}Notes:{}     {} total, {} spendable",
+                DIM, RESET, balance.note_count, balance.spendable_note_count
+            );
         }
         Err(e) => println!("{}[error]{} Balance query failed: {}", RED, RESET, e),
     }
@@ -683,7 +855,9 @@ fn cmd_balance(state: &WalletState) {
 // ============================================================================
 
 fn cmd_send(args: &[&str], state: &WalletState) {
-    if !state.require_wallet() { return; }
+    if !state.require_wallet() {
+        return;
+    }
 
     if args.len() < 2 {
         println!("Usage: send <address> <amount> [memo]");
@@ -758,7 +932,10 @@ fn cmd_send(args: &[&str], state: &WalletState) {
             SendPhase::WitnessValidation { note_index, total } => {
                 format!("Validating witness {}/{}...", note_index, total)
             }
-            SendPhase::Building { spend_index, total_spends } => {
+            SendPhase::Building {
+                spend_index,
+                total_spends,
+            } => {
                 format!("Building proof {}/{}...", spend_index, total_spends)
             }
             SendPhase::Broadcasting => "Broadcasting to network...".to_string(),
@@ -779,7 +956,10 @@ fn cmd_send(args: &[&str], state: &WalletState) {
     }));
 
     println!();
-    match state.runtime.block_on(wallet.send(request, sk, progress_fn)) {
+    match state
+        .runtime
+        .block_on(wallet.send(request, sk, progress_fn))
+    {
         Ok(result) => {
             println!();
             println!("{}Transaction sent!{}", BRIGHT_GREEN, RESET);
@@ -801,7 +981,9 @@ fn cmd_send(args: &[&str], state: &WalletState) {
 // ============================================================================
 
 fn cmd_sync(state: &WalletState) {
-    if !state.require_wallet() { return; }
+    if !state.require_wallet() {
+        return;
+    }
 
     let wallet = state.wallet.as_ref().unwrap();
     let sk = state.sk_bytes.as_ref().unwrap();
@@ -813,8 +995,12 @@ fn cmd_sync(state: &WalletState) {
         let _ = io::stdout().flush();
         match state.runtime.block_on(wallet.connect_network()) {
             Ok(()) => {
-                println!("\r{}[sync]{} Reconnected ({} peers)          ",
-                    GREEN, RESET, wallet.get_connected_peer_count());
+                println!(
+                    "\r{}[sync]{} Reconnected ({} peers)          ",
+                    GREEN,
+                    RESET,
+                    wallet.get_connected_peer_count()
+                );
             }
             Err(e) => {
                 println!("\r{}[sync]{} Network error: {}          ", RED, RESET, e);
@@ -824,56 +1010,102 @@ fn cmd_sync(state: &WalletState) {
     }
 
     let peer_count_ref = wallet.connected_peer_count.clone();
-    let progress_fn: Option<zipherx_core::async_sync::SyncProgressFn> = Some(Arc::new(move |status| {
-        let msg = match &status {
-            SyncStatus::Idle => return,
-            SyncStatus::BoostDownload { downloaded_bytes, total_bytes } => {
-                let pct = if *total_bytes > 0 { downloaded_bytes * 100 / total_bytes } else { 0 };
-                format!("Boost download: {:.1} MB / {:.1} MB ({}%)",
-                    *downloaded_bytes as f64 / 1_048_576.0,
-                    *total_bytes as f64 / 1_048_576.0, pct)
-            }
-            SyncStatus::BoostLoad { loaded, total } => {
-                let pct = if *total > 0 { loaded * 100 / total } else { 0 };
-                format!("Loading boost: {} / {} ({}%)", loaded, total, pct)
-            }
-            SyncStatus::HeaderSync { current_height, target_height } => {
-                let pct = if *target_height > 0 { current_height * 100 / target_height } else { 0 };
-                format!("Headers: {} / {} ({}%)", current_height, target_height, pct)
-            }
-            SyncStatus::DeltaSync { current_height, target_height } => {
-                let pct = if *target_height > 0 { current_height * 100 / target_height } else { 0 };
-                format!("Delta sync: {} / {} ({}%)", current_height, target_height, pct)
-            }
-            SyncStatus::BlockScan { current_height, target_height, notes_found } => {
-                let pct = if *target_height > 0 { current_height * 100 / target_height } else { 0 };
-                format!("Block scan: {} / {} ({}%) — {} notes found",
-                    current_height, target_height, pct, notes_found)
-            }
-            SyncStatus::GapFill { gaps_remaining } => {
-                format!("Filling gaps: {} remaining", gaps_remaining)
-            }
-            SyncStatus::WitnessUpdate { notes_updated, total_notes } => {
-                format!("Witnesses: {} / {}", notes_updated, total_notes)
-            }
-            SyncStatus::Complete { height } => {
-                format!("Sync complete at height {}", height)
-            }
-            SyncStatus::Failed(ref reason) => {
-                format!("Sync failed: {}", reason)
-            }
-        };
-        let peers = peer_count_ref.load(Ordering::Relaxed);
-        print!("\r{}[sync]{} {} {}({} peers){}          ",
-            GREEN, RESET, msg, DIM, peers, RESET);
-        let _ = io::stdout().flush();
-    }));
+    let progress_fn: Option<zipherx_core::async_sync::SyncProgressFn> =
+        Some(Arc::new(move |status| {
+            let msg = match &status {
+                SyncStatus::Idle => return,
+                SyncStatus::BoostDownload {
+                    downloaded_bytes,
+                    total_bytes,
+                } => {
+                    let pct = if *total_bytes > 0 {
+                        downloaded_bytes * 100 / total_bytes
+                    } else {
+                        0
+                    };
+                    format!(
+                        "Boost download: {:.1} MB / {:.1} MB ({}%)",
+                        *downloaded_bytes as f64 / 1_048_576.0,
+                        *total_bytes as f64 / 1_048_576.0,
+                        pct
+                    )
+                }
+                SyncStatus::BoostLoad { loaded, total } => {
+                    let pct = if *total > 0 { loaded * 100 / total } else { 0 };
+                    format!("Loading boost: {} / {} ({}%)", loaded, total, pct)
+                }
+                SyncStatus::HeaderSync {
+                    current_height,
+                    target_height,
+                } => {
+                    let pct = if *target_height > 0 {
+                        current_height * 100 / target_height
+                    } else {
+                        0
+                    };
+                    format!("Headers: {} / {} ({}%)", current_height, target_height, pct)
+                }
+                SyncStatus::DeltaSync {
+                    current_height,
+                    target_height,
+                } => {
+                    let pct = if *target_height > 0 {
+                        current_height * 100 / target_height
+                    } else {
+                        0
+                    };
+                    format!(
+                        "Delta sync: {} / {} ({}%)",
+                        current_height, target_height, pct
+                    )
+                }
+                SyncStatus::BlockScan {
+                    current_height,
+                    target_height,
+                    notes_found,
+                } => {
+                    let pct = if *target_height > 0 {
+                        current_height * 100 / target_height
+                    } else {
+                        0
+                    };
+                    format!(
+                        "Block scan: {} / {} ({}%) — {} notes found",
+                        current_height, target_height, pct, notes_found
+                    )
+                }
+                SyncStatus::GapFill { gaps_remaining } => {
+                    format!("Filling gaps: {} remaining", gaps_remaining)
+                }
+                SyncStatus::WitnessUpdate {
+                    notes_updated,
+                    total_notes,
+                } => {
+                    format!("Witnesses: {} / {}", notes_updated, total_notes)
+                }
+                SyncStatus::Complete { height } => {
+                    format!("Sync complete at height {}", height)
+                }
+                SyncStatus::Failed(ref reason) => {
+                    format!("Sync failed: {}", reason)
+                }
+            };
+            let peers = peer_count_ref.load(Ordering::Relaxed);
+            print!(
+                "\r{}[sync]{} {} {}({} peers){}          ",
+                GREEN, RESET, msg, DIM, peers, RESET
+            );
+            let _ = io::stdout().flush();
+        }));
 
     println!("{}[sync]{} Starting sync...", GREEN, RESET);
     match state.runtime.block_on(wallet.sync(sk, progress_fn)) {
         Ok(height) => {
             println!();
-            println!("{}[sync]{} Synced to height {}{}{}", GREEN, RESET, BRIGHT_GREEN, height, RESET);
+            println!(
+                "{}[sync]{} Synced to height {}{}{}",
+                GREEN, RESET, BRIGHT_GREEN, height, RESET
+            );
         }
         Err(e) => {
             println!();
@@ -887,18 +1119,29 @@ fn cmd_sync(state: &WalletState) {
 // ============================================================================
 
 fn cmd_history(state: &WalletState) {
-    if !state.require_wallet() { return; }
+    if !state.require_wallet() {
+        return;
+    }
 
     let wallet = state.wallet.as_ref().unwrap();
-    match state.runtime.block_on(wallet.get_transaction_history(20, 0)) {
+    match state
+        .runtime
+        .block_on(wallet.get_transaction_history(20, 0))
+    {
         Ok(txs) => {
             if txs.is_empty() {
-                println!("{}No transactions yet.{} Run 'sync' to scan the blockchain.", DIM, RESET);
+                println!(
+                    "{}No transactions yet.{} Run 'sync' to scan the blockchain.",
+                    DIM, RESET
+                );
                 return;
             }
 
             println!("{}Recent transactions:{}", BOLD, RESET);
-            println!("  {}{:<10} {:<14} {:<12} {:<8} {}{}", DIM, "Type", "Amount (ZCL)", "Height", "Confs", "TXID", RESET);
+            println!(
+                "  {}{:<10} {:<14} {:<12} {:<8} {}{}",
+                DIM, "Type", "Amount (ZCL)", "Height", "Confs", "TXID", RESET
+            );
             println!("  {}{}{}", DIM, "-".repeat(70), RESET);
 
             for tx in &txs {
@@ -908,12 +1151,20 @@ fn cmd_history(state: &WalletState) {
                     _ => DIM,
                 };
                 let sign = if tx.tx_type == "sent" { "-" } else { "+" };
-                println!("  {}{:<10}{} {}{}{:<14}{} {:<12} {:<8} {}{}{}",
-                    type_color, tx.tx_type, RESET,
-                    type_color, sign, format_zcl(tx.amount), RESET,
+                println!(
+                    "  {}{:<10}{} {}{}{:<14}{} {:<12} {:<8} {}{}{}",
+                    type_color,
+                    tx.tx_type,
+                    RESET,
+                    type_color,
+                    sign,
+                    format_zcl(tx.amount),
+                    RESET,
                     tx.height,
                     tx.confirmations,
-                    DIM, &tx.txid[..16], RESET,
+                    DIM,
+                    &tx.txid[..16],
+                    RESET,
                 );
                 if let Some(ref memo) = tx.memo {
                     if !memo.is_empty() {
@@ -926,7 +1177,10 @@ fn cmd_history(state: &WalletState) {
             match state.runtime.block_on(wallet.get_transaction_counts()) {
                 Ok((in_count, out_count)) => {
                     println!();
-                    println!("  {}Total: {} received, {} sent{}", DIM, in_count, out_count, RESET);
+                    println!(
+                        "  {}Total: {} received, {} sent{}",
+                        DIM, in_count, out_count, RESET
+                    );
                 }
                 Err(_) => {}
             }
@@ -944,7 +1198,10 @@ fn cmd_peers(state: &WalletState) {
         let count = wallet.get_connected_peer_count();
         println!("{}Connected peers:{} {}", BOLD, RESET, count);
     } else {
-        println!("{}Wallet not initialized — no peer connections.{}", DIM, RESET);
+        println!(
+            "{}Wallet not initialized — no peer connections.{}",
+            DIM, RESET
+        );
     }
 }
 
@@ -961,7 +1218,10 @@ fn cmd_tor() {
         zipherx_tor::TorState::Connected => ("Connected", GREEN),
         zipherx_tor::TorState::Error => ("Error", RED),
     };
-    println!("{}Tor status:{} {}{}{}", BOLD, RESET, color, state_str, RESET);
+    println!(
+        "{}Tor status:{} {}{}{}",
+        BOLD, RESET, color, state_str, RESET
+    );
 
     let port = zipherx_tor::client::get_socks_port();
     if port > 0 {
@@ -981,9 +1241,14 @@ fn cmd_tor() {
 // ============================================================================
 
 fn cmd_export(state: &WalletState) {
-    if !state.require_wallet() { return; }
+    if !state.require_wallet() {
+        return;
+    }
 
-    println!("{}WARNING: Exporting your spending key gives FULL access to your funds.{}", RED, RESET);
+    println!(
+        "{}WARNING: Exporting your spending key gives FULL access to your funds.{}",
+        RED, RESET
+    );
     println!("{}Never share it with anyone.{}", YELLOW, RESET);
     println!();
 
@@ -1004,7 +1269,10 @@ fn cmd_export(state: &WalletState) {
             println!("{}Spending key (hex):{}", BOLD, RESET);
             println!("  {}{}{}", BRIGHT_GREEN, sk_hex, RESET);
             println!();
-            println!("{}This key has been displayed ONCE. Copy it securely now.{}", YELLOW, RESET);
+            println!(
+                "{}This key has been displayed ONCE. Copy it securely now.{}",
+                YELLOW, RESET
+            );
         }
         Err(_) => {
             println!("{}[error]{} Wrong password.", RED, RESET);
@@ -1017,8 +1285,14 @@ fn cmd_export(state: &WalletState) {
 // ============================================================================
 
 fn cmd_delete(state: &mut WalletState) {
-    println!("{}{}WARNING: This will PERMANENTLY delete your wallet data!{}", BOLD, RED, RESET);
-    println!("{}Make sure you have backed up your recovery phrase or spending key.{}", YELLOW, RESET);
+    println!(
+        "{}{}WARNING: This will PERMANENTLY delete your wallet data!{}",
+        BOLD, RED, RESET
+    );
+    println!(
+        "{}Make sure you have backed up your recovery phrase or spending key.{}",
+        YELLOW, RESET
+    );
     println!();
     print!("{}Type 'DELETE' to confirm: {}", RED, RESET);
     let _ = io::stdout().flush();
@@ -1052,7 +1326,10 @@ fn cmd_delete(state: &mut WalletState) {
     state.db_encryption_key = None;
 
     println!("{}[delete]{} Wallet data deleted.", GREEN, RESET);
-    println!("{}Use 'create' or 'restore' to set up a new wallet.{}", DIM, RESET);
+    println!(
+        "{}Use 'create' or 'restore' to set up a new wallet.{}",
+        DIM, RESET
+    );
 }
 
 // ============================================================================
@@ -1060,7 +1337,9 @@ fn cmd_delete(state: &mut WalletState) {
 // ============================================================================
 
 fn cmd_repair(state: &WalletState) {
-    if !state.require_wallet() { return; }
+    if !state.require_wallet() {
+        return;
+    }
 
     println!("{}[repair]{} Running database repair...", YELLOW, RESET);
     let wallet = state.wallet.as_ref().unwrap();
@@ -1143,8 +1422,12 @@ fn run_basic_repl(state: &mut WalletState) {
             Ok(0) => break,
             Ok(_) => {
                 let line = input.trim();
-                if line.is_empty() { continue; }
-                if !handle_command(line, state) { break; }
+                if line.is_empty() {
+                    continue;
+                }
+                if !handle_command(line, state) {
+                    break;
+                }
             }
             Err(e) => {
                 eprintln!("{}Input error: {}{}", RED, e, RESET);

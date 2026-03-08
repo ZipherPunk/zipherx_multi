@@ -9,28 +9,24 @@
 //! - IVK-based: Manual ChaCha20Poly1305 (fast, used for block scanning)
 //! - SK-based: Via zcash_primitives `try_sapling_note_decryption` (authoritative)
 
+use zcash_note_encryption::{EphemeralKeyBytes, ShieldedOutput, ENC_CIPHERTEXT_SIZE};
 use zcash_primitives::{
     consensus::BlockHeight,
     sapling::{
         keys::{FullViewingKey, OutgoingViewingKey, SaplingIvk},
-        note_encryption::{
-            try_sapling_note_decryption, PreparedIncomingViewingKey, SaplingDomain,
-        },
+        note_encryption::{try_sapling_note_decryption, PreparedIncomingViewingKey, SaplingDomain},
         value::NoteValue,
         Diversifier, Rseed,
     },
     zip32::sapling::ExtendedSpendingKey,
 };
-use zcash_note_encryption::{EphemeralKeyBytes, ShieldedOutput, ENC_CIPHERTEXT_SIZE};
 
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, aead::Aead, KeyInit};
+use chacha20poly1305::{aead::Aead, ChaCha20Poly1305, Key, KeyInit, Nonce};
 use ff::PrimeField;
 use group::{cofactor::CofactorGroup, Curve, GroupEncoding};
 use rayon::prelude::*;
 
-use crate::types::{
-    ZclassicNetwork, CryptoError, SPENDING_KEY_LENGTH, ENC_CIPHERTEXT_LEN,
-};
+use crate::types::{CryptoError, ZclassicNetwork, ENC_CIPHERTEXT_LEN, SPENDING_KEY_LENGTH};
 
 // ============================================================================
 // Types
@@ -59,8 +55,8 @@ struct RawShieldedOutput {
     enc_ciphertext: [u8; 580],
 }
 
-impl<P: zcash_primitives::consensus::Parameters> ShieldedOutput<SaplingDomain<P>, ENC_CIPHERTEXT_SIZE>
-    for RawShieldedOutput
+impl<P: zcash_primitives::consensus::Parameters>
+    ShieldedOutput<SaplingDomain<P>, ENC_CIPHERTEXT_SIZE> for RawShieldedOutput
 {
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.epk)
@@ -101,8 +97,7 @@ pub fn try_decrypt_note(
     let ivk_scalar: jubjub::Fr = Option::from(jubjub::Fr::from_repr(*ivk))?;
 
     // Parse EPK as curve point
-    let epk_point: jubjub::ExtendedPoint =
-        Option::from(jubjub::ExtendedPoint::from_bytes(epk))?;
+    let epk_point: jubjub::ExtendedPoint = Option::from(jubjub::ExtendedPoint::from_bytes(epk))?;
 
     // Key agreement: Ka = [8 * ivk] * epk (cofactor clearing)
     let ka: jubjub::ExtendedPoint = epk_point * ivk_scalar;
@@ -124,7 +119,9 @@ pub fn try_decrypt_note(
     let cipher = ChaCha20Poly1305::new(key);
     let nonce = Nonce::from_slice(&[0u8; 12]);
 
-    let decrypted = cipher.decrypt(nonce, &ciphertext[..ENC_CIPHERTEXT_LEN]).ok()?;
+    let decrypted = cipher
+        .decrypt(nonce, &ciphertext[..ENC_CIPHERTEXT_LEN])
+        .ok()?;
 
     if decrypted.len() < 51 {
         return None;
@@ -134,9 +131,7 @@ pub fn try_decrypt_note(
     let mut diversifier = [0u8; 11];
     diversifier.copy_from_slice(&decrypted[0..11]);
 
-    let value = u64::from_le_bytes(
-        decrypted[11..19].try_into().ok()?,
-    );
+    let value = u64::from_le_bytes(decrypted[11..19].try_into().ok()?);
 
     let mut rcm = [0u8; 32];
     rcm.copy_from_slice(&decrypted[19..51]);
@@ -167,7 +162,13 @@ pub fn try_decrypt_note(
         }
     }
 
-    Some(DecryptedNote { diversifier, value, rcm, is_zip212: false, memo })
+    Some(DecryptedNote {
+        diversifier,
+        value,
+        rcm,
+        is_zip212: false,
+        memo,
+    })
 }
 
 // ============================================================================
@@ -307,13 +308,16 @@ pub fn try_decrypt_notes_parallel(
                 Rseed::AfterZip212(rseed) => *rseed,
             };
 
-            Some((i, DecryptedNote {
-                diversifier,
-                value,
-                rcm,
-                is_zip212,
-                memo: memo.as_array().to_vec(),
-            }))
+            Some((
+                i,
+                DecryptedNote {
+                    diversifier,
+                    value,
+                    rcm,
+                    is_zip212,
+                    memo: memo.as_array().to_vec(),
+                },
+            ))
         })
         .collect()
 }
@@ -653,7 +657,8 @@ mod tests {
         let rcm = [0u8; 32];
 
         let wrong_cmu = [0xAB; 32];
-        let verified = verify_note_cmu(&sk, &diversifier, 100_000, &rcm, &wrong_cmu, false).unwrap();
+        let verified =
+            verify_note_cmu(&sk, &diversifier, 100_000, &rcm, &wrong_cmu, false).unwrap();
         assert!(!verified);
     }
 

@@ -82,9 +82,7 @@ pub fn should_skip_watchdog(guards: &SyncGuards) -> bool {
 ///
 /// Returns the number of peers reconnected.
 /// Uses HashSet to prevent reconnecting the same peer twice (FIX #1235).
-pub fn check_and_reconnect_peers(
-    peer_manager: &mut PeerManager,
-) -> Result<usize, CoreError> {
+pub fn check_and_reconnect_peers(peer_manager: &mut PeerManager) -> Result<usize, CoreError> {
     let connected = peer_manager.connected_count();
     if connected == 0 {
         return Ok(0);

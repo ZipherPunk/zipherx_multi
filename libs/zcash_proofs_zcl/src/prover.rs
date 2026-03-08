@@ -151,7 +151,15 @@ impl LocalTxProver {
         value: u64,
         anchor: bls12_381::Scalar,
         merkle_path: MerklePath,
-    ) -> Result<([u8; GROTH_PROOF_SIZE], ValueCommitment, PublicKey, zcash_primitives::sapling::value::ValueCommitTrapdoor), ()> {
+    ) -> Result<
+        (
+            [u8; GROTH_PROOF_SIZE],
+            ValueCommitment,
+            PublicKey,
+            zcash_primitives::sapling::value::ValueCommitTrapdoor,
+        ),
+        (),
+    > {
         let (proof, cv, rk, rcv) = SaplingProvingContext::spend_proof_detached(
             proof_generation_key,
             diversifier,
@@ -249,7 +257,15 @@ impl TxProver for LocalTxProver {
         value: u64,
         anchor: bls12_381::Scalar,
         merkle_path: MerklePath,
-    ) -> Result<([u8; GROTH_PROOF_SIZE], ValueCommitment, PublicKey, zcash_primitives::sapling::value::ValueCommitTrapdoor), ()> {
+    ) -> Result<
+        (
+            [u8; GROTH_PROOF_SIZE],
+            ValueCommitment,
+            PublicKey,
+            zcash_primitives::sapling::value::ValueCommitTrapdoor,
+        ),
+        (),
+    > {
         // Calls the inherent method (inherent methods have priority over trait methods in Rust)
         self.spend_proof_detached(
             proof_generation_key,

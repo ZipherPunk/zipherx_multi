@@ -40,7 +40,8 @@ impl SqliteHeaderStore {
                 hex_key.chars().all(|c| c.is_ascii_hexdigit()),
                 "Invalid hex key"
             );
-            let pragma_result = conn.execute_batch(&format!("PRAGMA key = \"x'{hex_key}'\""))
+            let pragma_result = conn
+                .execute_batch(&format!("PRAGMA key = \"x'{hex_key}'\""))
                 .map_err(|e| NetworkError::HeaderSyncFailed(format!("PRAGMA key: {e}")));
             // STOR-002: Zero key material from memory using write_volatile to
             // prevent the compiler from optimizing away the zeroing.
@@ -117,7 +118,9 @@ impl SqliteHeaderStore {
              DROP INDEX IF EXISTS idx_sapling_roots_reversed;",
         )
         .map_err(|e| NetworkError::HeaderSyncFailed(format!("begin_bulk_import: {e}")))?;
-        eprintln!("[ZipherX] HeaderStore: bulk import mode ON (synchronous=NORMAL, indexes dropped)");
+        eprintln!(
+            "[ZipherX] HeaderStore: bulk import mode ON (synchronous=NORMAL, indexes dropped)"
+        );
         Ok(())
     }
 
@@ -133,7 +136,9 @@ impl SqliteHeaderStore {
              PRAGMA cache_size = -8000;",
         )
         .map_err(|e| NetworkError::HeaderSyncFailed(format!("end_bulk_import: {e}")))?;
-        eprintln!("[ZipherX] HeaderStore: bulk import mode OFF (indexes rebuilt, synchronous=NORMAL)");
+        eprintln!(
+            "[ZipherX] HeaderStore: bulk import mode OFF (indexes rebuilt, synchronous=NORMAL)"
+        );
         Ok(())
     }
 
@@ -152,7 +157,10 @@ impl SqliteHeaderStore {
 
         // 1. Check in-memory cache
         {
-            let cache = self.delta_sapling_roots.lock().unwrap_or_else(|e| e.into_inner());
+            let cache = self
+                .delta_sapling_roots
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if cache.contains(anchor) || cache.contains(&reversed) {
                 return Ok(true);
             }
@@ -227,7 +235,10 @@ impl SqliteHeaderStore {
     ///
     /// Entries are (height, root) pairs. Both byte orders are cached.
     pub fn load_delta_sapling_roots(&self, entries: &[(u64, Vec<u8>)]) {
-        let mut cache = self.delta_sapling_roots.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self
+            .delta_sapling_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for (_, root) in entries {
             let reversed: Vec<u8> = root.iter().rev().copied().collect();
             cache.insert(root.clone());
@@ -236,10 +247,7 @@ impl SqliteHeaderStore {
     }
 
     /// Insert sapling roots into the database (both byte orders, FIX #1230).
-    pub fn store_sapling_roots(
-        &self,
-        entries: &[(u64, Vec<u8>)],
-    ) -> Result<(), NetworkError> {
+    pub fn store_sapling_roots(&self, entries: &[(u64, Vec<u8>)]) -> Result<(), NetworkError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
@@ -255,7 +263,10 @@ impl SqliteHeaderStore {
         }
 
         // Also add to in-memory cache
-        let mut cache = self.delta_sapling_roots.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self
+            .delta_sapling_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for (_, root) in entries {
             let reversed: Vec<u8> = root.iter().rev().copied().collect();
             cache.insert(root.clone());
@@ -445,11 +456,9 @@ impl HeaderStore for SqliteHeaderStore {
     fn get_latest_height(&self) -> Result<Option<u64>, NetworkError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let height: Option<i64> = conn
-            .query_row(
-                "SELECT MAX(height) FROM block_headers",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT MAX(height) FROM block_headers", [], |row| {
+                row.get(0)
+            })
             .map_err(|e| NetworkError::HeaderSyncFailed(e.to_string()))?;
         Ok(height.map(|h| h as u64))
     }
@@ -469,9 +478,7 @@ impl HeaderStore for SqliteHeaderStore {
                 Ok(StoredHeader {
                     hash: blob_to_array32(&hash_blob),
                     prev_hash: blob_to_array32(&prev_blob),
-                    final_sapling_root: root_blob
-                        .map(|b| blob_to_array32(&b))
-                        .unwrap_or([0u8; 32]),
+                    final_sapling_root: root_blob.map(|b| blob_to_array32(&b)).unwrap_or([0u8; 32]),
                     timestamp: timestamp as u32,
                     bits: bits as u32,
                 })
@@ -553,11 +560,13 @@ impl HeaderStore for SqliteHeaderStore {
             .map_err(|e| NetworkError::HeaderSyncFailed(e.to_string()))?;
 
         // Update in-memory cache with new roots
-        let mut cache = self.delta_sapling_roots.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self
+            .delta_sapling_roots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for (_, header) in &headers {
             if header.final_sapling_root != [0u8; 32] {
-                let reversed: Vec<u8> =
-                    header.final_sapling_root.iter().rev().copied().collect();
+                let reversed: Vec<u8> = header.final_sapling_root.iter().rev().copied().collect();
                 cache.insert(header.final_sapling_root.to_vec());
                 cache.insert(reversed);
             }
@@ -708,9 +717,7 @@ mod tests {
     fn test_store_sapling_roots() {
         let store = test_store();
         let root = vec![0xEE; 32];
-        store
-            .store_sapling_roots(&[(600, root.clone())])
-            .unwrap();
+        store.store_sapling_roots(&[(600, root.clone())]).unwrap();
 
         // Should find via SQL
         assert!(store.contains_sapling_root(&root).unwrap());
@@ -792,8 +799,8 @@ mod tests {
         // Pre-Sapling blocks have zero root — should be excluded
         store
             .store_headers(vec![
-                (100, make_header(1, 0, 0)), // zero root
-                (101, make_header(2, 1, 0)), // zero root
+                (100, make_header(1, 0, 0)),    // zero root
+                (101, make_header(2, 1, 0)),    // zero root
                 (102, make_header(3, 2, 0xAA)), // first non-zero = new
             ])
             .unwrap();

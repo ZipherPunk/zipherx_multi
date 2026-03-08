@@ -28,13 +28,20 @@ pub trait SecureStorage: Send + Sync {
 
     /// Store an encrypted spending key (197 bytes AES-GCM format).
     /// Used for VUL-002 mitigation: key never leaves encrypted form in memory.
-    fn store_encrypted_key(&self, identifier: &str, encrypted_data: &[u8]) -> Result<(), PlatformError> {
+    fn store_encrypted_key(
+        &self,
+        identifier: &str,
+        encrypted_data: &[u8],
+    ) -> Result<(), PlatformError> {
         self.store_key(identifier, encrypted_data)
     }
 
     /// Load encrypted key + encryption key pair for FFI operations.
     /// Returns (encrypted_key, encryption_key) for passing to Rust crypto layer.
-    fn load_encrypted_key_pair(&self, identifier: &str) -> Result<(Vec<u8>, Vec<u8>), PlatformError>;
+    fn load_encrypted_key_pair(
+        &self,
+        identifier: &str,
+    ) -> Result<(Vec<u8>, Vec<u8>), PlatformError>;
 
     /// Whether hardware-backed secure storage is available (Secure Enclave, StrongBox, TPM).
     fn is_hardware_backed(&self) -> bool;

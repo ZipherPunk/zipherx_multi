@@ -8,9 +8,9 @@
 //! an embedded TorClient and starts a local SOCKS5 proxy.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU8, AtomicU16, AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
+use std::sync::Mutex;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -232,13 +232,10 @@ const PROBE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(3)
 async fn probe_socks5_proxy(port: u16) -> Result<bool, String> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
-    let mut stream = tokio::time::timeout(
-        PROBE_TIMEOUT,
-        tokio::net::TcpStream::connect(addr),
-    )
-    .await
-    .map_err(|_| "connection timeout".to_string())?
-    .map_err(|e| e.to_string())?;
+    let mut stream = tokio::time::timeout(PROBE_TIMEOUT, tokio::net::TcpStream::connect(addr))
+        .await
+        .map_err(|_| "connection timeout".to_string())?
+        .map_err(|e| e.to_string())?;
 
     // SOCKS5 greeting: version(5) + 1 method + no-auth(0)
     stream
@@ -248,13 +245,10 @@ async fn probe_socks5_proxy(port: u16) -> Result<bool, String> {
 
     // Response: version(1) + chosen_method(1)
     let mut resp = [0u8; 2];
-    tokio::time::timeout(
-        PROBE_TIMEOUT,
-        stream.read_exact(&mut resp),
-    )
-    .await
-    .map_err(|_| "read timeout".to_string())?
-    .map_err(|e| format!("read: {e}"))?;
+    tokio::time::timeout(PROBE_TIMEOUT, stream.read_exact(&mut resp))
+        .await
+        .map_err(|_| "read timeout".to_string())?
+        .map_err(|e| format!("read: {e}"))?;
 
     // Valid SOCKS5: version == 5, method == 0 (no auth)
     Ok(resp[0] == 0x05 && resp[1] == 0x00)
@@ -280,9 +274,7 @@ pub async fn start_tor(data_dir: Option<PathBuf>) -> Result<u16, TorError> {
     }
 
     if current_state == TorState::Connecting || current_state == TorState::Bootstrapping {
-        return Err(TorError::BootstrapFailed(
-            "Tor is already starting".into(),
-        ));
+        return Err(TorError::BootstrapFailed("Tor is already starting".into()));
     }
 
     // Clear previous error

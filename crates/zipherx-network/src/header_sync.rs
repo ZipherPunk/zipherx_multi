@@ -196,12 +196,13 @@ impl<S: HeaderStore> HeaderSync<S> {
         };
 
         if ranked_peers.is_empty() {
-            return Err(NetworkError::HeaderSyncFailed(
-                "No peers available".into(),
-            ));
+            return Err(NetworkError::HeaderSyncFailed("No peers available".into()));
         }
         #[cfg(debug_assertions)]
-        eprintln!("[ZipherX] Header sync: {} peers available", ranked_peers.len());
+        eprintln!(
+            "[ZipherX] Header sync: {} peers available",
+            ranked_peers.len()
+        );
 
         let start_time = std::time::Instant::now();
         let mut preferred_peer_idx = 0;
@@ -220,7 +221,8 @@ impl<S: HeaderStore> HeaderSync<S> {
                 None => {
                     // All peers exhausted — flush progress and try to reconnect
                     if !pending_headers.is_empty() {
-                        self.store.store_headers(std::mem::take(&mut pending_headers))?;
+                        self.store
+                            .store_headers(std::mem::take(&mut pending_headers))?;
                         pending_headers = Vec::with_capacity(BATCH_FLUSH_SIZE);
                     }
 
@@ -255,12 +257,10 @@ impl<S: HeaderStore> HeaderSync<S> {
                         Err(e) => {
                             #[cfg(debug_assertions)]
                             eprintln!("[ZipherX] Header sync: reconnect failed: {e}");
-                            return Err(NetworkError::HeaderSyncFailed(
-                                format!(
-                                    "Reconnect failed at height {}: {e}",
-                                    current_height
-                                ),
-                            ));
+                            return Err(NetworkError::HeaderSyncFailed(format!(
+                                "Reconnect failed at height {}: {e}",
+                                current_height
+                            )));
                         }
                     }
 
@@ -281,7 +281,8 @@ impl<S: HeaderStore> HeaderSync<S> {
                     #[cfg(debug_assertions)]
                     eprintln!(
                         "[ZipherX] Header sync: reconnected with {} peers, resuming from height {}",
-                        ranked_peers.len(), current_height,
+                        ranked_peers.len(),
+                        current_height,
                     );
                     continue 'sync_loop;
                 }
@@ -462,9 +463,7 @@ impl<S: HeaderStore> HeaderSync<S> {
                             break;
                         }
                         Err(e) => {
-                            eprintln!(
-                                "[ZipherX] Equihash error at height {height}: {e}"
-                            );
+                            eprintln!("[ZipherX] Equihash error at height {height}: {e}");
                             failed_peers.insert(peer_key.clone());
                             peer_bad = true;
                             break;
@@ -534,7 +533,8 @@ impl<S: HeaderStore> HeaderSync<S> {
             // Flush to DB when batch is large enough
             if pending_headers.len() >= BATCH_FLUSH_SIZE {
                 let flush_count = pending_headers.len();
-                self.store.store_headers(std::mem::take(&mut pending_headers))?;
+                self.store
+                    .store_headers(std::mem::take(&mut pending_headers))?;
                 pending_headers = Vec::with_capacity(BATCH_FLUSH_SIZE);
                 eprintln!("[ZipherX] Flushed {flush_count} headers to DB");
             }
@@ -542,8 +542,7 @@ impl<S: HeaderStore> HeaderSync<S> {
             // Report progress every 10k headers
             if headers_stored % 10_000 < count {
                 let pct = if chain_tip > start_height {
-                    ((current_height - start_height) as f64
-                        / (chain_tip - start_height) as f64
+                    ((current_height - start_height) as f64 / (chain_tip - start_height) as f64
                         * 100.0) as u32
                 } else {
                     100
@@ -600,7 +599,6 @@ impl<S: HeaderStore> HeaderSync<S> {
 
         Ok(headers_stored)
     }
-
 }
 
 /// In-memory header store for testing.
@@ -670,20 +668,26 @@ mod tests {
 
         store
             .store_headers(vec![
-                (100, StoredHeader {
-                    hash: [1u8; 32],
-                    prev_hash: [0u8; 32],
-                    final_sapling_root: [0u8; 32],
-                    timestamp: 1000,
-                    bits: 0x2007ffff,
-                }),
-                (101, StoredHeader {
-                    hash: [2u8; 32],
-                    prev_hash: [1u8; 32],
-                    final_sapling_root: [0u8; 32],
-                    timestamp: 1060,
-                    bits: 0x2007ffff,
-                }),
+                (
+                    100,
+                    StoredHeader {
+                        hash: [1u8; 32],
+                        prev_hash: [0u8; 32],
+                        final_sapling_root: [0u8; 32],
+                        timestamp: 1000,
+                        bits: 0x2007ffff,
+                    },
+                ),
+                (
+                    101,
+                    StoredHeader {
+                        hash: [2u8; 32],
+                        prev_hash: [1u8; 32],
+                        final_sapling_root: [0u8; 32],
+                        timestamp: 1060,
+                        bits: 0x2007ffff,
+                    },
+                ),
             ])
             .unwrap();
 

@@ -88,7 +88,10 @@ impl CliSecureStorage {
     }
 
     /// Derive an AES-256 key from the user's password and a per-file random salt.
-    fn derive_key_from_password(password_session_key: &[u8; KEY_LEN], salt: &[u8]) -> [u8; KEY_LEN] {
+    fn derive_key_from_password(
+        password_session_key: &[u8; KEY_LEN],
+        salt: &[u8],
+    ) -> [u8; KEY_LEN] {
         // Use the session key as "password" input to Argon2 with per-file salt.
         // This gives us a unique encryption key per file.
         let mut key = [0u8; KEY_LEN];
@@ -100,7 +103,10 @@ impl CliSecureStorage {
 
     /// Encrypt data with AES-256-GCM using a fresh random salt and nonce.
     /// Returns: salt (16) || nonce (12) || ciphertext+tag
-    fn encrypt_data(session_key: &[u8; KEY_LEN], plaintext: &[u8]) -> Result<Vec<u8>, PlatformError> {
+    fn encrypt_data(
+        session_key: &[u8; KEY_LEN],
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, PlatformError> {
         let mut salt = [0u8; SALT_LEN];
         OsRng.fill_bytes(&mut salt);
 
@@ -125,9 +131,14 @@ impl CliSecureStorage {
     }
 
     /// Decrypt data produced by `encrypt_data`.
-    fn decrypt_data(session_key: &[u8; KEY_LEN], encrypted: &[u8]) -> Result<Vec<u8>, PlatformError> {
+    fn decrypt_data(
+        session_key: &[u8; KEY_LEN],
+        encrypted: &[u8],
+    ) -> Result<Vec<u8>, PlatformError> {
         if encrypted.len() < SALT_LEN + NONCE_LEN + 16 {
-            return Err(PlatformError::StorageError("encrypted data too short".into()));
+            return Err(PlatformError::StorageError(
+                "encrypted data too short".into(),
+            ));
         }
 
         let salt = &encrypted[..SALT_LEN];
@@ -158,7 +169,10 @@ impl SecureStorage for CliSecureStorage {
         fs::write(&path, hex_data)
             .map_err(|e| PlatformError::StorageError(format!("write {}: {}", path.display(), e)))?;
 
-        self.cache.lock().unwrap().insert(identifier.to_string(), data.to_vec());
+        self.cache
+            .lock()
+            .unwrap()
+            .insert(identifier.to_string(), data.to_vec());
         Ok(())
     }
 
@@ -180,7 +194,10 @@ impl SecureStorage for CliSecureStorage {
             .map_err(|e| PlatformError::StorageError(format!("hex decode: {}", e)))?;
 
         let data = Self::decrypt_data(&session_key, &encrypted)?;
-        self.cache.lock().unwrap().insert(identifier.to_string(), data.clone());
+        self.cache
+            .lock()
+            .unwrap()
+            .insert(identifier.to_string(), data.clone());
         Ok(data)
     }
 
@@ -192,11 +209,13 @@ impl SecureStorage for CliSecureStorage {
     }
 
     fn has_key(&self, identifier: &str) -> bool {
-        self.cache.lock().unwrap().contains_key(identifier)
-            || self.key_path(identifier).exists()
+        self.cache.lock().unwrap().contains_key(identifier) || self.key_path(identifier).exists()
     }
 
-    fn load_encrypted_key_pair(&self, identifier: &str) -> Result<(Vec<u8>, Vec<u8>), PlatformError> {
+    fn load_encrypted_key_pair(
+        &self,
+        identifier: &str,
+    ) -> Result<(Vec<u8>, Vec<u8>), PlatformError> {
         let encrypted = self.load_key(identifier)?;
         let enc_key = self.load_key(&format!("{}_enc", identifier))?;
         Ok((encrypted, enc_key))
@@ -214,13 +233,19 @@ impl SecureStorage for CliSecureStorage {
 pub struct CliBiometricAuth;
 
 impl BiometricAuth for CliBiometricAuth {
-    fn is_available(&self) -> bool { false }
-    fn biometric_type(&self) -> String { "None".to_string() }
+    fn is_available(&self) -> bool {
+        false
+    }
+    fn biometric_type(&self) -> String {
+        "None".to_string()
+    }
     fn authenticate(&self, _reason: &str) -> Result<bool, PlatformError> {
         // CLI: no biometric, always allow
         Ok(true)
     }
-    fn is_enrolled(&self) -> bool { false }
+    fn is_enrolled(&self) -> bool {
+        false
+    }
 }
 
 // ============================================================================
@@ -289,8 +314,12 @@ impl PlatformInfo for CliPlatformInfo {
         format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)
     }
 
-    fn is_simulator(&self) -> bool { false }
-    fn is_foreground(&self) -> bool { true }
+    fn is_simulator(&self) -> bool {
+        false
+    }
+    fn is_foreground(&self) -> bool {
+        true
+    }
 }
 
 // ============================================================================
@@ -320,7 +349,9 @@ pub struct CliClipboard {
 
 impl CliClipboard {
     pub fn new() -> Self {
-        Self { content: Mutex::new(None) }
+        Self {
+            content: Mutex::new(None),
+        }
     }
 }
 

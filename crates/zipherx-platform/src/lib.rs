@@ -3,20 +3,20 @@
 //! Each platform (iOS, macOS, Android, Windows) provides its own implementation
 //! of these traits, which are injected into the Rust core at runtime.
 
-pub mod secure_storage;
 pub mod biometric_auth;
-pub mod platform_info;
-pub mod notifications;
 pub mod clipboard;
 pub mod logging;
+pub mod notifications;
+pub mod platform_info;
+pub mod secure_storage;
 pub mod test_impl;
 
-pub use secure_storage::SecureStorage;
 pub use biometric_auth::BiometricAuth;
-pub use platform_info::PlatformInfo;
-pub use notifications::Notifications;
 pub use clipboard::Clipboard;
 pub use logging::PlatformLogger;
+pub use notifications::Notifications;
+pub use platform_info::PlatformInfo;
+pub use secure_storage::SecureStorage;
 
 /// Errors from platform-specific operations.
 #[derive(Debug, thiserror::Error)]

@@ -11,19 +11,19 @@
 //!
 //! All APIs are idiomatic Rust. The C FFI layer lives in `zipherx-ffi`.
 
-pub mod types;
-pub mod mnemonic;
-pub mod keys;
 pub mod address;
+pub mod boost_scan;
+pub mod equihash;
+pub mod keys;
+pub mod mnemonic;
 pub mod notes;
-pub mod tree;
-pub mod witness;
 pub mod prover;
 pub mod transaction;
-pub mod equihash;
-pub mod boost_scan;
+pub mod tree;
+pub mod types;
 pub mod util;
+pub mod witness;
 pub mod zstd_decompress;
 
 // Re-export key types for convenience
-pub use types::{ZclassicNetwork, CryptoError};
+pub use types::{CryptoError, ZclassicNetwork};

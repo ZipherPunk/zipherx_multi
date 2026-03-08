@@ -456,7 +456,10 @@ pub fn try_sapling_raw_compact_decryption<P: consensus::Parameters>(
     epk_bytes: &[u8; 32],
     compact_ciphertext: &[u8; 52],
 ) -> Option<(u8, [u8; 11], u64, [u8; 32])> {
-    use chacha20::{ChaCha20, cipher::{KeyIvInit, StreamCipher, StreamCipherSeek}};
+    use chacha20::{
+        cipher::{KeyIvInit, StreamCipher, StreamCipherSeek},
+        ChaCha20,
+    };
 
     // Step 1: Parse ephemeral public key
     let ephemeral_key = EphemeralKeyBytes(*epk_bytes);

@@ -42,9 +42,7 @@ pub struct RecoveryResult {
 ///
 /// FIX #1168: Restore notes marked spent by phantom/rejected transactions.
 /// FIX #1169: Detect notes where `spent_in_tx` references a non-existent TX.
-pub async fn auto_recover(
-    db: Arc<WalletDatabase>,
-) -> Result<RecoveryResult, CoreError> {
+pub async fn auto_recover(db: Arc<WalletDatabase>) -> Result<RecoveryResult, CoreError> {
     let db_clone = db.clone();
 
     // Step 1: Get all pending/phantom transactions and restore notes
@@ -60,8 +58,7 @@ pub async fn auto_recover(
                     || tx.status == zipherx_storage::types::TxStatus::Rejected
                 {
                     // FIX #1168: Restore notes spent by this phantom TX
-                    let (count, value) =
-                        db_clone.restore_notes_spent_by_phantom_tx(&tx.txid)?;
+                    let (count, value) = db_clone.restore_notes_spent_by_phantom_tx(&tx.txid)?;
                     total_restored += count;
                     amount_restored += value;
 
@@ -102,17 +99,16 @@ pub async fn auto_recover(
 /// Check if recovery is needed (quick check, no modifications).
 pub async fn needs_recovery(db: Arc<WalletDatabase>) -> Result<bool, CoreError> {
     let db_clone = db.clone();
-    let has_phantoms: bool =
-        tokio::task::spawn_blocking(move || -> Result<bool, StorageError> {
-            let pending = db_clone.get_pending_transactions()?;
-            Ok(pending.iter().any(|tx| {
-                tx.status == zipherx_storage::types::TxStatus::Phantom
-                    || tx.status == zipherx_storage::types::TxStatus::Rejected
-            }))
-        })
-        .await
-        .map_err(|e: tokio::task::JoinError| CoreError::RuntimeError(e.to_string()))?
-        .map_err(|e: StorageError| CoreError::Storage(e.to_string()))?;
+    let has_phantoms: bool = tokio::task::spawn_blocking(move || -> Result<bool, StorageError> {
+        let pending = db_clone.get_pending_transactions()?;
+        Ok(pending.iter().any(|tx| {
+            tx.status == zipherx_storage::types::TxStatus::Phantom
+                || tx.status == zipherx_storage::types::TxStatus::Rejected
+        }))
+    })
+    .await
+    .map_err(|e: tokio::task::JoinError| CoreError::RuntimeError(e.to_string()))?
+    .map_err(|e: StorageError| CoreError::Storage(e.to_string()))?;
 
     Ok(has_phantoms)
 }

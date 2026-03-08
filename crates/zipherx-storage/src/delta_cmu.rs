@@ -218,10 +218,7 @@ impl DeltaCMUStore {
         let outputs = self.load_outputs()?;
         let mut sorted: Vec<&DeltaOutput> = outputs.iter().collect();
         sorted.sort_by_key(|o| (o.height, o.index));
-        let cmus = sorted
-            .iter()
-            .map(|o| (o.height, o.cmu.clone()))
-            .collect();
+        let cmus = sorted.iter().map(|o| (o.height, o.cmu.clone())).collect();
         Ok(cmus)
     }
 
@@ -239,10 +236,7 @@ impl DeltaCMUStore {
             .collect();
         // Sort by (height, index) to ensure correct intra-block ordering
         filtered.sort_by_key(|o| (o.height, o.index));
-        let cmus = filtered
-            .iter()
-            .map(|o| (o.height, o.cmu.clone()))
-            .collect();
+        let cmus = filtered.iter().map(|o| (o.height, o.cmu.clone())).collect();
         Ok(cmus)
     }
 
@@ -578,7 +572,8 @@ impl DeltaCMUStore {
             for i in 0..records_to_read {
                 let rec_offset = i * NULLIFIER_RECORD_SIZE;
                 let record = &buf[rec_offset..rec_offset + NULLIFIER_RECORD_SIZE];
-                let height = u32::from_le_bytes([record[0], record[1], record[2], record[3]]) as u64;
+                let height =
+                    u32::from_le_bytes([record[0], record[1], record[2], record[3]]) as u64;
                 if height >= min_height && height <= max_height {
                     result.push(parse_nullifier_record(record));
                 }
@@ -816,9 +811,15 @@ mod tests {
     #[test]
     fn test_append_and_load_outputs() {
         let (store, _dir) = test_store();
-        let outputs = vec![make_output(100, 0), make_output(100, 1), make_output(200, 0)];
+        let outputs = vec![
+            make_output(100, 0),
+            make_output(100, 1),
+            make_output(200, 0),
+        ];
 
-        let appended = store.append_outputs(&outputs, 100, 200, Some("aabbcc")).unwrap();
+        let appended = store
+            .append_outputs(&outputs, 100, 200, Some("aabbcc"))
+            .unwrap();
         assert_eq!(appended, 3);
         assert!(store.has_delta_bundle());
 
@@ -848,7 +849,11 @@ mod tests {
     fn test_load_cmus_sorted() {
         let (store, _dir) = test_store();
         // Insert out of order
-        let outputs = vec![make_output(300, 0), make_output(100, 0), make_output(200, 0)];
+        let outputs = vec![
+            make_output(300, 0),
+            make_output(100, 0),
+            make_output(200, 0),
+        ];
         store.append_outputs(&outputs, 100, 300, None).unwrap();
 
         let cmus = store.load_cmus().unwrap();
@@ -879,7 +884,9 @@ mod tests {
     fn test_manifest_roundtrip() {
         let (store, _dir) = test_store();
         let outputs = vec![make_output(100, 0)];
-        store.append_outputs(&outputs, 100, 100, Some("deadbeef")).unwrap();
+        store
+            .append_outputs(&outputs, 100, 100, Some("deadbeef"))
+            .unwrap();
 
         let manifest = store.get_manifest().unwrap().unwrap();
         assert_eq!(manifest.start_height, 100);
@@ -919,10 +926,7 @@ mod tests {
     #[test]
     fn test_sapling_roots_roundtrip() {
         let (store, _dir) = test_store();
-        let entries = vec![
-            (100u64, vec![0xAAu8; 32]),
-            (200u64, vec![0xBBu8; 32]),
-        ];
+        let entries = vec![(100u64, vec![0xAAu8; 32]), (200u64, vec![0xBBu8; 32])];
         store.append_sapling_roots_batch(&entries).unwrap();
 
         let loaded = store.load_sapling_roots().unwrap();

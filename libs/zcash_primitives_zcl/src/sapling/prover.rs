@@ -79,8 +79,24 @@ pub trait TxProver {
         value: u64,
         anchor: bls12_381::Scalar,
         merkle_path: sapling::MerklePath,
-    ) -> Result<([u8; GROTH_PROOF_SIZE], ValueCommitment, PublicKey, ValueCommitTrapdoor), ()> {
-        let _ = (proof_generation_key, diversifier, rseed, ar, value, anchor, merkle_path);
+    ) -> Result<
+        (
+            [u8; GROTH_PROOF_SIZE],
+            ValueCommitment,
+            PublicKey,
+            ValueCommitTrapdoor,
+        ),
+        (),
+    > {
+        let _ = (
+            proof_generation_key,
+            diversifier,
+            rseed,
+            ar,
+            value,
+            anchor,
+            merkle_path,
+        );
         unimplemented!("spend_proof_detached not available for this prover")
     }
 

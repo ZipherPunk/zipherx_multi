@@ -51,10 +51,7 @@ pub enum SyncStatus {
         total_bytes: u64,
     },
     /// Loading headers from boost file into HeaderStore.
-    BoostLoad {
-        loaded: u64,
-        total: u64,
-    },
+    BoostLoad { loaded: u64, total: u64 },
     /// Syncing block headers.
     HeaderSync {
         current_height: u64,
@@ -72,18 +69,14 @@ pub enum SyncStatus {
         notes_found: u32,
     },
     /// Filling gaps in delta bundle.
-    GapFill {
-        gaps_remaining: usize,
-    },
+    GapFill { gaps_remaining: usize },
     /// Updating witnesses with new CMUs.
     WitnessUpdate {
         notes_updated: usize,
         total_notes: usize,
     },
     /// Sync complete.
-    Complete {
-        height: u64,
-    },
+    Complete { height: u64 },
     /// Sync failed.
     Failed(String),
 }
@@ -661,15 +654,33 @@ mod tests {
         let heights = vec![100, 105, 110];
         let gaps = detect_gaps(&heights, 100, 110);
         assert_eq!(gaps.len(), 2);
-        assert_eq!(gaps[0], DeltaGap { start: 101, end: 104 });
-        assert_eq!(gaps[1], DeltaGap { start: 106, end: 109 });
+        assert_eq!(
+            gaps[0],
+            DeltaGap {
+                start: 101,
+                end: 104
+            }
+        );
+        assert_eq!(
+            gaps[1],
+            DeltaGap {
+                start: 106,
+                end: 109
+            }
+        );
     }
 
     #[test]
     fn test_detect_gaps_empty_input() {
         let gaps = detect_gaps(&[], 100, 200);
         assert_eq!(gaps.len(), 1);
-        assert_eq!(gaps[0], DeltaGap { start: 100, end: 200 });
+        assert_eq!(
+            gaps[0],
+            DeltaGap {
+                start: 100,
+                end: 200
+            }
+        );
     }
 
     #[test]
@@ -677,7 +688,13 @@ mod tests {
         let heights = vec![105, 106, 107];
         let gaps = detect_gaps(&heights, 100, 107);
         assert_eq!(gaps.len(), 1);
-        assert_eq!(gaps[0], DeltaGap { start: 100, end: 104 });
+        assert_eq!(
+            gaps[0],
+            DeltaGap {
+                start: 100,
+                end: 104
+            }
+        );
     }
 
     #[test]
@@ -685,7 +702,13 @@ mod tests {
         let heights = vec![100, 101, 102];
         let gaps = detect_gaps(&heights, 100, 110);
         assert_eq!(gaps.len(), 1);
-        assert_eq!(gaps[0], DeltaGap { start: 103, end: 110 });
+        assert_eq!(
+            gaps[0],
+            DeltaGap {
+                start: 103,
+                end: 110
+            }
+        );
     }
 
     // ---- Incomplete Delta Tests ----

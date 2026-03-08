@@ -219,12 +219,14 @@ impl PeerManager {
         // Add hardcoded seeds
         for addr_str in HARDCODED_SEEDS {
             let key = format!("{addr_str}:{DEFAULT_PORT}");
-            self.known_addresses.entry(key.clone()).or_insert(AddressInfo {
-                host: addr_str.to_string(),
-                port: DEFAULT_PORT,
-                last_attempt: None,
-                is_hardcoded: true,
-            });
+            self.known_addresses
+                .entry(key.clone())
+                .or_insert(AddressInfo {
+                    host: addr_str.to_string(),
+                    port: DEFAULT_PORT,
+                    last_attempt: None,
+                    is_hardcoded: true,
+                });
         }
 
         // Add discovered addresses
@@ -268,7 +270,11 @@ impl PeerManager {
                 join_set.spawn(async move {
                     let peer_id = format!("{host}:{port}");
                     let mut peer = Peer::new(host, port);
-                    let sem_ref = if tor.is_some() { Some(&*sem as &Semaphore) } else { None };
+                    let sem_ref = if tor.is_some() {
+                        Some(&*sem as &Semaphore)
+                    } else {
+                        None
+                    };
 
                     #[cfg(debug_assertions)]
                     eprintln!("[ZipherX] Connecting to {peer_id}...");
@@ -311,15 +317,14 @@ impl PeerManager {
                     let key = peer.id.clone();
                     self.peers.insert(key, peer);
                 }
-                // Early exit: once we have enough peers, abort remaining attempts
-                // (saves 15s waiting for timeout peers when enough are already connected)
-                if self.connected_count() >= self.config.consensus_threshold {
+                // Early exit: once we have min_peers, abort remaining slow attempts
+                if self.connected_count() >= self.config.min_peers {
                     join_set.abort_all();
                     break;
                 }
             }
 
-            if self.connected_count() >= self.config.consensus_threshold {
+            if self.connected_count() >= self.config.min_peers {
                 break;
             }
         }
@@ -352,11 +357,9 @@ impl PeerManager {
             let lookup = format!("{seed}:{DEFAULT_PORT}");
             #[cfg(debug_assertions)]
             eprintln!("[ZipherX] DNS lookup: {lookup}");
-            let dns_result = tokio::time::timeout(
-                Duration::from_secs(10),
-                tokio::net::lookup_host(lookup),
-            )
-            .await;
+            let dns_result =
+                tokio::time::timeout(Duration::from_secs(10), tokio::net::lookup_host(lookup))
+                    .await;
             match dns_result {
                 Ok(Ok(addrs)) => {
                     let mut count = 0;
@@ -476,7 +479,8 @@ impl PeerManager {
             eprintln!(
                 "[ZipherX] WARNING: Only {} peers connected (consensus_threshold = {}). \
                  Consensus height may be unreliable.",
-                heights.len(), CONSENSUS_THRESHOLD,
+                heights.len(),
+                CONSENSUS_THRESHOLD,
             );
         }
 
@@ -560,17 +564,18 @@ impl PeerManager {
 
     /// Park a peer (temporary backoff).
     pub fn park_peer(&mut self, key: &str) {
-        let entry = self.parked_peers.entry(key.to_string()).or_insert(ParkEntry {
-            parked_at: Instant::now(),
-            backoff: Duration::from_secs(30),
-            attempts: 0,
-        });
+        let entry = self
+            .parked_peers
+            .entry(key.to_string())
+            .or_insert(ParkEntry {
+                parked_at: Instant::now(),
+                backoff: Duration::from_secs(30),
+                attempts: 0,
+            });
         entry.parked_at = Instant::now();
         entry.attempts += 1;
         // Exponential backoff: 30s, 60s, 120s, 240s, max 600s
-        entry.backoff = Duration::from_secs(
-            (30 * (1u64 << entry.attempts.min(5))).min(600),
-        );
+        entry.backoff = Duration::from_secs((30 * (1u64 << entry.attempts.min(5))).min(600));
     }
 
     /// Check if a peer is parked.
@@ -589,10 +594,13 @@ impl PeerManager {
     /// Automatically disconnects and bans flooding peers.
     pub fn record_peer_message(&mut self, peer_id: &str) -> bool {
         let now = Instant::now();
-        let entry = self.rate_limits.entry(peer_id.to_string()).or_insert(RateLimitEntry {
-            message_count: 0,
-            window_start: now,
-        });
+        let entry = self
+            .rate_limits
+            .entry(peer_id.to_string())
+            .or_insert(RateLimitEntry {
+                message_count: 0,
+                window_start: now,
+            });
 
         // Reset window if more than 60 seconds have elapsed
         if now.duration_since(entry.window_start) >= Duration::from_secs(60) {
@@ -706,7 +714,8 @@ impl PeerManager {
         // Phase 3: Race all receivers — first response wins
         let result = tokio::time::timeout(timeout, async {
             // Use select_all pattern via a FuturesUnordered
-            let mut futs: tokio::task::JoinSet<Option<(String, Vec<u8>)>> = tokio::task::JoinSet::new();
+            let mut futs: tokio::task::JoinSet<Option<(String, Vec<u8>)>> =
+                tokio::task::JoinSet::new();
             for (pid, rx) in receivers {
                 futs.spawn(async move {
                     match rx.await {
@@ -758,9 +767,9 @@ impl PeerManager {
         }
 
         if accepted == 0 {
-            return Err(NetworkError::BroadcastFailed(
-                format!("0/{total} peers accepted the transaction"),
-            ));
+            return Err(NetworkError::BroadcastFailed(format!(
+                "0/{total} peers accepted the transaction"
+            )));
         }
 
         Ok((accepted, total))
@@ -867,10 +876,7 @@ mod tests {
     fn test_add_discovered_addresses() {
         let mut pm = PeerManager::new(PeerManagerConfig::default());
 
-        pm.add_discovered_addresses(vec![
-            ("1.2.3.4".into(), 8233),
-            ("5.6.7.8".into(), 8233),
-        ]);
+        pm.add_discovered_addresses(vec![("1.2.3.4".into(), 8233), ("5.6.7.8".into(), 8233)]);
 
         assert_eq!(pm.known_addresses.len(), 2);
 
