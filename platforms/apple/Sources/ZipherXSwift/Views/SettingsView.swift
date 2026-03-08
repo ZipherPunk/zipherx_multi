@@ -958,9 +958,9 @@ public struct SettingsView: View {
     private func deleteAllWalletData() {
         let storage = AppleSecureStorage()
         // Delete Keychain items
-        try? storage.deleteKey(identifier: "spending_key")
-        try? storage.deleteKey(identifier: "db_encryption_key")
-        try? storage.deleteKey(identifier: "screenshot_protection")
+        _ = try? storage.deleteKey(identifier: "spending_key")
+        _ = try? storage.deleteKey(identifier: "db_encryption_key")
+        _ = try? storage.deleteKey(identifier: "screenshot_protection")
 
         // Delete Application Support directory
         let appSupport: String
