@@ -1,105 +1,157 @@
-# ZipherX
+```
+ _______ _       _               __   __   __  __       _ _   _
+|__   __(_)     | |              \ \ / /  |  \/  |     | | | (_)
+   | |   _ _ __ | |__   ___ _ __ \ V /   | \  / |_   _| | |_ _
+   | |  | | '_ \| '_ \ / _ \ '__|> <    | |\/| | | | | | __| |
+   | |  | | |_) | | | |  __/ |  / . \   | |  | | |_| | | |_| |
+   |_|  |_| .__/|_| |_|\___|_| /_/ \_\  |_|  |_|\__,_|_|\__|_|
+           | |
+           |_|
+```
 
-**Privacy-first, multi-platform Zclassic (ZCL) shielded wallet.**
+# ZipherX Multi
 
-ZipherX is a non-custodial wallet that connects directly to the Zclassic peer-to-peer network. No central servers. No data collection. No intermediaries. Your keys never leave your device.
+**Your keys. Your coins. Your privacy. No exceptions.**
+
+ZipherX Multi is a non-custodial, multi-platform Zclassic (ZCL) shielded wallet built for people who believe financial privacy is a human right -- not a feature request.
+
+No central servers. No data collection. No intermediaries. No compromises.
+
+---
+
+## What is this?
+
+A wallet that connects *directly* to the Zclassic peer-to-peer network using **Sapling shielded transactions** (zk-SNARKs). Your private keys never leave your device. Nobody -- not us, not your ISP, not your government -- can see your balance or transaction history.
+
+**Runs on everything:** macOS, Windows, Linux, Android, iOS.
+
+One Rust core. Native UIs everywhere. Built with [UniFFI](https://mozilla.github.io/uniffi-rs/) because we don't believe in Electron.
+
+## Why?
+
+> *"Privacy is necessary for an open society in the electronic age. Privacy is not secrecy. A private matter is something one doesn't want the whole world to know, but a secret matter is something one doesn't want anybody to know. Privacy is the power to selectively reveal oneself to the world."*
+>
+> -- Eric Hughes, *A Cypherpunk's Manifesto* (1993)
+
+Because every transaction you make on a transparent blockchain is a confession. Because "I have nothing to hide" is the argument of someone who has never been targeted. Because Satoshi didn't invent Bitcoin so banks could track you better than before.
+
+ZipherX Multi exists because **privacy is the default, not the option.**
+
+---
 
 ## Features
 
-- **Sapling shielded transactions** -- full zk-SNARK privacy
-- **Non-custodial** -- your keys, your coins
-- **Direct P2P** -- connects to Zclassic nodes directly, no central server
-- **Tor support** -- optional onion routing for network-level privacy
-- **Boost sync** -- fast initial sync from commitment tree snapshots
-- **Cross-platform** -- macOS, Windows, Linux, Android, iOS
+| | |
+|---|---|
+| **Sapling shielded transactions** | Full zk-SNARK privacy. Your balance and transactions are cryptographically hidden. |
+| **Non-custodial** | Your keys live on YOUR device. We can't touch your funds. Nobody can. |
+| **Direct P2P** | Connects to Zclassic nodes directly. No central server to subpoena, hack, or shut down. |
+| **Tor built-in** | Optional onion routing. Hide your IP from the network itself. |
+| **Boost sync** | Fast initial sync from commitment tree snapshots. No waiting days for a full chain download. |
+| **Biometric auth** | Face ID / Touch ID / fingerprint to protect key export and dangerous operations. |
+| **Hardware-backed encryption** | Keys stored in Secure Enclave (Apple), StrongBox Keystore (Android), or encrypted file (Desktop). |
+| **Screenshot protection** | Optional screen capture blocking on mobile. |
+| **Security audit** | Built-in audit report showing your wallet's security posture. |
 
-## Architecture
+---
 
-```
-crates/
-  zipherx-core/       Core wallet logic (sync, send, scan)
-  zipherx-crypto/     Sapling cryptography, commitment tree, provers
-  zipherx-network/    P2P networking, header sync, block fetcher
-  zipherx-storage/    SQLite database, encrypted storage
-  zipherx-ffi/        UniFFI bridge (Rust -> Kotlin/Swift)
-  zipherx-tor/        Tor client integration
-  zipherx-platform/   Platform abstraction layer
+## Quick Start
 
-platforms/
-  desktop/            Compose Desktop (macOS, Windows, Linux)
-  android/            Android (Kotlin + Jetpack Compose)
-  apple/              iOS / macOS (SwiftUI)
-  cli/                Command-line interface
-```
-
-The Rust core is shared across all platforms via [UniFFI](https://mozilla.github.io/uniffi-rs/). Platform-specific UI is written in Compose (Desktop/Android) and SwiftUI (iOS/macOS).
-
-## Prerequisites
-
-- **Rust** (stable, via [rustup](https://rustup.rs/))
-- **Platform-specific:**
-  - Desktop: JDK 17+, Gradle
-  - Android: Android SDK, NDK, `cargo-ndk`
-  - iOS: Xcode 15+, `xcodegen`
-
-## Building
-
-### Desktop (macOS / Windows / Linux)
+### 1. Get the code
 
 ```bash
-# 1. Build the Rust FFI library
-./scripts/build-all.sh
-
-# 2. Run the desktop app
-cd platforms/desktop && ./gradlew run
+git clone https://github.com/ZipherPunk/zipherx_multi.git
+cd zipherx_multi
 ```
 
-### Android
+### 2. Build for your platform
 
+**Desktop (macOS / Windows / Linux):**
 ```bash
-# 1. Build Rust for Android targets
+./scripts/build-desktop.sh run
+```
+
+**Android:**
+```bash
 ./scripts/build-android.sh
-
-# 2. Build APK
-cd platforms/android && ./gradlew assembleDebug
+# Open platforms/android in Android Studio -> Run
 ```
 
-The APK will be at `platforms/android/build/outputs/apk/debug/`.
-
-### iOS
-
+**iOS / macOS (SwiftUI):**
 ```bash
-# 1. Build Rust for iOS Simulator
-./scripts/build-ios-sim.sh
-
-# 2. Open in Xcode
-open platforms/apple/ZipherXApp.xcodeproj
+./scripts/build-macos.sh        # macOS
+./scripts/build-ios-sim.sh      # iOS Simulator
+open platforms/apple/ZipherXApp.xcodeproj   # Cmd+R
 ```
 
-### CLI
-
+**CLI (for the true cypherpunks):**
 ```bash
 cargo run -p zipherx-cli
 ```
 
-## Usage
+**Everything at once:**
+```bash
+./scripts/build-all-ui.sh
+```
 
-1. **First launch** -- read and accept the disclaimer
-2. **Create or restore** -- generate a new wallet or restore from a 24-word recovery phrase
-3. **Set a password** -- encrypts your wallet on disk
-4. **Sync** -- the wallet syncs with the Zclassic network (first sync uses boost for speed)
-5. **Receive** -- copy your shielded address
-6. **Send** -- enter a destination address and amount
+### 3. Use it
 
-### Important
+See the **[User Guide](USER_GUIDE.md)** for the full walkthrough.
 
-- **Back up your recovery phrase** -- write it down on paper, store it offline. If you lose it, your funds are gone forever.
-- **This is beta software** -- do not use with funds you cannot afford to lose.
+**TL;DR:** Launch -> Accept disclaimer -> Create wallet (or restore from 24 words) -> Set password -> Sync -> You're private.
+
+---
+
+## Architecture
+
+```
+                    +------------------+
+                    |    ZipherX Multi |
+                    +--------+---------+
+                             |
+            +----------------+----------------+
+            |                |                |
+     +------+------+  +-----+------+  +------+------+
+     |   SwiftUI   |  |  Compose   |  |     CLI     |
+     | iOS / macOS |  | Desktop /  |  |  Terminal   |
+     |             |  |  Android   |  |             |
+     +------+------+  +-----+------+  +------+------+
+            |                |                |
+            +--------+-------+--------+-------+
+                     |       UniFFI          |
+            +--------+----------------------+--------+
+            |              Rust Core                  |
+            |                                         |
+            |  zipherx-core     Sync, send, scan      |
+            |  zipherx-crypto   Sapling, trees, proofs|
+            |  zipherx-network  P2P, headers, blocks  |
+            |  zipherx-storage  Encrypted SQLite      |
+            |  zipherx-tor      Tor client            |
+            |  zipherx-ffi      FFI bridge            |
+            +-----------------------------------------+
+```
+
+**Why Rust?** Because memory safety isn't optional when you're handling private keys. Because we wanted one codebase that runs everywhere without garbage collection pauses. Because cypherpunks write Rust.
+
+---
+
+## Prerequisites
+
+| Platform | Requirements |
+|----------|-------------|
+| **All** | [Rust](https://rustup.rs/) (stable) |
+| **Desktop** | JDK 17+, Gradle |
+| **Android** | Android SDK + NDK, `cargo install cargo-ndk` |
+| **iOS/macOS** | Xcode 15+, `xcodegen` |
+| **Windows** (cross-compile) | `cargo install cargo-xwin`, `brew install mingw-w64` |
+| **Linux Desktop** (from macOS) | Docker Desktop |
+
+---
 
 ## Testing
 
 ```bash
-# Run Rust tests (per-crate to avoid feature conflicts)
+# Per-crate tests (avoids feature conflicts)
 cargo test -p zipherx-platform
 cargo test -p zipherx-crypto
 cargo test -p zipherx-storage
@@ -108,26 +160,76 @@ cargo test -p zipherx-core
 cargo test -p zipherx-ffi
 ```
 
+---
+
 ## Security
 
-ZipherX is beta software. If you discover a security vulnerability, please report it responsibly.
+ZipherX Multi takes security seriously:
 
-- **Non-custodial**: Private keys are stored on-device with hardware-backed encryption (Keychain on Apple, Keystore on Android, encrypted file on Desktop)
-- **No telemetry**: Zero data collection, no analytics, no tracking
-- **Tor optional**: Route all network traffic through the Tor network
-- **Open source**: Full source code available for audit
+- **Non-custodial**: Private keys stored on-device with hardware-backed encryption
+- **Zero telemetry**: No analytics, no tracking, no data collection, no phone home
+- **Tor integration**: Route all traffic through the Tor network
+- **Open source**: Every line of code is auditable
+- **Hardened runtime**: macOS builds use Hardened Runtime + App Sandbox
+- **Biometric gating**: Key export and destructive operations require biometric authentication
 
-## License
-
-[MIT License](LICENSE)
-
-## Disclaimer
-
-**Read the full [DISCLAIMER](DISCLAIMER.md) before using this software.**
-
-ZipherX is provided "as is" without warranty of any kind. You are solely responsible for your use of this software and for securing your private keys. Do not use with funds you cannot afford to lose.
+**Found a vulnerability?** Open a GitHub issue or contact us responsibly. We take every report seriously.
 
 ---
 
-> *"Privacy is necessary for an open society in the electronic age."*
-> -- Eric Hughes, *A Cypherpunk's Manifesto* (1993)
+## Distribution
+
+```bash
+# Build, test, and package all platforms
+./scripts/distribute.sh
+
+# Output: dist/zipherx-VERSION/
+#   ZipherX-VERSION-macos.dmg
+#   ZipherX-VERSION-release.apk
+#   ZipherX-VERSION-release.aab
+#   ZipherX-VERSION-linux.deb
+#   zipherx-cli-macos-arm64
+#   zipherx-cli-linux-x86_64
+#   zipherx-cli-windows-x86_64.exe
+#   SHA256SUMS.txt
+```
+
+---
+
+## Contributing
+
+PRs welcome. Read the code first. Understand the architecture. Write tests. Don't break privacy guarantees.
+
+If you're adding a feature, ask yourself: *"Does this respect the user's sovereignty over their own money?"* If the answer is anything but an unequivocal yes, don't submit it.
+
+---
+
+## License
+
+[MIT License](LICENSE) -- because freedom means freedom.
+
+---
+
+## Disclaimer
+
+**Read the full [DISCLAIMER](DISCLAIMER.md) and [LEGAL NOTICE](LEGAL_NOTICE.md) before using this software.**
+
+ZipherX Multi is provided "as is" without warranty of any kind. You are solely responsible for your use of this software and for securing your private keys.
+
+**This is beta software. Do not use with funds you cannot afford to lose.**
+
+---
+
+<p align="center">
+
+*Built by cypherpunks, for cypherpunks.*
+
+*We write code. We don't keep logs.*
+
+</p>
+
+---
+
+> *"Cypherpunks write code. We know that someone has to write software to defend privacy, and since we can't get privacy unless we all do, we're going to write it."*
+>
+> -- Eric Hughes, 1993
