@@ -4,8 +4,9 @@ use std::io::{Read, Write};
 
 use crate::types::CryptoError;
 
-/// Maximum decompressed size: 2 GB. Prevents decompression bomb attacks (M-7).
-const MAX_DECOMPRESS_SIZE: usize = 2_147_483_648;
+/// Maximum decompressed size: 8 GB. Prevents decompression bomb attacks (M-7).
+/// The boost file decompresses to ~3.5–4 GB; 8 GB allows future growth.
+const MAX_DECOMPRESS_SIZE: usize = 8_589_934_592;
 
 /// Chunk size for incremental decompression reads.
 const DECOMPRESS_CHUNK_SIZE: usize = 1024 * 1024; // 1 MB

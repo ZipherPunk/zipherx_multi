@@ -344,6 +344,48 @@ pub fn witness_count() -> Result<u64, CryptoError> {
     Ok(witnesses.len() as u64)
 }
 
+/// FIX #827: Verify witness internal consistency.
+///
+/// Deserializes the witness and checks that it has a valid path.
+/// This matches the official ZipherX validation: the witness must be
+/// deserializable and have a valid merkle path.
+///
+/// Does NOT check against HeaderStore — the network validates the anchor
+/// when the transaction is broadcast.
+pub fn verify_witness_consistency(witness_data: &[u8]) -> Result<(), CryptoError> {
+    verify_witness_and_get_root(witness_data)?;
+    Ok(())
+}
+
+/// FIX #827 + anchor validation: Verify witness internal consistency AND return its root.
+///
+/// Deserializes the witness, checks that it has a valid path, and returns
+/// the tree root (anchor) that the network will validate. The caller can
+/// then check this anchor against the HeaderStore to verify it exists on-chain.
+pub fn verify_witness_and_get_root(witness_data: &[u8]) -> Result<[u8; 32], CryptoError> {
+    if witness_data.len() < 100 {
+        return Err(CryptoError::WitnessError(format!(
+            "Witness too short: {} bytes",
+            witness_data.len()
+        )));
+    }
+
+    let mut reader = Cursor::new(witness_data);
+    let witness: IncrementalWitness<Node, 32> =
+        read_incremental_witness(&mut reader).map_err(|e| {
+            CryptoError::WitnessError(format!("Witness deserialization failed: {e:?}"))
+        })?;
+
+    // Verify the witness has a valid path (same check as TX builder)
+    if witness.path().is_none() {
+        return Err(CryptoError::WitnessError(
+            "Witness path is None — corrupted".into(),
+        ));
+    }
+
+    root_to_bytes(&witness.root())
+}
+
 /// Clear all witnesses (does NOT clear the tree).
 pub fn clear_witnesses() -> Result<u64, CryptoError> {
     let mut witnesses = WITNESSES

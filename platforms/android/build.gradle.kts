@@ -112,6 +112,9 @@ dependencies {
     // Process lifecycle (foreground detection)
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
 
+    // QR code generation
+    implementation("com.google.zxing:core:3.5.3")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

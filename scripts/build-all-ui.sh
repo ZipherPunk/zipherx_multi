@@ -2,16 +2,16 @@
 set -euo pipefail
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║       ZipherX — Build ALL UI Platforms (no CLI-only)        ║
+# ║          ZipherX — Build ALL UI Platforms                    ║
 # ║                                                              ║
-# ║  Builds: macOS Desktop, iOS, Android, Windows Desktop,      ║
-# ║          Linux Desktop — all with GUI support.               ║
+# ║  Desktop: egui (macOS / Linux / Windows)                     ║
+# ║  Mobile:  Android (Kotlin via FFI)                           ║
 # ║                                                              ║
 # ║  Usage: ./scripts/build-all-ui.sh [OPTIONS]                 ║
-# ║    --skip-android   Skip Android (requires cargo-ndk + NDK) ║
-# ║    --skip-windows   Skip Windows (requires cargo-xwin)      ║
-# ║    --skip-linux     Skip Linux desktop                      ║
-# ║    --skip-ios       Skip iOS Simulator                      ║
+# ║    --skip-android    Skip Android (requires cargo-ndk + NDK)║
+# ║    --skip-windows    Skip Windows egui cross-compile        ║
+# ║    --skip-linux      Skip Linux egui cross-compile          ║
+# ║    --skip-egui       Skip native egui desktop build         ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,24 +29,26 @@ fi
 SKIP_ANDROID=false
 SKIP_WINDOWS=false
 SKIP_LINUX=false
-SKIP_IOS=false
+SKIP_EGUI=false
 
 for arg in "$@"; do
     case "$arg" in
         --skip-android)  SKIP_ANDROID=true ;;
         --skip-win*)     SKIP_WINDOWS=true ;;
         --skip-linux)    SKIP_LINUX=true ;;
-        --skip-ios)      SKIP_IOS=true ;;
+        --skip-egui)     SKIP_EGUI=true ;;
         --help|-h)
             echo "Usage: ./scripts/build-all-ui.sh [OPTIONS]"
             echo ""
-            echo "Builds all UI platforms (Desktop + Mobile)."
+            echo "Builds all UI platforms:"
+            echo "  Desktop: egui (macOS/Linux/Windows)"
+            echo "  Mobile:  Android (Kotlin)"
             echo ""
             echo "Options:"
             echo "  --skip-android   Skip Android (requires cargo-ndk + NDK)"
-            echo "  --skip-windows   Skip Windows desktop (requires cargo-xwin + mingw-w64)"
-            echo "  --skip-linux     Skip Linux desktop"
-            echo "  --skip-ios       Skip iOS Simulator"
+            echo "  --skip-windows   Skip Windows egui cross-compile (requires cargo-xwin + mingw-w64)"
+            echo "  --skip-linux     Skip Linux egui cross-compile (requires cross or linux target)"
+            echo "  --skip-egui      Skip native egui desktop build"
             echo "  --help           Show this help"
             exit 0
             ;;
@@ -75,17 +77,6 @@ if command -v cargo &>/dev/null; then
 else
     echo "  [!!] cargo not found — install Rust: https://rustup.rs"
     PREREQ_OK=false
-fi
-
-# iOS
-if [ "$SKIP_IOS" = false ]; then
-    if rustup target list --installed 2>/dev/null | grep -q "aarch64-apple-ios-sim"; then
-        echo "  [OK] rustup target aarch64-apple-ios-sim"
-    else
-        echo "  [--] iOS Simulator target missing — skipping"
-        echo "       Install with: rustup target add aarch64-apple-ios-sim"
-        SKIP_IOS=true
-    fi
 fi
 
 # Android
@@ -118,7 +109,7 @@ if [ "$SKIP_ANDROID" = false ]; then
     fi
 fi
 
-# Windows
+# Windows cross-compile
 if [ "$SKIP_WINDOWS" = false ]; then
     if command -v cargo-xwin &>/dev/null; then
         echo "  [OK] cargo-xwin"
@@ -138,6 +129,29 @@ if [ "$SKIP_WINDOWS" = false ]; then
     fi
 fi
 
+# Linux cross-compile
+if [ "$SKIP_LINUX" = false ]; then
+    HOST_OS="$(uname -s)"
+    if [ "$HOST_OS" = "Linux" ]; then
+        echo "  [OK] Linux native — egui will build natively"
+        # On Linux, the native egui build IS the Linux build — skip duplicate
+        SKIP_LINUX=true
+    elif command -v cross &>/dev/null; then
+        echo "  [OK] cross (Linux cross-compile)"
+    else
+        if rustup target list --installed 2>/dev/null | grep -q "x86_64-unknown-linux-gnu"; then
+            echo "  [OK] rustup target x86_64-unknown-linux-gnu"
+            echo "  [!!] Note: Cross-compiling to Linux from macOS requires a linker + sysroot"
+            echo "       Consider using 'cross' or building on actual Linux / Linux CI"
+            SKIP_LINUX=true
+        else
+            echo "  [--] Linux cross-compile requires 'cross' — skipping"
+            echo "       Install with: cargo install cross"
+            SKIP_LINUX=true
+        fi
+    fi
+fi
+
 echo ""
 
 if [ "$PREREQ_OK" = false ]; then
@@ -147,11 +161,16 @@ fi
 
 # ── Count platforms ──────────────────────────────────────────────
 
-PLATFORM_COUNT=1  # macOS Desktop always builds
-[ "$SKIP_IOS" = false ]     && PLATFORM_COUNT=$((PLATFORM_COUNT + 1))
+PLATFORM_COUNT=0
+[ "$SKIP_EGUI" = false ]    && PLATFORM_COUNT=$((PLATFORM_COUNT + 1))
 [ "$SKIP_ANDROID" = false ] && PLATFORM_COUNT=$((PLATFORM_COUNT + 1))
 [ "$SKIP_WINDOWS" = false ] && PLATFORM_COUNT=$((PLATFORM_COUNT + 1))
 [ "$SKIP_LINUX" = false ]   && PLATFORM_COUNT=$((PLATFORM_COUNT + 1))
+
+if [ "$PLATFORM_COUNT" -eq 0 ]; then
+    echo "  Nothing to build — all platforms skipped."
+    exit 0
+fi
 
 echo "── Building ${PLATFORM_COUNT} UI platforms ──"
 echo ""
@@ -161,38 +180,21 @@ NAMES=()
 LOGS=()
 N=1
 
-# ── 1. macOS (SwiftUI + Compose Desktop) ────────────────────────
+# ── 1. Desktop egui (native — macOS/Linux) ────────────────────────
 
-echo "  [${N}/${PLATFORM_COUNT}] macOS — SwiftUI app + Compose Desktop dylib..."
-(
-    # Build FFI static lib + Swift bindings for Xcode
-    ./scripts/build-macos.sh
-    # Also build dylib for Compose Desktop on macOS
-    cargo build -p zipherx-ffi --release
-    DESKTOP_RES="platforms/desktop/src/main/resources"
-    mkdir -p "${DESKTOP_RES}"
-    cp target/release/libzipherx_ffi.dylib "${DESKTOP_RES}/"
-) > "${LOG_DIR}/macos.log" 2>&1 &
-PIDS+=($!)
-NAMES+=("macOS (SwiftUI + Desktop)")
-LOGS+=("${LOG_DIR}/macos.log")
-N=$((N + 1))
-
-# ── 2. iOS Simulator ────────────────────────────────────────────
-
-if [ "$SKIP_IOS" = false ]; then
-    echo "  [${N}/${PLATFORM_COUNT}] iOS Simulator (aarch64-apple-ios-sim)..."
-    ./scripts/build-ios-sim.sh > "${LOG_DIR}/ios-sim.log" 2>&1 &
+if [ "$SKIP_EGUI" = false ]; then
+    echo "  [${N}/${PLATFORM_COUNT}] Desktop egui (native --release)..."
+    cargo build -p zipherx-gui --release > "${LOG_DIR}/egui.log" 2>&1 &
     PIDS+=($!)
-    NAMES+=("iOS Simulator")
-    LOGS+=("${LOG_DIR}/ios-sim.log")
+    NAMES+=("Desktop egui (native)")
+    LOGS+=("${LOG_DIR}/egui.log")
     N=$((N + 1))
 fi
 
-# ── 3. Android ──────────────────────────────────────────────────
+# ── 2. Android ──────────────────────────────────────────────────
 
 if [ "$SKIP_ANDROID" = false ]; then
-    echo "  [${N}/${PLATFORM_COUNT}] Android (arm64-v8a + x86_64)..."
+    echo "  [${N}/${PLATFORM_COUNT}] Android (Kotlin — arm64-v8a + x86_64)..."
     ./scripts/build-android.sh > "${LOG_DIR}/android.log" 2>&1 &
     PIDS+=($!)
     NAMES+=("Android")
@@ -200,25 +202,32 @@ if [ "$SKIP_ANDROID" = false ]; then
     N=$((N + 1))
 fi
 
-# ── 4. Windows Desktop (cross-compile FFI DLL) ──────────────────
+# ── 3. Windows egui (cross-compile) ─────────────────────────────
+# NOTE: Windows cross-compile from macOS/Linux may fail because OpenSSL's
+# build system requires a Windows-compatible Perl (Strawberry Perl).
+# The rusqlite bundled-sqlcipher-vendored-openssl feature triggers this.
+# Build on actual Windows or Windows CI if this fails.
 
 if [ "$SKIP_WINDOWS" = false ]; then
-    echo "  [${N}/${PLATFORM_COUNT}] Windows Desktop (x86_64-pc-windows-msvc DLL)..."
-    ./scripts/build-windows.sh desktop > "${LOG_DIR}/windows-desktop.log" 2>&1 &
+    echo "  [${N}/${PLATFORM_COUNT}] Windows egui (x86_64-pc-windows-msvc)..."
+    echo "    NOTE: May fail on macOS — OpenSSL requires Windows Perl for cross-compile"
+    cargo xwin build -p zipherx-gui --release --target x86_64-pc-windows-msvc > "${LOG_DIR}/egui-windows.log" 2>&1 &
     PIDS+=($!)
-    NAMES+=("Windows Desktop")
-    LOGS+=("${LOG_DIR}/windows-desktop.log")
+    NAMES+=("Windows egui")
+    LOGS+=("${LOG_DIR}/egui-windows.log")
     N=$((N + 1))
 fi
 
-# ── 5. Linux Desktop (native FFI .so) ───────────────────────────
+# ── 4. Linux egui (cross-compile via `cross`) ───────────────────
+# Only runs when NOT on Linux (on Linux the native build covers it)
 
 if [ "$SKIP_LINUX" = false ]; then
-    echo "  [${N}/${PLATFORM_COUNT}] Linux Desktop (native .so)..."
-    ./scripts/build-linux.sh desktop > "${LOG_DIR}/linux-desktop.log" 2>&1 &
+    echo "  [${N}/${PLATFORM_COUNT}] Linux egui (x86_64-unknown-linux-gnu via cross)..."
+    cross build -p zipherx-gui --release --target x86_64-unknown-linux-gnu > "${LOG_DIR}/egui-linux.log" 2>&1 &
     PIDS+=($!)
-    NAMES+=("Linux Desktop")
-    LOGS+=("${LOG_DIR}/linux-desktop.log")
+    NAMES+=("Linux egui")
+    LOGS+=("${LOG_DIR}/egui-linux.log")
+    N=$((N + 1))
 fi
 
 # ── Wait ────────────────────────────────────────────────────────
@@ -264,17 +273,17 @@ echo ""
 echo "── Output Artifacts ──"
 echo ""
 
-# macOS SwiftUI
-MACOS_LIB="platforms/apple/Generated/lib/libzipherx_ffi.a"
-[ -f "$MACOS_LIB" ] && echo "  macOS SwiftUI:     ${MACOS_LIB} ($(du -h "$MACOS_LIB" | cut -f1))"
+# Desktop egui (native)
+EGUI_BIN="target/release/zipherx-gui"
+[ -f "$EGUI_BIN" ] && echo "  Desktop egui:      ${EGUI_BIN} ($(du -h "$EGUI_BIN" | cut -f1))"
 
-# macOS Desktop (Compose)
-DESKTOP_DYLIB="platforms/desktop/src/main/resources/libzipherx_ffi.dylib"
-[ -f "$DESKTOP_DYLIB" ] && echo "  macOS Desktop:     ${DESKTOP_DYLIB} ($(du -h "$DESKTOP_DYLIB" | cut -f1))"
+# Desktop egui (Windows)
+EGUI_WIN="target/x86_64-pc-windows-msvc/release/zipherx-gui.exe"
+[ -f "$EGUI_WIN" ] && echo "  Windows egui:      ${EGUI_WIN} ($(du -h "$EGUI_WIN" | cut -f1))"
 
-# iOS
-IOS_LIB="platforms/apple/Generated/lib-ios-sim/libzipherx_ffi.a"
-[ -f "$IOS_LIB" ] && echo "  iOS Simulator:     ${IOS_LIB} ($(du -h "$IOS_LIB" | cut -f1))"
+# Desktop egui (Linux)
+EGUI_LINUX="target/x86_64-unknown-linux-gnu/release/zipherx-gui"
+[ -f "$EGUI_LINUX" ] && echo "  Linux egui:        ${EGUI_LINUX} ($(du -h "$EGUI_LINUX" | cut -f1))"
 
 # Android
 ANDROID_ARM="platforms/android/src/main/jniLibs/arm64-v8a/libzipherx_ffi.so"
@@ -282,17 +291,7 @@ ANDROID_ARM="platforms/android/src/main/jniLibs/arm64-v8a/libzipherx_ffi.so"
 ANDROID_X86="platforms/android/src/main/jniLibs/x86_64/libzipherx_ffi.so"
 [ -f "$ANDROID_X86" ] && echo "  Android x86_64:    ${ANDROID_X86} ($(du -h "$ANDROID_X86" | cut -f1))"
 
-# Windows Desktop
-WIN_DLL="target/x86_64-pc-windows-msvc/release/zipherx_ffi.dll"
-[ -f "$WIN_DLL" ] && echo "  Windows Desktop:   ${WIN_DLL} ($(du -h "$WIN_DLL" | cut -f1))"
-
-# Linux Desktop
-LINUX_SO="platforms/desktop/src/main/resources/libzipherx_ffi.so"
-[ -f "$LINUX_SO" ] && echo "  Linux Desktop:     ${LINUX_SO} ($(du -h "$LINUX_SO" | cut -f1))"
-
 # Bindings
-SWIFT_BINDINGS="platforms/apple/Generated/swift/zipherx.swift"
-[ -f "$SWIFT_BINDINGS" ] && echo "  Swift bindings:    ${SWIFT_BINDINGS}"
 KT_DIR="platforms/android/src/main/kotlin/uniffi/zipherx"
 [ -d "$KT_DIR" ] && echo "  Kotlin bindings:   ${KT_DIR}/"
 
@@ -303,12 +302,12 @@ echo ""
 if [ $FAILED -gt 0 ]; then
     echo "── Failed Builds (last 10 lines) ──"
     echo ""
-    for name in "${FAILED_NAMES[@]}"; do
-        LOG_NAME=$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr ' ()' '--' | sed 's/--*/-/g; s/-$//')
-        for LOG_FILE in "${LOG_DIR}"/*.log; do
-            if echo "$name" | grep -qi "$(basename "$LOG_FILE" .log | tr '-' ' ')"; then
+    for i in "${!FAILED_NAMES[@]}"; do
+        name="${FAILED_NAMES[$i]}"
+        for j in "${!NAMES[@]}"; do
+            if [ "${NAMES[$j]}" = "$name" ]; then
                 echo "  ${name}:"
-                tail -10 "$LOG_FILE" | sed 's/^/    /'
+                tail -10 "${LOGS[$j]}" | sed 's/^/    /'
                 echo ""
                 break
             fi
@@ -321,14 +320,8 @@ fi
 
 echo "── Next Steps ──"
 echo ""
-echo "  macOS SwiftUI:   open platforms/apple/ZipherXApp.xcodeproj  ->  Cmd+R"
-echo "  macOS Desktop:   cd platforms/desktop && ./gradlew run"
-echo "  iOS Simulator:   Xcode -> ZipherXApp-iOS scheme -> iPhone Simulator -> Cmd+R"
-echo "  Android:         open -a 'Android Studio' platforms/android -> Run"
-[ "$SKIP_WINDOWS" = false ] && echo "  Windows Desktop:  Copy platforms/desktop/ + DLL to Windows -> gradlew.bat run"
-[ "$SKIP_LINUX" = false ]   && echo "  Linux Desktop:    cd platforms/desktop && ./gradlew run  (on Linux)"
-echo ""
-echo "  Package installers (run on target OS):"
-echo "    cd platforms/desktop && ./gradlew packageDistributionForCurrentOS"
-echo "    -> .dmg (macOS) | .msi (Windows) | .deb/.rpm (Linux)"
+[ "$SKIP_EGUI" = false ]    && echo "  Desktop (egui):     ./target/release/zipherx-gui"
+[ "$SKIP_ANDROID" = false ] && echo "  Android:            open -a 'Android Studio' platforms/android -> Run"
+[ "$SKIP_WINDOWS" = false ] && echo "  Windows (egui):     Copy target/x86_64-pc-windows-msvc/release/zipherx-gui.exe to Windows"
+[ "$SKIP_LINUX" = false ]   && echo "  Linux (egui):       Copy target/x86_64-unknown-linux-gnu/release/zipherx-gui to Linux"
 echo ""

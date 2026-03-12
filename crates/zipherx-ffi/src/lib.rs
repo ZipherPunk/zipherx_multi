@@ -158,6 +158,9 @@ pub struct WalletConfigFFI {
     pub account_index: u32,
     /// Optional 32-byte encryption key for SQLCipher database encryption.
     pub db_encryption_key: Option<Vec<u8>>,
+    /// Optional directory for boost file cache (large files: 2-4 GB).
+    /// On Android, should point to external storage to avoid filling internal storage.
+    pub boost_cache_dir: Option<String>,
 }
 
 pub struct WalletSummaryFFI {
@@ -219,6 +222,7 @@ pub trait SyncProgressCallback: Send + Sync {
     fn on_progress(&self, phase: String, current: u64, target: u64);
     fn on_complete(&self, height: u64);
     fn on_error(&self, message: String);
+    fn on_mempool_tx(&self, txid: String, amount: u64);
 }
 
 pub trait SendProgressCallback: Send + Sync {
@@ -251,6 +255,11 @@ static IS_SENDING: AtomicBool = AtomicBool::new(false);
 
 /// RF-23: Cached sync progress (f64 stored as u64 bits). Updated by sync callback.
 static SYNC_PROGRESS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// When true, the background sync loop uses a 10s interval instead of 30s
+/// to detect TX confirmations faster. Set by mobile platforms after broadcast,
+/// cleared when confirmation is detected.
+static PENDING_TX_FAST_POLL: AtomicBool = AtomicBool::new(false);
 
 /// RF-25: Guard to prevent concurrent `initialize_wallet` calls.
 /// `OnceLock::set` is safe, but two threads can race past the `is_some()`
@@ -491,6 +500,7 @@ fn initialize_wallet(config: WalletConfigFFI) -> Result<(), WalletError> {
         output_params_path: config.output_params_path,
         account_index: config.account_index,
         db_encryption_key: db_key,
+        boost_cache_dir: config.boost_cache_dir,
     };
 
     let wallet = match runtime::block_on(AsyncWallet::initialize(wallet_config))
@@ -919,6 +929,7 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
 
     let cb_complete = callback.clone();
     let cb_error = callback.clone();
+    let cb_mempool = callback.clone();
     let cb_bg = callback;
     // NOTE: `.to_vec()` on SecureVec goes through Deref<Target=[u8]> and creates
     // an intermediate heap allocation. The new SecureVec wraps it immediately and
@@ -926,6 +937,41 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
     // is an inherent limitation of Rust's allocator (no guaranteed zeroing of freed
     // memory). Mitigated by the short lifetime and SecureVec's volatile zeroing.
     let sk_bg = SecureVec(sk_bytes.to_vec());
+
+    // Event-driven mempool detection: set callback on peer manager BEFORE sync.
+    // Block listeners handle inv→getdata→tx internally and fire this callback
+    // with raw TX bytes. Trial decryption happens synchronously in the callback.
+    {
+        let sk_mempool = sk_bg.0.clone();
+        let cb_mp = cb_mempool.clone();
+        let detector = zipherx_core::mempool_monitor::MempoolDetector::new(
+            sk_mempool,
+            std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
+                cb_mp.on_mempool_tx(info.txid, info.amount);
+            }),
+        );
+        let mempool_callback = detector.into_callback();
+        runtime::block_on(async {
+            let mut pm = wallet.peer_manager.lock().await;
+            pm.set_on_mempool_tx_data(mempool_callback);
+        }).ok();
+    }
+
+    // New-block notification: when any peer sends inv MSG_BLOCK, wake the
+    // background sync loop immediately instead of waiting for the 30s timer.
+    let new_block_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+    {
+        let notify = new_block_notify.clone();
+        runtime::block_on(async {
+            let mut pm = wallet.peer_manager.lock().await;
+            pm.set_on_new_block(std::sync::Arc::new(move || {
+                notify.notify_one();
+            }));
+        }).ok();
+    }
+
+    #[cfg(debug_assertions)]
+    eprintln!("[ZipherX] FFI: mempool detector + new-block notify set (event-driven)");
 
     let handle = runtime::spawn(async move {
         // ── Pause Tor during initial sync (boost download + delta sync) ──
@@ -1004,16 +1050,50 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                 );
                 cb_complete.on_complete(height);
 
-                // Phase 2: Background monitoring loop (no progress UI)
-                // 30s interval — fast enough to catch blocks quickly after broadcast
+                // Phase 2a: Request mempool inventories from all connected peers.
+                // BIP 35: "mempool" message tells peers to send inv for ALL their
+                // mempool TXs. Without this, peers only announce TXs that arrive
+                // AFTER the connection — TXs already in their mempool are silent.
+                // The on_mempool_tx_data callback (set before sync) handles
+                // inv→getdata→tx→trial-decrypt automatically via block listeners.
+                {
+                    let pm = wallet.peer_manager.lock().await;
+                    pm.request_mempool_from_all().await;
+                }
+
+                // Phase 2b: Background monitoring loop (no progress UI)
+                // Wakes on: inv MSG_BLOCK (instant), fast-poll 10s, normal 30s
                 #[cfg(debug_assertions)]
-                eprintln!("[ZipherX] FFI: starting background sync loop (30s interval)");
+                eprintln!("[ZipherX] FFI: starting background sync loop");
                 let mut last_height = height;
                 loop {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+                    let interval = if PENDING_TX_FAST_POLL.load(Ordering::Relaxed) {
+                        10
+                    } else {
+                        30
+                    };
+                    // Wait for EITHER the timer OR a new-block notification from peers.
+                    // When a peer sends inv MSG_BLOCK, new_block_notify fires and we
+                    // sync immediately instead of waiting for the full interval.
+                    tokio::select! {
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => {}
+                        _ = new_block_notify.notified() => {
+                            #[cfg(debug_assertions)]
+                            eprintln!("[ZipherX] FFI: new block announced by peer — instant sync");
+                            // Small delay to let the block propagate to all peers
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        }
+                    }
 
                     match wallet.sync(&sk_bg, None).await {
                         Ok(h) => {
+                            // Request mempool after each sync — sync may reconnect
+                            // peers (zombie detection), and new peers need a fresh
+                            // BIP 35 mempool request to announce their mempool TXs.
+                            {
+                                let pm = wallet.peer_manager.lock().await;
+                                pm.request_mempool_from_all().await;
+                            }
                             if h > last_height {
                                 #[cfg(debug_assertions)]
                                 eprintln!(
@@ -1079,6 +1159,15 @@ fn stop_sync() {
 fn get_sync_progress() -> f64 {
     let bits = SYNC_PROGRESS.load(Ordering::Relaxed);
     f64::from_bits(bits).clamp(0.0, 1.0)
+}
+
+/// Set fast-poll mode for the background sync loop.
+/// Call with `true` after broadcasting a TX (10s interval),
+/// `false` once confirmed (back to 30s).
+fn set_pending_tx_fast_poll(enabled: bool) {
+    PENDING_TX_FAST_POLL.store(enabled, Ordering::Relaxed);
+    #[cfg(debug_assertions)]
+    eprintln!("[ZipherX] FFI: pending TX fast poll = {enabled}");
 }
 
 // ============================================================================
@@ -1200,14 +1289,16 @@ fn repair_database() -> Result<(), WalletError> {
         .map_err(WalletError::from)
 }
 
-/// Full rescan — clear all state and rescan from scratch.
+/// Full rescan — nuclear reset: delete ALL notes/history/state, rescan from scratch.
+///
+/// Matches the official ZipherX full rescan approach: deletes all notes (so boost
+/// scan re-inserts them with correct positions), clears delta bundle (forces fresh
+/// download), and resets scan progress to zero. The next sync re-discovers everything.
 ///
 /// BLOCKING: This function blocks the calling thread. Call from a background thread.
 fn full_rescan() -> Result<(), WalletError> {
     let wallet = get_wallet()?;
-    // Full rescan = repair (clear tree + witnesses) — the sync
-    // that follows will rebuild everything from the boost file.
-    runtime::block_on(wallet.repair_database())
+    runtime::block_on(wallet.full_rescan())
         .map_err(WalletError::from)?
         .map_err(WalletError::from)
 }
@@ -1484,6 +1575,7 @@ fn sync_status_to_progress(status: &SyncStatus) -> (String, u64, u64) {
             current_height,
             target_height,
         } => ("delta_sync".into(), *current_height, *target_height),
+        SyncStatus::BoostScan { outputs_total } => ("boost_scan".into(), 0, *outputs_total),
         SyncStatus::BlockScan {
             current_height,
             target_height,
@@ -1515,6 +1607,7 @@ fn sync_status_to_phase(status: &SyncStatus) -> String {
         SyncStatus::BoostLoad { .. } => "boost_load".into(),
         SyncStatus::HeaderSync { .. } => "header_sync".into(),
         SyncStatus::DeltaSync { .. } => "delta_sync".into(),
+        SyncStatus::BoostScan { .. } => "boost_scan".into(),
         SyncStatus::BlockScan { .. } => "block_scan".into(),
         SyncStatus::GapFill { .. } => "gap_fill".into(),
         SyncStatus::WitnessUpdate { .. } => "witness_update".into(),
@@ -1544,7 +1637,7 @@ fn send_phase_to_progress(phase: &SendPhase) -> (String, u32, u32) {
             total_spends,
         } => ("building".into(), *spend_index, *total_spends),
         SendPhase::Broadcasting => ("broadcasting".into(), 0, 0),
-        SendPhase::PeerResponse { accepted, total } => ("peer_response".into(), *accepted, *total),
+        SendPhase::PeerResponse { accepted, total, .. } => ("peer_response".into(), *accepted, *total),
         SendPhase::Recording => ("recording".into(), 0, 0),
         SendPhase::Complete { .. } => ("complete".into(), 0, 0),
         SendPhase::Error { .. } => ("error".into(), 0, 0),

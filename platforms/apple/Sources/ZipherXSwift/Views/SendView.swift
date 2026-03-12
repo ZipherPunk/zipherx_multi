@@ -19,7 +19,7 @@ public struct SendView: View {
 
     @State private var recipientAddress: String = ""
     @State private var amountText: String = ""
-    @State private var feeText: String = "0.0001"
+    private let fixedFee: UInt64 = 10_000 // 0.0001 ZCL — fixed, not editable
     @State private var memo: String = ""
     @State private var addressValid: Bool = false
     @State private var showCelebration: Bool = false
@@ -114,15 +114,18 @@ public struct SendView: View {
                                 }
                         }
 
-                        // Fee
+                        // Fee (fixed)
                         VStack(alignment: .leading, spacing: 6) {
                             Text("FEE")
                                 .font(ZFonts.caption)
                                 .foregroundColor(ZColors.primaryDark)
-                            ZTextField("Fee (ZCL)", text: $feeText)
-                                .onChange(of: feeText) { _, _ in
-                                    capAmountIfNeeded()
-                                }
+                            Text("0.0001 ZCL (10,000 zatoshis)")
+                                .font(ZFonts.mono)
+                                .foregroundColor(ZColors.primaryDim)
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(ZColors.terminalBlack)
+                                .overlay(Rectangle().stroke(ZColors.primaryDim, lineWidth: 1))
                         }
 
                         // Memo
@@ -191,25 +194,20 @@ public struct SendView: View {
     }
 
     private var canSend: Bool {
-        addressValid && parsedAmount > 0 && parsedFee > 0 &&
-        parsedAmount + parsedFee <= (viewModel.balance?.spendable ?? 0) &&
+        addressValid && parsedAmount > 0 &&
+        parsedAmount + fixedFee <= (viewModel.balance?.spendable ?? 0) &&
         !viewModel.isSending && !showCelebration
     }
 
     private var maxSpendable: UInt64 {
         let spendable = viewModel.balance?.spendable ?? 0
-        let fee = parsedFee
-        return spendable > fee ? spendable - fee : 0
+        return spendable > fixedFee ? spendable - fixedFee : 0
     }
 
     /// Parse ZCL amount string to zatoshis using integer-only arithmetic
     /// to avoid IEEE 754 floating-point precision loss (e.g., 0.29 * 1e8 != 29000000).
     private var parsedAmount: UInt64 {
         parseZclToZatoshis(amountText) ?? 0
-    }
-
-    private var parsedFee: UInt64 {
-        parseZclToZatoshis(feeText) ?? 10_000
     }
 
     private func parseZclToZatoshis(_ text: String) -> UInt64? {
@@ -304,7 +302,7 @@ public struct SendView: View {
         viewModel.send(
             to: recipientAddress,
             amount: parsedAmount,
-            fee: parsedFee,
+            fee: fixedFee,
             memo: memo.isEmpty ? nil : memo,
             skBytes: skBytes
         )
@@ -390,7 +388,7 @@ struct CelebrationOverlay: View {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(ZColors.success)
-                            Text("ACCEPTED IN MEMPOOL")
+                            Text("MEMPOOL CLEARED")
                                 .font(ZFonts.caption)
                                 .foregroundColor(ZColors.success)
                             if let status = peerStatus {

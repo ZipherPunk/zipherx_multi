@@ -11,6 +11,7 @@ pub mod async_wallet;
 pub mod auto_recovery;
 pub mod boost_download;
 pub mod health_check;
+pub mod mempool_monitor;
 pub mod peer_watchdog;
 pub mod runtime;
 pub mod scanner;

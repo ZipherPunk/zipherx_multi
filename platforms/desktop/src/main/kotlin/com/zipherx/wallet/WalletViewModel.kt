@@ -208,8 +208,48 @@ class WalletViewModel(
     /** Convert ByteArray to List<UByte> for FFI calls. */
     private fun ByteArray.toUByteList(): List<UByte> = map { it.toUByte() }
 
+    /**
+     * Check if the device has enough free disk space for sync operations.
+     * First sync requires ~4 GB (boost download + header DB), subsequent syncs ~1 GB.
+     * Returns null if space is sufficient, or an error message string if not.
+     */
+    private fun checkDiskSpace(): String? {
+        return try {
+            val dataDir = storage.dataDir.toPath()
+            val store = if (java.nio.file.Files.exists(dataDir)) {
+                java.nio.file.Files.getFileStore(dataDir)
+            } else {
+                java.nio.file.Files.getFileStore(java.nio.file.Paths.get(System.getProperty("user.home")))
+            }
+            val availableBytes = store.usableSpace
+            val availableGB = availableBytes / (1024.0 * 1024.0 * 1024.0)
+            val headerDb = dataDir.resolve("headers.db")
+            val isFirstSync = !java.nio.file.Files.exists(headerDb)
+            // First sync: 2.1 GB boost file + 1.5 GB header DB + 0.5 GB delta + 1 GB working = ~6 GB
+            val requiredGB = if (isFirstSync) 6.0 else 1.0
+            val requiredLabel = if (isFirstSync) "6 GB" else "1 GB"
+            if (availableGB < requiredGB) {
+                "Insufficient storage: %.1f GB available, %s required for %s. Free up space and try again.".format(
+                    availableGB,
+                    requiredLabel,
+                    if (isFirstSync) "initial sync" else "sync",
+                )
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null // Can't check — proceed and let sync fail with its own error if needed
+        }
+    }
+
     fun startSync() {
         if (_isSyncing.value) return
+        // Check available disk space before starting sync
+        val storageError = checkDiskSpace()
+        if (storageError != null) {
+            _error.value = storageError
+            return
+        }
         scope.launch {
             _isSyncing.value = true
             _syncPhase.value = "Starting..."
@@ -543,7 +583,9 @@ class WalletViewModel(
                             _clearingCelebration.value = randomClearingMessage()
                             _clearingDuration.value = if (clearingElapsed != null) "${clearingElapsed}s" else null
                             _mempoolAccepted.value = true
-                            refreshBalance()
+                            // Don't refreshBalance() here — spent notes are already marked but change
+                            // note won't appear until the TX is mined, so balance would show 0.
+                            // Balance will update naturally when the first auto-sync completes.
                             refreshHistory()
                             onComplete(txid, amount.toLong(), fee.toLong())
                             // Background poll for confirmation — silent sync

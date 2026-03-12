@@ -3,12 +3,17 @@ package com.zipherx.wallet.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
@@ -31,17 +36,40 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 import com.zipherx.wallet.WalletViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
+ * Generate a QR code bitmap from a string.
+ */
+private fun generateQrBitmap(content: String, size: Int): Bitmap {
+    val hints = mapOf(
+        EncodeHintType.MARGIN to 1,
+        EncodeHintType.CHARACTER_SET to "UTF-8",
+    )
+    val bitMatrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size, hints)
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    for (x in 0 until size) {
+        for (y in 0 until size) {
+            bitmap.setPixel(x, y, if (bitMatrix[x, y]) 0xFF000000.toInt() else 0xFFFFFFFF.toInt())
+        }
+    }
+    return bitmap
+}
+
+/**
  * Receive screen displaying the wallet's shielded address
- * with a copy-to-clipboard button.
+ * with a QR code and copy-to-clipboard button.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,12 +102,32 @@ fun ReceiveScreen(
                 .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             Text(
                 text = "Your Shielded Address",
                 style = MaterialTheme.typography.titleMedium,
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // QR Code
+            walletAddress?.let { addr ->
+                val qrBitmap = remember(addr) { generateQrBitmap(addr, 512) }
+                Box(
+                    modifier = Modifier
+                        .size(240.dp)
+                        .background(Color.White)
+                        .padding(8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Image(
+                        bitmap = qrBitmap.asImageBitmap(),
+                        contentDescription = "QR Code",
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 

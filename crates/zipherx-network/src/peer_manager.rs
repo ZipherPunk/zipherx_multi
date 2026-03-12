@@ -11,6 +11,7 @@
 //! privacy is available via Tor routing (see zipherx-tor).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,7 +19,9 @@ use tokio::sync::Semaphore;
 
 use serde::Deserialize;
 
+use crate::broadcast::BroadcastResult;
 use crate::constants::*;
+use crate::messages::RejectMessage;
 use crate::peer::{Peer, Socks5Config};
 
 /// Bundled peer entry from bundled_peers.json.
@@ -183,6 +186,21 @@ pub struct PeerManager {
 
     /// Shared semaphore for SOCKS5 connections.
     socks_semaphore: Arc<Semaphore>,
+
+    /// Callback fired when an unsolicited "tx" message arrives (mempool detection).
+    on_mempool_tx_data: Option<Arc<dyn Fn(Vec<u8>) + Send + Sync>>,
+
+    /// Callback fired when an inv MSG_BLOCK arrives (new block mined).
+    /// Signals the background sync loop to trigger an immediate sync.
+    on_new_block: Option<Arc<dyn Fn() + Send + Sync>>,
+
+    /// Callback fired when addr/addrv2 messages arrive with peer addresses.
+    on_addr: Option<Arc<dyn Fn(Vec<(String, u16)>) + Send + Sync>>,
+
+    /// Live chain tip updated by block listener inv notifications.
+    /// Tracks the minimum known chain height from inv MSG_BLOCK events.
+    /// Used by `get_consensus_height` to avoid stale peer heights.
+    pub live_chain_tip: Arc<AtomicU64>,
 }
 
 impl PeerManager {
@@ -197,6 +215,52 @@ impl PeerManager {
             config,
             socks5_config: None,
             socks_semaphore: Arc::new(Semaphore::new(6)),
+            on_mempool_tx_data: None,
+            on_new_block: None,
+            on_addr: None,
+            live_chain_tip: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// Set the new block notification callback. Distributes to all existing peers.
+    ///
+    /// Fired by block listeners when they receive inv MSG_BLOCK from any peer.
+    /// The background sync loop uses this to trigger an immediate sync instead
+    /// of waiting for the 30s timer.
+    pub fn set_on_new_block(&mut self, cb: Arc<dyn Fn() + Send + Sync>) {
+        // Wrap callback to also bump live_chain_tip on each inv MSG_BLOCK.
+        // This ensures get_consensus_height() returns a fresh value even when
+        // peer_start_height is stale from the version exchange.
+        let tip = self.live_chain_tip.clone();
+        let wrapped = Arc::new(move || {
+            // Bump by 1 per inv MSG_BLOCK. Multiple peers may announce the same
+            // block, causing slight overshoot. Header sync handles this gracefully
+            // (it requests headers up to chain_tip and gets back what exists).
+            tip.fetch_add(1, Ordering::Relaxed);
+            cb();
+        });
+        self.on_new_block = Some(wrapped.clone());
+        for peer in self.peers.values() {
+            *peer.on_new_block.lock().unwrap() = Some(wrapped.clone());
+        }
+    }
+
+    /// Set the mempool TX data callback. Distributes to all existing peers.
+    ///
+    /// Updates running block listeners immediately — the callback is behind a shared
+    /// Arc<Mutex<>> so running listeners see the new value on their next message.
+    pub fn set_on_mempool_tx_data(&mut self, cb: Arc<dyn Fn(Vec<u8>) + Send + Sync>) {
+        self.on_mempool_tx_data = Some(cb.clone());
+        for peer in self.peers.values() {
+            *peer.on_mempool_tx_data.lock().unwrap() = Some(cb.clone());
+        }
+    }
+
+    /// Set the addr/addrv2 callback for peer discovery. Distributes to all existing peers.
+    pub fn set_on_addr(&mut self, cb: Arc<dyn Fn(Vec<(String, u16)>) + Send + Sync>) {
+        self.on_addr = Some(cb.clone());
+        for peer in self.peers.values() {
+            *peer.on_addr.lock().unwrap() = Some(cb.clone());
         }
     }
 
@@ -221,6 +285,8 @@ impl PeerManager {
                 peer.disconnect().await;
             }
         }
+        // Reset live_chain_tip — it will be re-seeded on next connect_with_counter.
+        self.live_chain_tip.store(0, Ordering::Relaxed);
         // Brief yield to let spawned tasks observe disconnect and terminate
         tokio::task::yield_now().await;
     }
@@ -230,7 +296,13 @@ impl PeerManager {
     /// Preserves existing healthy connections. Only connects to candidates
     /// that are NOT already in the peer pool. Returns when at least
     /// `consensus_threshold` peers are connected.
-    pub async fn connect(&mut self) -> Result<(), NetworkError> {
+    ///
+    /// If `live_counter` is provided, the atomic is updated as each peer
+    /// connects so the UI can display the count in real-time.
+    pub async fn connect_with_counter(
+        &mut self,
+        live_counter: Option<&Arc<AtomicU32>>,
+    ) -> Result<(), NetworkError> {
         // Prune dead peers first (handshake done but TCP gone)
         let dead_keys: Vec<String> = self
             .peers
@@ -367,8 +439,15 @@ impl PeerManager {
 
             while let Some(result) = join_set.join_next().await {
                 if let Ok(Some(peer)) = result {
+                    *peer.on_mempool_tx_data.lock().unwrap() = self.on_mempool_tx_data.clone();
+                    *peer.on_new_block.lock().unwrap() = self.on_new_block.clone();
+                    *peer.on_addr.lock().unwrap() = self.on_addr.clone();
                     let key = peer.id.clone();
                     self.peers.insert(key, peer);
+                    // Update live counter so UI sees peers as they connect
+                    if let Some(counter) = live_counter {
+                        counter.store(self.connected_count() as u32, Ordering::Relaxed);
+                    }
                 }
                 // Early exit: once we have min_peers, abort remaining slow attempts
                 if self.connected_count() >= self.config.min_peers {
@@ -390,7 +469,24 @@ impl PeerManager {
             });
         }
 
+        // Seed live_chain_tip from the highest peer_start_height at connect time.
+        // This ensures get_consensus_height() starts with a valid baseline.
+        // Block listener inv MSG_BLOCK events will increment it from here.
+        let max_height = self
+            .peers
+            .values()
+            .filter(|p| p.is_connected())
+            .map(|p| p.peer_start_height as u64)
+            .max()
+            .unwrap_or(0);
+        self.live_chain_tip.store(max_height, Ordering::Relaxed);
+
         Ok(())
+    }
+
+    /// Connect to the network (without live counter).
+    pub async fn connect(&mut self) -> Result<(), NetworkError> {
+        self.connect_with_counter(None).await
     }
 
     /// Discover peers from DNS seeds.
@@ -415,20 +511,20 @@ impl PeerManager {
                     .await;
             match dns_result {
                 Ok(Ok(addrs)) => {
-                    let mut count = 0;
+                    let mut _count = 0;
                     for addr in addrs {
                         let ip = addr.ip().to_string();
                         if !is_reserved_ip(&ip) {
                             addresses.push((ip, DEFAULT_PORT));
-                            count += 1;
+                            _count += 1;
                         }
                     }
                     #[cfg(debug_assertions)]
-                    eprintln!("[ZipherX] DNS seed {seed}: {count} addresses found");
+                    eprintln!("[ZipherX] DNS seed {seed}: {_count} addresses found");
                 }
-                Ok(Err(e)) => {
+                Ok(Err(_e)) => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[ZipherX] DNS seed {seed} failed: {e}");
+                    eprintln!("[ZipherX] DNS seed {seed} failed: {_e}");
                     continue;
                 }
                 Err(_) => {
@@ -566,7 +662,12 @@ impl PeerManager {
             return Ok(median_height);
         }
 
-        let consensus_height = median_height;
+        // If block listener inv notifications have pushed live_chain_tip beyond
+        // the stale peer_start_height median, use the higher value. This prevents
+        // header sync from short-circuiting when peers haven't been reconnected
+        // but ARE announcing new blocks via inv messages.
+        let live_tip = self.live_chain_tip.load(Ordering::Relaxed);
+        let consensus_height = median_height.max(live_tip);
 
         // Sybil detection: ban peers >500 blocks above consensus
         let to_ban: Vec<String> = heights
@@ -804,6 +905,25 @@ impl PeerManager {
         }
     }
 
+    /// Send "mempool" P2P message (BIP 35) to all connected peers.
+    ///
+    /// This asks each peer to send `inv` messages for every TX in its mempool.
+    /// The block listener's `handle_background_message` picks up those `inv`s,
+    /// sends `getdata`, receives `tx` responses, and fires `on_mempool_tx_data`
+    /// for trial decryption. Without this, peers only announce TXs that arrive
+    /// AFTER the connection — TXs already in their mempool are silent.
+    pub async fn request_mempool_from_all(&self) {
+        for peer in self.peers.values() {
+            if peer.is_connected() && peer.is_listener_active() {
+                // "mempool" is an empty-payload message per BIP 35
+                if let Err(_e) = peer.send_message("mempool", &[]).await {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[ZipherX] Failed to send mempool request to {}: {:?}", peer.id, _e);
+                }
+            }
+        }
+    }
+
     /// Stop all block listeners.
     pub async fn stop_all_block_listeners(&mut self) {
         let keys: Vec<String> = self.peers.keys().cloned().collect();
@@ -906,36 +1026,122 @@ impl PeerManager {
         }
     }
 
-    /// Broadcast a raw transaction to all connected peers.
+    /// Broadcast a raw transaction to all connected peers with reject detection.
     ///
-    /// Returns (accepted, total) — number of peers that accepted (no error) and total sent to.
+    /// Registers broadcast handlers on each peer's dispatcher BEFORE sending,
+    /// then waits up to 2 seconds for `reject` messages. In Zcash P2P protocol,
+    /// silence = acceptance (peers only respond if they reject the TX).
+    ///
     /// FIX #1184: NEVER stop block listeners before broadcast.
     /// FIX #1261: Caller should retry once if 0/N accepted.
-    pub async fn broadcast_transaction(&self, raw_tx: &[u8]) -> Result<(u32, u32), NetworkError> {
+    /// FIX #1300: Wait for reject messages instead of counting TCP writes as acceptance.
+    pub async fn broadcast_transaction(
+        &self,
+        raw_tx: &[u8],
+        txid: &str,
+    ) -> Result<BroadcastResult, NetworkError> {
         let ready_peers = self.get_ready_peers();
         if ready_peers.is_empty() {
             return Err(NetworkError::NoPeersAvailable);
         }
 
-        let mut accepted: u32 = 0;
-        let total = ready_peers.len() as u32;
+        let txid_short = if txid.len() >= 16 { &txid[..16] } else { txid };
+        eprintln!(
+            "[ZipherX] Broadcasting TX {}... to {} peers",
+            txid_short,
+            ready_peers.len()
+        );
 
+        // Register broadcast handlers BEFORE sending (prevents race condition
+        // where reject arrives before handler is registered).
+        let mut reject_receivers = Vec::new();
+        for peer in &ready_peers {
+            let rx = peer.dispatcher().lock().unwrap().register_broadcast(txid);
+            reject_receivers.push((peer.id.clone(), rx));
+        }
+
+        // Send TX to all peers
+        let mut send_failed: Vec<String> = Vec::new();
         for peer in &ready_peers {
             match peer.send_message("tx", raw_tx).await {
-                Ok(()) => accepted += 1,
+                Ok(()) => {
+                    eprintln!("[ZipherX] TX sent to {}", peer.id);
+                }
                 Err(e) => {
-                    tracing::warn!("Broadcast to {} failed: {e}", peer.id);
+                    eprintln!("[ZipherX] TX send to {} FAILED: {e}", peer.id);
+                    send_failed.push(peer.id.clone());
                 }
             }
         }
 
-        if accepted == 0 {
+        // Wait for reject messages (2s timeout per peer — silence = acceptance)
+        let mut accepted_by = Vec::new();
+        let mut rejected_by = Vec::new();
+        let mut duplicate_at = Vec::new();
+
+        for (peer_id, rx) in reject_receivers {
+            if send_failed.contains(&peer_id) {
+                continue; // Skip peers we couldn't send to
+            }
+
+            match tokio::time::timeout(Duration::from_secs(2), rx).await {
+                Ok(Ok((_cmd, payload))) => {
+                    // Got a reject message — parse it
+                    if let Some(reject) = RejectMessage::deserialize(&payload) {
+                        if reject.code.is_success() {
+                            // DUPLICATE = already in mempool = success
+                            eprintln!("[ZipherX] {} DUPLICATE (already in mempool)", peer_id);
+                            duplicate_at.push(peer_id);
+                        } else {
+                            eprintln!(
+                                "[ZipherX] {} REJECTED TX: {:?} — {}",
+                                peer_id, reject.code, reject.reason
+                            );
+                            rejected_by.push((peer_id, reject.reason));
+                        }
+                    } else {
+                        eprintln!("[ZipherX] {} REJECTED TX (unparseable reject)", peer_id);
+                        rejected_by.push((peer_id, "unparseable reject".into()));
+                    }
+                }
+                Ok(Err(_)) => {
+                    // Receiver dropped (peer disconnected during broadcast)
+                    eprintln!("[ZipherX] {} disconnected during broadcast", peer_id);
+                    // Treat disconnect as inconclusive, not rejection
+                }
+                Err(_) => {
+                    // Timeout — no reject received = accepted (silence = acceptance)
+                    eprintln!("[ZipherX] {} accepted TX (no reject in 2s)", peer_id);
+                    accepted_by.push(peer_id);
+                }
+            }
+        }
+
+        let total_accepted = accepted_by.len() + duplicate_at.len();
+        let total_attempted = accepted_by.len() + rejected_by.len() + duplicate_at.len();
+        let success = total_accepted > 0;
+
+        eprintln!(
+            "[ZipherX] Broadcast result: {}/{} accepted, {} rejected, {} duplicate",
+            total_accepted, total_attempted, rejected_by.len(), duplicate_at.len(),
+        );
+
+        let result = BroadcastResult {
+            txid: txid.to_string(),
+            accepted_by,
+            rejected_by,
+            duplicate_at,
+            success,
+        };
+
+        if !success {
             return Err(NetworkError::BroadcastFailed(format!(
-                "0/{total} peers accepted the transaction"
+                "0/{} peers accepted TX {}...",
+                total_attempted, txid_short,
             )));
         }
 
-        Ok((accepted, total))
+        Ok(result)
     }
 }
 

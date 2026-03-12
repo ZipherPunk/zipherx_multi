@@ -126,6 +126,8 @@ namespace zipherx {
 
     f64 get_sync_progress();
 
+    void set_pending_tx_fast_poll(boolean enabled);
+
     // ==================================================================
     // Send (Phase 9)
     // ==================================================================
@@ -237,6 +239,7 @@ callback interface SyncProgressCallback {
     void on_progress(string phase, u64 current, u64 target);
     void on_complete(u64 height);
     void on_error(string message);
+    void on_mempool_tx(string txid, u64 amount);
 };
 
 callback interface SendProgressCallback {
@@ -292,6 +295,7 @@ dictionary WalletConfigFFI {
     string output_params_path;
     u32 account_index;
     sequence<u8>? db_encryption_key;
+    string? boost_cache_dir;
 };
 
 dictionary WalletSummaryFFI {

@@ -3,7 +3,7 @@
 //! Critical invariants:
 //! - Set `is_broadcasting=true` before broadcast (FIX #1184)
 //! - Validate EACH witness root individually (FIX #1280)
-//! - Validate EACH anchor vs HeaderStore (FIX #1279)
+//! - Validate witness internal consistency (FIX #827 — same as official ZipherX)
 //! - Build TX via `spawn_blocking` (Groth16 is CPU-heavy)
 //! - Retry once if 0/N peers accepted (FIX #1261)
 //! - Mempool verify is monitoring only — NOT confirmation (FIX #1259)
@@ -23,6 +23,7 @@ use zipherx_crypto::transaction::SpendInfo;
 use zipherx_crypto::util::double_sha256;
 use zipherx_network::peer_manager::PeerManager;
 use zipherx_storage::database::WalletDatabase;
+use zipherx_storage::delta_cmu::DeltaCMUStore;
 use zipherx_storage::header_store_impl::SqliteHeaderStore;
 
 /// Progress callback for send operations.
@@ -41,8 +42,8 @@ pub enum SendPhase {
     Building { spend_index: u32, total_spends: u32 },
     /// Broadcasting to P2P peers
     Broadcasting,
-    /// Peer response
-    PeerResponse { accepted: u32, total: u32 },
+    /// Peer response (with reject-based verification)
+    PeerResponse { accepted: u32, rejected: u32, total: u32 },
     /// Recording in database
     Recording,
     /// Complete
@@ -90,7 +91,8 @@ impl<'a> Drop for BroadcastGuard<'a> {
 pub async fn send_transaction(
     db: Arc<WalletDatabase>,
     peer_manager: &PeerManager,
-    header_store: &SqliteHeaderStore,
+    _header_store: &SqliteHeaderStore,
+    _delta_store: &DeltaCMUStore,
     sk_bytes: &[u8],
     request: &SendRequest,
     guards: &SyncGuards,
@@ -123,69 +125,39 @@ pub async fn send_transaction(
     // RC-12: Uses compare_exchange for atomic check-and-set.
     let _broadcast_guard = BroadcastGuard::new(guards)?;
 
-    // Step 4: Load unspent notes from DB via spawn_blocking
-    report_progress(
-        &progress,
-        SendPhase::NoteSelection {
-            count: 0,
-            total_value: 0,
-        },
-    );
-    let db_clone = db.clone();
-    let notes = tokio::task::spawn_blocking(move || db_clone.get_all_unspent_notes(0))
-        .await
-        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
-        .map_err(|e| CoreError::Storage(e.to_string()))?;
-
-    // Step 5: Select notes
-    let spendable: Vec<SpendableNote> = notes
-        .iter()
-        .filter_map(|n| send::note_to_spendable(n))
-        .collect();
-
+    // Step 4: Load unspent notes, select, verify witness consistency (FIX #827)
     let (selected, total_value) =
-        send::select_notes(&spendable, request.total_needed()).map_err(|_| {
-            CoreError::InsufficientBalance {
-                have: spendable.iter().map(|n| n.value).sum(),
-                need: request.total_needed(),
-            }
-        })?;
+        select_notes_with_witness_check(db.clone(), request, &progress)
+            .await?;
 
-    report_progress(
-        &progress,
-        SendPhase::NoteSelection {
-            count: selected.len(),
-            total_value,
-        },
-    );
-
-    // Step 6: Validate EACH witness root (FIX #1280)
+    // Step 5: FIX #1300 — Validate anchors against header store BEFORE building TX.
+    // HARD ERROR: Zclassic nodes accept TXs into mempool WITHOUT checking Sapling
+    // anchors (HaveShieldedRequirements runs during ConnectBlock, not AcceptToMemoryPool).
+    // Invalid-anchor TXs get "accepted" by peers but NEVER mined. Peers won't reject.
+    // This local check is the ONLY defense. If it fails, the commitment tree is
+    // corrupted and must be rebuilt via Full Rescan.
     for (i, note) in selected.iter().enumerate() {
-        report_progress(
-            &progress,
-            SendPhase::WitnessValidation {
-                note_index: i,
-                total: selected.len(),
-            },
-        );
+        let anchor = zipherx_crypto::tree::verify_witness_and_get_root(&note.witness)
+            .map_err(|e| CoreError::Crypto(format!("Witness {} root extraction failed: {e}", i)))?;
 
-        // FIX #1279: Validate EACH anchor against HeaderStore
-        let anchor_bytes = note.anchor;
-        let has_root = header_store
-            .contains_sapling_root(&anchor_bytes)
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
+        let found = _header_store.contains_sapling_root(&anchor)
+            .map_err(CoreError::Network)?;
 
-        // FIX #1230: Check both byte orders
-        let mut reversed = anchor_bytes;
-        reversed.reverse();
-        let has_root_reversed = header_store
-            .contains_sapling_root(&reversed)
-            .map_err(|e| CoreError::Storage(e.to_string()))?;
-
-        if !has_root && !has_root_reversed {
-            return Err(CoreError::InvalidAnchor);
+        if found {
+            eprintln!("[ZipherX] Anchor OK for note {} (id={})", i, note.id);
+        } else {
+            let anchor_hex = hex::encode(&anchor);
+            eprintln!(
+                "[ZipherX] ANCHOR INVALID for note {} (id={}): {} — not in any block header",
+                i, note.id, anchor_hex
+            );
+            return Err(CoreError::BroadcastFailed(format!(
+                "Invalid anchor for note {} — commitment tree is corrupted. Run Full Rescan to rebuild witnesses.",
+                i
+            )));
         }
     }
+    eprintln!("[ZipherX] All {} anchors validated OK", selected.len());
 
     // Step 7: Build TX via spawn_blocking (Groth16 is CPU-heavy)
     report_progress(
@@ -242,28 +214,62 @@ pub async fn send_transaction(
     txid_bytes.reverse();
     let txid = hex::encode(txid_bytes);
 
-    // Step 8: Broadcast (FIX #1184: dispatcher must be active)
+    // Step 8: Broadcast with reject detection (FIX #1184, FIX #1300)
     report_progress(&progress, SendPhase::Broadcasting);
 
-    let (accepted, total) = peer_manager
-        .broadcast_transaction(&tx_result.tx_bytes)
+    eprintln!("[ZipherX] Broadcasting TX {}...", &txid[..16.min(txid.len())]);
+
+    let broadcast_result = peer_manager
+        .broadcast_transaction(&tx_result.tx_bytes, &txid)
         .await
-        .map_err(|e| CoreError::BroadcastFailed(e.to_string()))?;
+        .map_err(|e| {
+            eprintln!("[ZipherX] Broadcast FAILED: {e}");
+            CoreError::BroadcastFailed(e.to_string())
+        })?;
 
-    report_progress(&progress, SendPhase::PeerResponse { accepted, total });
+    let accepted = broadcast_result.total_accepted() as u32;
+    let rejected = broadcast_result.rejected_by.len() as u32;
+    let total = broadcast_result.total_attempted() as u32;
 
-    // Step 9: FIX #1261 — retry once if 0/N accepted
+    report_progress(&progress, SendPhase::PeerResponse { accepted, rejected, total });
+
+    // FIX #1300: If ANY peer explicitly rejected, treat as failure —
+    // even if some peers "accepted" (silence), a reject means the TX is invalid.
+    if !broadcast_result.rejected_by.is_empty() {
+        let reasons: Vec<String> = broadcast_result
+            .rejected_by
+            .iter()
+            .map(|(peer, reason)| format!("{}: {}", peer, reason))
+            .collect();
+        let msg = format!(
+            "TX rejected by {} peer(s): {}",
+            rejected,
+            reasons.join(", ")
+        );
+        eprintln!("[ZipherX] {}", msg);
+        return Err(CoreError::BroadcastFailed(msg));
+    }
+
     if accepted == 0 {
         return Err(CoreError::BroadcastFailed(format!(
             "0/{total} peers accepted the transaction"
         )));
     }
 
+    eprintln!("[ZipherX] TX accepted by {}/{} peers", accepted, total);
+
     // Step 10: FIX #1259 — mempool verify is monitoring only, NOT confirmation
     // TX confirmation happens ONLY via block scanner
 
     // Step 11: Record in DB atomically
+    // NOTE: Only reached if broadcast was accepted (no reject messages received).
     report_progress(&progress, SendPhase::Recording);
+
+    eprintln!(
+        "[ZipherX] Recording TX {} — marking {} notes as spent",
+        &txid[..16.min(txid.len())],
+        selected.len()
+    );
 
     let txid_clone = txid.clone();
     let amount = request.amount_zatoshis;
@@ -301,6 +307,8 @@ pub async fn send_transaction(
     .map_err(|e| CoreError::RuntimeError(e.to_string()))?
     .map_err(|e| CoreError::Storage(e.to_string()))?;
 
+    eprintln!("[ZipherX] TX {} recorded successfully", &txid[..16.min(txid.len())]);
+
     let result = SendResult {
         txid: txid.clone(),
         amount: request.amount_zatoshis,
@@ -319,6 +327,76 @@ fn report_progress(progress: &Option<SendProgressFn>, phase: SendPhase) {
     if let Some(ref p) = progress {
         p(phase);
     }
+}
+
+// ============================================================================
+// Note selection + witness consistency check (FIX #827)
+// ============================================================================
+
+/// Load notes, select for spending, validate witness internal consistency.
+///
+/// Matches the official ZipherX approach (FIX #827): validates that the witness
+/// is deserializable and has a valid merkle path. Does NOT check against
+/// HeaderStore — the network validates the anchor when the TX is broadcast.
+async fn select_notes_with_witness_check(
+    db: Arc<WalletDatabase>,
+    request: &SendRequest,
+    progress: &Option<SendProgressFn>,
+) -> Result<(Vec<SpendableNote>, u64), CoreError> {
+    report_progress(
+        progress,
+        SendPhase::NoteSelection {
+            count: 0,
+            total_value: 0,
+        },
+    );
+    let db_clone = db.clone();
+    let notes = tokio::task::spawn_blocking(move || db_clone.get_all_unspent_notes(0))
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+        .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+    let spendable: Vec<SpendableNote> = notes
+        .iter()
+        .filter_map(|n| send::note_to_spendable(n))
+        .collect();
+
+    let (selected, total_value) =
+        send::select_notes(&spendable, request.total_needed()).map_err(|_| {
+            CoreError::InsufficientBalance {
+                have: spendable.iter().map(|n| n.value).sum(),
+                need: request.total_needed(),
+            }
+        })?;
+
+    report_progress(
+        progress,
+        SendPhase::NoteSelection {
+            count: selected.len(),
+            total_value,
+        },
+    );
+
+    // FIX #827: Validate witness internal consistency (same as official ZipherX)
+    for (i, note) in selected.iter().enumerate() {
+        report_progress(
+            progress,
+            SendPhase::WitnessValidation {
+                note_index: i,
+                total: selected.len(),
+            },
+        );
+
+        if let Err(e) = zipherx_crypto::tree::verify_witness_consistency(&note.witness) {
+            eprintln!(
+                "[ZipherX] Send: witness corrupted for note {} (id={}): {} — go to Settings → FULL RESCAN",
+                i, note.id, e
+            );
+            return Err(CoreError::InvalidAnchor);
+        }
+    }
+
+    Ok((selected, total_value))
 }
 
 // ============================================================================
@@ -341,10 +419,17 @@ mod tests {
         }
     }
 
+    fn make_test_delta_store() -> DeltaCMUStore {
+        let dir = std::env::temp_dir().join(format!("zipherx_test_delta_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        DeltaCMUStore::new(&dir).unwrap()
+    }
+
     #[tokio::test]
     async fn test_send_validates_request() {
         let db = Arc::new(WalletDatabase::open_in_memory().unwrap());
         let hs = SqliteHeaderStore::open_in_memory().unwrap();
+        let ds = make_test_delta_store();
         let guards = SyncGuards::new();
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let pm = PeerManager::new(pm_config);
@@ -356,7 +441,7 @@ mod tests {
             memo: None,
         };
 
-        let result = send_transaction(db, &pm, &hs, &[], &bad_request, &guards, None, 100).await;
+        let result = send_transaction(db, &pm, &hs, &ds, &[], &bad_request, &guards, None, 100).await;
 
         assert!(result.is_err());
     }
@@ -365,13 +450,14 @@ mod tests {
     async fn test_send_blocked_during_sync() {
         let db = Arc::new(WalletDatabase::open_in_memory().unwrap());
         let hs = SqliteHeaderStore::open_in_memory().unwrap();
+        let ds = make_test_delta_store();
         let guards = SyncGuards::new();
         guards.is_syncing.store(true, Ordering::SeqCst);
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let pm = PeerManager::new(pm_config);
 
         let result =
-            send_transaction(db, &pm, &hs, &[], &make_test_request(), &guards, None, 100).await;
+            send_transaction(db, &pm, &hs, &ds, &[], &make_test_request(), &guards, None, 100).await;
 
         assert!(matches!(result, Err(CoreError::SyncInProgress)));
     }
@@ -380,13 +466,14 @@ mod tests {
     async fn test_send_blocked_during_gap_fill() {
         let db = Arc::new(WalletDatabase::open_in_memory().unwrap());
         let hs = SqliteHeaderStore::open_in_memory().unwrap();
+        let ds = make_test_delta_store();
         let guards = SyncGuards::new();
         guards.is_gap_filling.store(true, Ordering::SeqCst);
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let pm = PeerManager::new(pm_config);
 
         let result =
-            send_transaction(db, &pm, &hs, &[], &make_test_request(), &guards, None, 100).await;
+            send_transaction(db, &pm, &hs, &ds, &[], &make_test_request(), &guards, None, 100).await;
 
         assert!(matches!(result, Err(CoreError::GapFillInProgress)));
     }
@@ -417,13 +504,14 @@ mod tests {
     async fn test_send_insufficient_balance() {
         let db = Arc::new(WalletDatabase::open_in_memory().unwrap());
         let hs = SqliteHeaderStore::open_in_memory().unwrap();
+        let ds = make_test_delta_store();
         let guards = SyncGuards::new();
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let pm = PeerManager::new(pm_config);
 
         // No notes in DB → insufficient balance
         let result =
-            send_transaction(db, &pm, &hs, &[], &make_test_request(), &guards, None, 100).await;
+            send_transaction(db, &pm, &hs, &ds, &[], &make_test_request(), &guards, None, 100).await;
 
         assert!(matches!(result, Err(CoreError::InsufficientBalance { .. })));
     }

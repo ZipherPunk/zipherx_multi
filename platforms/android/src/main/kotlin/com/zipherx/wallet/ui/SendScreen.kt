@@ -77,7 +77,7 @@ fun SendScreen(
 ) {
     var address by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
-    var fee by remember { mutableStateOf("0.0001") }
+    val fee = "0.0001" // Fixed fee: 10,000 zatoshis
     var memo by remember { mutableStateOf("") }
     var addressValid by remember { mutableStateOf(false) }
     var addressWasPasted by remember { mutableStateOf(false) }
@@ -320,41 +320,26 @@ fun SendScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Section label
-            Text(
-                text = "> FEE (ZCL)",
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                ),
-                color = ZColors.primaryDim,
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Fee field
-            OutlinedTextField(
-                value = fee,
-                onValueChange = { newFee ->
-                    fee = newFee
-                    val feeZatoshis = parseZclToZatoshis(newFee)
-                    val spendable = balance?.spendable ?: 0L
-                    val maxZatoshis = (spendable - feeZatoshis).coerceAtLeast(0L)
-                    val currentZatoshis = parseZclToZatoshis(amount)
-                    if (currentZatoshis > maxZatoshis && maxZatoshis > 0L) {
-                        amount = formatZatoshisAsZclInput(maxZatoshis)
-                    }
-                },
-                label = { Text("Fee") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                enabled = !isSending,
-                colors = terminalFieldColors,
-                shape = RoundedCornerShape(0.dp),
-                textStyle = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                ),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            )
+            // Fixed fee display (non-editable, matches Desktop)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(ZColors.surface)
+                    .border(1.dp, ZColors.primaryDim.copy(alpha = 0.3f), RoundedCornerShape(0.dp))
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "FEE:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ZColors.primaryDim,
+                )
+                Text(
+                    text = "0.0001 ZCL (10,000 zatoshis)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ZColors.primaryDim,
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -494,12 +479,7 @@ fun SendScreen(
             val feeZatoshis = parseZclToZatoshis(fee)
             val totalDeducted = amountZatoshis + feeZatoshis
 
-            // Fee validation bounds
-            val feeError = when {
-                feeZatoshis < 10_000L -> "Fee too low (minimum 10,000 zatoshis / 0.0001 ZCL)"
-                feeZatoshis > 1_000_000L -> "Fee too high (maximum 1,000,000 zatoshis / 0.01 ZCL)"
-                else -> null
-            }
+            // Fee is fixed — no validation needed
 
             AlertDialog(
                 onDismissRequest = { showConfirmDialog = false },
@@ -557,14 +537,6 @@ fun SendScreen(
                         ConfirmAddressRow(address)
                         ConfirmRow("Amount", formatZatoshisAsZcl(amountZatoshis))
                         ConfirmRow("Fee", formatZatoshisAsZcl(feeZatoshis))
-                        if (feeError != null) {
-                            Text(
-                                text = "! $feeError",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = ZColors.error,
-                                modifier = Modifier.padding(start = 4.dp, top = 2.dp),
-                            )
-                        }
                         ConfirmRow("Total deducted", formatZatoshisAsZcl(totalDeducted))
                         if (memo.isNotBlank()) {
                             ConfirmRow("Memo", memo)
@@ -577,7 +549,7 @@ fun SendScreen(
                             showConfirmDialog = false
                             scope.launch {
                                 // Biometric auth
-                                val authed = viewModel.authenticateBiometric(
+                                val authed = viewModel.authenticateStrict(
                                     "Authorize sending ${formatZatoshisAsZcl(amountZatoshis)}"
                                 )
                                 if (authed) {
@@ -589,7 +561,7 @@ fun SendScreen(
                                 }
                             }
                         },
-                        enabled = feeError == null,
+                        enabled = true,
                         shape = RoundedCornerShape(0.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ZColors.primary,

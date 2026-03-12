@@ -831,10 +831,26 @@ pub async fn download_boost_file_if_needed(
         decompressed_size / (1024 * 1024),
     );
 
-    // Step 4: Clean up compressed file
+    // Step 4: Clean up compressed files (combined .zst + split parts)
     let zst_cleanup = zst_combined_str.clone();
-    let _ = tokio::task::spawn_blocking(move || std::fs::remove_file(&zst_cleanup)).await;
-    eprintln!("[ZipherX] Cleaned up compressed file");
+    let boost_dir_cleanup = boost_cache_dir.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || {
+        // Remove combined .zst
+        if let Err(e) = std::fs::remove_file(&zst_cleanup) {
+            eprintln!("[ZipherX] Warning: failed to delete {}: {e}", zst_cleanup);
+        }
+        // Remove split parts (.zst.part1, .zst.part2, etc.)
+        if let Ok(entries) = std::fs::read_dir(&boost_dir_cleanup) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".zst") || name.contains(".zst.part") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    })
+    .await;
+    eprintln!("[ZipherX] Cleaned up compressed files");
 
     if let Some(ref p) = progress {
         p(decompressed_size, decompressed_size, "Boost file ready");

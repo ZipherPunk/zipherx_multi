@@ -155,6 +155,7 @@ impl WalletState {
                 .into(),
             account_index: 0,
             db_encryption_key: self.db_encryption_key.clone(),
+            boost_cache_dir: None,
         };
 
         let wallet = self
@@ -939,8 +940,12 @@ fn cmd_send(args: &[&str], state: &WalletState) {
                 format!("Building proof {}/{}...", spend_index, total_spends)
             }
             SendPhase::Broadcasting => "Broadcasting to network...".to_string(),
-            SendPhase::PeerResponse { accepted, total } => {
-                format!("Peers: {}/{} accepted", accepted, total)
+            SendPhase::PeerResponse { accepted, rejected, total } => {
+                if *rejected > 0 {
+                    format!("Peers: {}/{} accepted, {} REJECTED", accepted, total, rejected)
+                } else {
+                    format!("Peers: {}/{} accepted", accepted, total)
+                }
             }
             SendPhase::Recording => "Recording in database...".to_string(),
             SendPhase::Complete { ref txid } => {
@@ -1057,6 +1062,12 @@ fn cmd_sync(state: &WalletState) {
                     format!(
                         "Delta sync: {} / {} ({}%)",
                         current_height, target_height, pct
+                    )
+                }
+                SyncStatus::BoostScan { outputs_total } => {
+                    format!(
+                        "Scanning boost outputs: {} outputs (CPU-intensive)",
+                        outputs_total
                     )
                 }
                 SyncStatus::BlockScan {

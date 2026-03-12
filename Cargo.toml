@@ -10,6 +10,7 @@ members = [
     "crates/zipherx-ffi",
     "crates/uniffi-bindgen",
     "platforms/cli",
+    "bin/zipherx-gui",
 ]
 
 [workspace.package]

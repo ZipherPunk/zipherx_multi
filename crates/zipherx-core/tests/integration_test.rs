@@ -76,6 +76,7 @@ fn test_full_wallet_lifecycle() {
         output_params_path: "/tmp/output.params".into(),
         account_index: 0,
         db_encryption_key: None,
+        boost_cache_dir: None,
     };
     let wallet = wallet::WalletCore::new(config);
     assert_eq!(wallet.state(), wallet::WalletLifecycleState::Uninitialized);
@@ -93,6 +94,7 @@ fn test_full_wallet_lifecycle() {
         output_params_path: "/tmp/output.params".into(),
         account_index: 0,
         db_encryption_key: None,
+        boost_cache_dir: None,
     };
     let wallet2 = wallet::WalletCore::new(config2);
     let restore_words: Vec<String> = test_mnemonic_phrase()

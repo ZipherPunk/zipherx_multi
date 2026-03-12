@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
+import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
@@ -53,6 +54,13 @@ class AndroidBiometricAuth(private val context: Context) {
         get() = "Biometric"
 
     /**
+     * Whether the device has any credential (biometric OR PIN/pattern/password).
+     */
+    val hasDeviceCredential: Boolean
+        get() = biometricManager.canAuthenticate(BIOMETRIC_STRONG or DEVICE_CREDENTIAL) ==
+                BiometricManager.BIOMETRIC_SUCCESS
+
+    /**
      * Show a biometric prompt and block until the user authenticates or cancels.
      *
      * This bridges the asynchronous [BiometricPrompt] callback into a synchronous
@@ -64,6 +72,23 @@ class AndroidBiometricAuth(private val context: Context) {
      * @return `true` if authentication succeeded, `false` on failure or cancellation.
      */
     fun authenticate(reason: String, activity: FragmentActivity): Boolean {
+        return authenticateWith(reason, activity, BIOMETRIC_STRONG)
+    }
+
+    /**
+     * Show a biometric-or-device-credential prompt. Falls back to PIN/pattern/password
+     * when no biometrics are enrolled. Use for mandatory auth on security-sensitive
+     * actions (e.g. sending funds).
+     */
+    fun authenticateStrict(reason: String, activity: FragmentActivity): Boolean {
+        return authenticateWith(reason, activity, BIOMETRIC_STRONG or DEVICE_CREDENTIAL)
+    }
+
+    private fun authenticateWith(
+        reason: String,
+        activity: FragmentActivity,
+        authenticators: Int,
+    ): Boolean {
         val latch = CountDownLatch(1)
         val success = AtomicBoolean(false)
 
@@ -71,19 +96,19 @@ class AndroidBiometricAuth(private val context: Context) {
 
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                Log.i(TAG, "Biometric authentication succeeded")
+                Log.i(TAG, "Authentication succeeded")
                 success.set(true)
                 latch.countDown()
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                Log.w(TAG, "Biometric authentication error ($errorCode): $errString")
+                Log.w(TAG, "Authentication error ($errorCode): $errString")
                 success.set(false)
                 latch.countDown()
             }
 
             override fun onAuthenticationFailed() {
-                Log.w(TAG, "Biometric authentication failed (bad biometric)")
+                Log.w(TAG, "Authentication failed (bad credential)")
                 // Don't count down here; the system will let the user retry
                 // or eventually call onAuthenticationError.
             }
@@ -91,12 +116,17 @@ class AndroidBiometricAuth(private val context: Context) {
 
         val prompt = BiometricPrompt(activity, executor, callback)
 
-        val promptInfo = BiometricPrompt.PromptInfo.Builder()
+        val builder = BiometricPrompt.PromptInfo.Builder()
             .setTitle("ZipherX Authentication")
             .setSubtitle(reason)
-            .setNegativeButtonText("Cancel")
-            .setAllowedAuthenticators(BIOMETRIC_STRONG)
-            .build()
+            .setAllowedAuthenticators(authenticators)
+
+        // setNegativeButtonText is not allowed when DEVICE_CREDENTIAL is set
+        if (authenticators and DEVICE_CREDENTIAL == 0) {
+            builder.setNegativeButtonText("Cancel")
+        }
+
+        val promptInfo = builder.build()
 
         activity.runOnUiThread {
             prompt.authenticate(promptInfo)

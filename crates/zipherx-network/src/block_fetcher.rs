@@ -188,7 +188,7 @@ pub fn parse_raw_block(
 /// - vShieldedSpend
 /// - vShieldedOutput
 /// - binding_sig (64) — only if shielded data present
-fn parse_transaction(
+pub fn parse_transaction(
     data: &[u8],
 ) -> Option<(usize, [u8; 32], Vec<ShieldedOutput>, Vec<ShieldedSpend>)> {
     if data.len() < 12 {
@@ -409,6 +409,13 @@ pub fn meets_threshold(received: usize, expected: usize) -> bool {
         return true;
     }
     received * 2 >= expected // >= 50%
+}
+
+/// Parse a raw transaction from P2P `tx` message payload.
+/// Returns (txid, shielded_outputs, shielded_spends) or None.
+pub fn parse_raw_tx(data: &[u8]) -> Option<([u8; 32], Vec<ShieldedOutput>, Vec<ShieldedSpend>)> {
+    let (_size, txid, outputs, spends) = parse_transaction(data)?;
+    Some((txid, outputs, spends))
 }
 
 // ============================================================================

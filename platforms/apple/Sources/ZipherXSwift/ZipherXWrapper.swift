@@ -118,6 +118,7 @@ public struct WalletConfig {
     public let outputParamsPath: String
     public let accountIndex: UInt32
     public let dbEncryptionKey: [UInt8]?
+    public let boostCacheDir: String?
 
     public init(
         dbPath: String,
@@ -126,7 +127,8 @@ public struct WalletConfig {
         spendParamsPath: String,
         outputParamsPath: String,
         accountIndex: UInt32 = 0,
-        dbEncryptionKey: [UInt8]? = nil
+        dbEncryptionKey: [UInt8]? = nil,
+        boostCacheDir: String? = nil
     ) {
         self.dbPath = dbPath
         self.headerStorePath = headerStorePath
@@ -135,6 +137,7 @@ public struct WalletConfig {
         self.outputParamsPath = outputParamsPath
         self.accountIndex = accountIndex
         self.dbEncryptionKey = dbEncryptionKey
+        self.boostCacheDir = boostCacheDir
     }
 }
 
@@ -493,7 +496,8 @@ public enum ZipherXWrapper {
             spendParamsPath: config.spendParamsPath,
             outputParamsPath: config.outputParamsPath,
             accountIndex: config.accountIndex,
-            dbEncryptionKey: config.dbEncryptionKey
+            dbEncryptionKey: config.dbEncryptionKey,
+            boostCacheDir: config.boostCacheDir
         )
         do {
             try _ffiInitializeWallet(config: ffiConfig)

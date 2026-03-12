@@ -98,6 +98,8 @@ fun SettingsScreen(
     val connectedPeers by viewModel.connectedPeers.collectAsState()
     val onionAddress by viewModel.onionAddress.collectAsState()
     val syncPhase by viewModel.syncPhase.collectAsState()
+    val isRepairing by viewModel.isRepairing.collectAsState()
+    val repairStatus by viewModel.repairStatus.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -106,6 +108,7 @@ fun SettingsScreen(
     var showExportKeyDialog by remember { mutableStateOf(false) }
     var exportedKey by remember { mutableStateOf<CharArray?>(null) }
     var showSecurityAuditDialog by remember { mutableStateOf(false) }
+    var showRescanConfirmDialog by remember { mutableStateOf(false) }
 
     // Peer management state
     var peerList by remember { mutableStateOf<List<ConnectedPeerInfo>>(emptyList()) }
@@ -133,9 +136,9 @@ fun SettingsScreen(
         }
     }
 
-    // Initial load
-    remember {
-        scope.launch {
+    // Periodic network info refresh (every 5s while screen is visible)
+    LaunchedEffect(Unit) {
+        while (true) {
             peerCount = withContext(Dispatchers.IO) { ZipherXWrapper.getConnectedPeerCount() }
             torState = withContext(Dispatchers.IO) {
                 try { ZipherXWrapper.getTorState() } catch (_: Exception) { 0u.toUByte() }
@@ -143,8 +146,8 @@ fun SettingsScreen(
             torOnionAddr = withContext(Dispatchers.IO) {
                 try { ZipherXWrapper.getOnionAddress() } catch (_: Exception) { null }
             }
+            kotlinx.coroutines.delay(5_000)
         }
-        true
     }
 
     val cardShape = RoundedCornerShape(2.dp)
@@ -296,8 +299,9 @@ fun SettingsScreen(
                     Row(
                         modifier = Modifier.fillMaxWidth().clickable {
                             peerSectionExpanded = !peerSectionExpanded
-                            if (peerSectionExpanded && peerList.isEmpty()) {
+                            if (peerSectionExpanded) {
                                 scope.launch {
+                                    peerCount = withContext(Dispatchers.IO) { ZipherXWrapper.getConnectedPeerCount() }
                                     peerList = withContext(Dispatchers.IO) { ZipherXWrapper.getConnectedPeers() }
                                     bannedList = withContext(Dispatchers.IO) { ZipherXWrapper.getBannedPeers() }
                                 }
@@ -847,7 +851,7 @@ fun SettingsScreen(
                     OutlinedButton(
                         onClick = {
                             scope.launch {
-                                val authed = viewModel.authenticateBiometric(
+                                val authed = viewModel.authenticateBiometricOrSkip(
                                     "Authenticate to export spending key"
                                 )
                                 if (authed) {
@@ -992,20 +996,35 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .padding(16.dp),
                 ) {
+                    // Status indicator when a maintenance operation is in progress
+                    if (isRepairing && repairStatus != null) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = ZColors.primary,
+                            trackColor = ZColors.surface,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = repairStatus ?: "",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = ZColors.primary,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+
                     OutlinedButton(
-                        onClick = {
-                            scope.launch {
-                                snackbarHostState.showSnackbar("Repair Database started")
-                            }
-                        },
+                        onClick = { viewModel.repairDatabase() },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(2.dp),
+                        enabled = !isRepairing && !isSyncing,
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = ZColors.primary,
+                            disabledContentColor = ZColors.primaryDim,
                         ),
                     ) {
                         Text(
-                            text = "REPAIR DATABASE",
+                            text = if (isRepairing) "REPAIRING..." else "REPAIR DATABASE",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                             letterSpacing = 1.sp,
@@ -1022,20 +1041,19 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Button(
-                        onClick = {
-                            scope.launch {
-                                snackbarHostState.showSnackbar("Full Rescan started")
-                            }
-                        },
+                        onClick = { showRescanConfirmDialog = true },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(2.dp),
+                        enabled = !isRepairing && !isSyncing,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ZColors.error,
                             contentColor = Color.White,
+                            disabledContainerColor = ZColors.error.copy(alpha = 0.3f),
+                            disabledContentColor = Color.White.copy(alpha = 0.5f),
                         ),
                     ) {
                         Text(
-                            text = "FULL RESCAN",
+                            text = if (isRepairing) "RESCANNING..." else "FULL RESCAN",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -1247,6 +1265,80 @@ fun SettingsScreen(
             )
         }
 
+        // Full Rescan Confirmation Dialog
+        if (showRescanConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showRescanConfirmDialog = false },
+                containerColor = ZColors.surface,
+                shape = RoundedCornerShape(2.dp),
+                title = {
+                    Text(
+                        text = "FULL RESCAN?",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        letterSpacing = 2.sp,
+                        color = ZColors.error,
+                    )
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "This will reset all sync state and re-download everything from scratch.",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            color = ZColors.primary,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "- Balance will show 0 until rescan completes\n- May take 5-15 minutes depending on connection\n- Your notes and spending key are preserved",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = ZColors.primaryDim,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Only use this if repair does not fix your issue.",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ZColors.error,
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showRescanConfirmDialog = false
+                            viewModel.fullRescan()
+                        },
+                        shape = RoundedCornerShape(2.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ZColors.error,
+                            contentColor = Color.White,
+                        ),
+                    ) {
+                        Text(
+                            text = "START FULL RESCAN",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRescanConfirmDialog = false }) {
+                        Text(
+                            text = "CANCEL",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = ZColors.primaryDim,
+                        )
+                    }
+                },
+            )
+        }
+
         // Delete All Data Confirmation Dialog
         if (showDeleteConfirmDialog) {
             AlertDialog(
@@ -1293,7 +1385,8 @@ fun SettingsScreen(
                         onClick = {
                             showDeleteConfirmDialog = false
                             scope.launch {
-                                val authed = viewModel.authenticateBiometric(
+                                // Try biometric auth if available, but proceed if no biometrics enrolled
+                                val authed = viewModel.authenticateBiometricOrSkip(
                                     "Authenticate to delete all wallet data"
                                 )
                                 if (authed) {

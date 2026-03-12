@@ -34,6 +34,15 @@ import java.util.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private val pendingSettlementMessages = listOf(
+    "Your proof floats in the mempool.\nMiners compete to etch it into the next block.\nPatience — privacy takes time.",
+    "The zero-knowledge proof is verified.\nNow the chain must seal it.\nNo one knows what you sent. Not even the miners.",
+    "Cypherpunks wait for blocks, not banks.\nYour shielded TX is queued.\nThe math is done. The mining continues.",
+    "Your transaction is invisible to surveillance.\nA miner will lock it into stone shortly.\nTrust the protocol.",
+    "Mempool accepted. Block pending.\nThe network validates without seeing.\nThis is what financial privacy looks like.",
+    "Shielded and waiting.\nNo address. No amount. No trace.\nJust a proof waiting for its block.",
+)
+
 private val cypherpunkQuotes = listOf(
     // Eric Hughes - A Cypherpunk's Manifesto (1993)
     "\"Privacy is necessary for an open society in the electronic age.\" — Eric Hughes",
@@ -297,24 +306,29 @@ fun WalletScreen(
                 ),
                 label = "pulse_alpha",
             )
-            Row(
+            val message = remember { pendingSettlementMessages.random() }
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(1.dp, ZColors.warning.copy(alpha = 0.6f), RoundedCornerShape(2.dp))
                     .background(ZColors.warning.copy(alpha = 0.05f), RoundedCornerShape(2.dp))
-                    .padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(12.dp),
             ) {
-                Text("[~]", fontSize = 12.sp, fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold, color = ZColors.warning.copy(alpha = pulseAlpha))
-                Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("[~]", fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold, color = ZColors.warning.copy(alpha = pulseAlpha))
                     Text("AWAITING SETTLEMENT", fontSize = 10.sp, fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold, color = ZColors.warning, letterSpacing = 1.sp)
-                    Text("Cleared — waiting for a miner to seal it into a block...",
-                        fontSize = 9.sp, fontFamily = FontFamily.Monospace,
-                        color = ZColors.warning.copy(alpha = 0.6f))
                 }
+                Spacer(Modifier.height(8.dp))
+                Text(message, fontSize = 10.sp, fontFamily = FontFamily.Monospace,
+                    color = ZColors.warning.copy(alpha = 0.8f), lineHeight = 16.sp)
+                Spacer(Modifier.height(4.dp))
+                Text("tx: ${pendingTxid?.take(16)}...", fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace, color = ZColors.textDim)
             }
             Spacer(Modifier.height(12.dp))
         }

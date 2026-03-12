@@ -48,6 +48,7 @@ fun BalanceCard(
     syncPhase: String,
     syncProgress: Double,
     isSyncing: Boolean,
+    isPendingConfirmation: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -101,12 +102,6 @@ fun BalanceCard(
             color = ZColors.primary,
             modifier = Modifier
                 .testTag("balance_text")
-                .drawBehind {
-                    drawRoundRect(
-                        color = ZColors.glow,
-                        cornerRadius = CornerRadius(4f),
-                    )
-                }
                 .align(Alignment.CenterHorizontally),
         )
 
@@ -125,6 +120,20 @@ fun BalanceCard(
                 text = formatZcl(balance?.spendable ?: 0L),
                 style = MaterialTheme.typography.labelMedium,
                 color = ZColors.primaryDark,
+            )
+        }
+
+        // Pending confirmation notice
+        if (isPendingConfirmation) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "AWAITING CONFIRMATION...",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp,
+                ),
+                color = ZColors.warning,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
             )
         }
 

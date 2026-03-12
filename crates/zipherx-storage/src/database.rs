@@ -414,6 +414,137 @@ impl WalletDatabase {
         Ok(updated > 0)
     }
 
+    /// Find all distinct txids that have notes marked as spent but were never mined
+    /// (spent_height = 0). These are candidates for auto-recovery if the TX has expired.
+    /// FIX #1300: Auto-recover notes from unconfirmed sends.
+    pub fn get_unconfirmed_spent_txids(&self) -> Result<Vec<String>, StorageError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT spent_in_tx FROM notes
+             WHERE is_spent = 1 AND spent_height = 0 AND spent_in_tx IS NOT NULL",
+        )?;
+        let txids = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(txids)
+    }
+
+    /// Check if a transaction was confirmed (mined into a block).
+    /// Returns true if the txid appears in transaction_history with height > 0.
+    pub fn is_transaction_confirmed(&self, txid: &str) -> Result<bool, StorageError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM transaction_history
+             WHERE txid = ?1 AND height > 0",
+            params![txid],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Auto-recover notes from unconfirmed sends that have expired.
+    /// Called after sync completes. If a TX was never mined and enough blocks
+    /// have passed (expiry_blocks), restore the notes to spendable.
+    /// Returns total notes restored and total value restored.
+    /// FIX #1300: Automatic recovery of notes from failed/expired sends.
+    pub fn auto_recover_expired_sends(
+        &self,
+        _current_height: u64,
+        broadcast_expiry_blocks: u64,
+    ) -> Result<(usize, u64), StorageError> {
+        let unconfirmed_txids = self.get_unconfirmed_spent_txids()?;
+        if unconfirmed_txids.is_empty() {
+            return Ok((0, 0));
+        }
+
+        let mut total_restored = 0usize;
+        let mut total_value = 0u64;
+
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        for txid in &unconfirmed_txids {
+            // Check if this TX was confirmed in any block
+            let confirmed: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM transaction_history
+                 WHERE txid = ?1 AND height > 0",
+                params![txid],
+                |row| row.get(0),
+            ).unwrap_or(0);
+
+            if confirmed > 0 {
+                continue; // TX was mined — don't recover
+            }
+
+            // FIX #1300: Use BROADCAST TIMESTAMP for expiry, NOT note height.
+            // The note height is when the note was RECEIVED, which could be thousands
+            // of blocks ago. The broadcast time is when the TX was actually sent.
+            // Without a valid timestamp, we cannot determine expiry — skip recovery.
+            let tx_timestamp: Option<i64> = conn.query_row(
+                "SELECT timestamp FROM transaction_history WHERE txid = ?1",
+                params![txid],
+                |row| row.get(0),
+            ).ok().flatten();
+
+            let expired = match tx_timestamp {
+                Some(ts) if ts > 0 => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+                    let elapsed_secs = now - ts;
+                    // 20 blocks × 75s = 1500s = 25 minutes
+                    let expiry_secs = broadcast_expiry_blocks as i64 * 75;
+                    elapsed_secs > expiry_secs
+                }
+                _ => {
+                    // No timestamp — legacy TX from before FIX #1300.
+                    // Use a conservative fallback: check if enough blocks have passed
+                    // since the CURRENT chain tip minus expiry window. If the TX has been
+                    // sitting unconfirmed and we're fully synced, recover it.
+                    // Only recover if we've completed at least 2 full syncs past the
+                    // expiry window (to avoid premature recovery of legacy TXs).
+                    false // Don't auto-recover TXs without timestamps — require manual rescan
+                }
+            };
+
+            if expired {
+                // Restore notes
+                let value: i64 = conn.query_row(
+                    "SELECT COALESCE(SUM(value), 0) FROM notes
+                     WHERE spent_in_tx = ?1 AND is_spent = 1",
+                    params![txid],
+                    |row| row.get(0),
+                ).unwrap_or(0);
+
+                let restored = conn.execute(
+                    "UPDATE notes SET is_spent = 0, spent_in_tx = NULL, spent_height = NULL
+                     WHERE spent_in_tx = ?1 AND is_spent = 1",
+                    params![txid],
+                )?;
+
+                // Mark the TX history as rejected
+                conn.execute(
+                    "UPDATE transaction_history SET status = 'rejected'
+                     WHERE txid = ?1 AND height = 0",
+                    params![txid],
+                )?;
+
+                if restored > 0 {
+                    eprintln!(
+                        "[ZipherX] AUTO-RECOVERY: Restored {} note(s) worth {} zatoshis from expired TX {}",
+                        restored,
+                        value,
+                        &txid[..16.min(txid.len())]
+                    );
+                    total_restored += restored;
+                    total_value += value.max(0) as u64;
+                }
+            }
+        }
+
+        Ok((total_restored, total_value))
+    }
+
     /// Update witness for a note.
     ///
     /// RS-8: The witness blob is stored and retrieved without cryptographic
@@ -1108,10 +1239,15 @@ impl WalletDatabase {
         // RS-7: Use INSERT OR IGNORE to prevent overwriting existing records.
         // REPLACE would delete and re-insert, losing any fields set by other
         // code paths (e.g., confirmations, address, timestamp).
+        // FIX #1300: Store broadcast timestamp for auto-recovery expiry calculation.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
         tx.execute(
             "INSERT OR IGNORE INTO transaction_history
-             (txid, height, tx_type, amount, fee, memo, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'confirmed')",
+             (txid, height, tx_type, amount, fee, memo, status, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'confirmed', ?7)",
             params![
                 txid,
                 spent_height as i64,
@@ -1119,6 +1255,7 @@ impl WalletDatabase {
                 amount as i64,
                 fee as i64,
                 memo,
+                now,
             ],
         )
         .map_err(|e| StorageError::TransactionFailed(format!("Insert TX: {e}")))?;
@@ -1292,6 +1429,29 @@ impl WalletDatabase {
         tx.execute("DELETE FROM transaction_history", [])?;
         tx.execute(
             "UPDATE sync_state SET tree_state = NULL, tree_height = 0 WHERE id = 1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Nuclear reset for full rescan: delete ALL data and reset ALL sync state.
+    ///
+    /// This is the only reliable way to fix corrupted witnesses/anchors.
+    /// Matches the official ZipherX full rescan approach:
+    /// 1. Delete all notes (forces boost scan to re-insert with correct positions)
+    /// 2. Delete all transaction history
+    /// 3. Reset tree state + height
+    /// 4. Reset last_scanned_height to 0 (triggers fresh scan from boost)
+    /// 5. Reset delta_bundle_verified (forces fresh delta validation)
+    pub fn full_rescan_reset(&self) -> Result<(), StorageError> {
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM notes", [])?;
+        tx.execute("DELETE FROM transaction_history", [])?;
+        tx.execute(
+            "UPDATE sync_state SET tree_state = NULL, tree_height = 0, \
+             last_scanned_height = 0, delta_bundle_verified = 0 WHERE id = 1",
             [],
         )?;
         tx.commit()?;

@@ -28,6 +28,7 @@ data class WalletConfig(
     val outputParamsPath: String,
     val accountIndex: UInt = 0u,
     val dbEncryptionKey: List<UByte>? = null,
+    val boostCacheDir: String? = null,
 )
 
 data class Balance(
@@ -154,6 +155,7 @@ object ZipherXWrapper {
             outputParamsPath = config.outputParamsPath,
             accountIndex = config.accountIndex,
             dbEncryptionKey = config.dbEncryptionKey,
+            boostCacheDir = config.boostCacheDir,
         )
         uniffi.zipherx.initializeWallet(ffiConfig)
     }
@@ -378,5 +380,23 @@ object ZipherXWrapper {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * Repair database: clears tree state, preserves notes and history.
+     * The next sync will rebuild witnesses and tree from delta data.
+     * BLOCKING — must be called from a background thread.
+     */
+    fun repairDatabase() {
+        uniffi.zipherx.repairDatabase()
+    }
+
+    /**
+     * Full rescan: resets all sync state. The next sync re-downloads
+     * everything from scratch (boost file + blocks).
+     * BLOCKING — must be called from a background thread.
+     */
+    fun fullRescan() {
+        uniffi.zipherx.fullRescan()
     }
 }

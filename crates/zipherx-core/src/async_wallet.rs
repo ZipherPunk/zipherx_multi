@@ -114,7 +114,10 @@ impl AsyncWallet {
     /// Discovers peers via DNS, connects, and performs handshakes.
     pub async fn connect_network(&self) -> Result<(), CoreError> {
         let mut pm = self.peer_manager.lock().await;
-        pm.connect().await.map_err(|e| CoreError::Network(e))?;
+        pm.connect_with_counter(Some(&self.connected_peer_count))
+            .await
+            .map_err(|e| CoreError::Network(e))?;
+        // Final update in case connect_with_counter missed any edge case
         self.connected_peer_count
             .store(pm.connected_count() as u32, Ordering::Relaxed);
         Ok(())
@@ -166,6 +169,7 @@ impl AsyncWallet {
         // Update peer count before sync (so UI sees it while mutex is held)
         peer_count_ref.store(pm.connected_count() as u32, Ordering::Relaxed);
 
+        let boost_cache = self.core.config.boost_cache_dir.as_ref().map(std::path::PathBuf::from);
         let result = async_sync::sync_to_tip(
             &mut pm,
             &self.header_store,
@@ -175,6 +179,7 @@ impl AsyncWallet {
             &self.core.guards,
             progress,
             Some(peer_count_ref.clone()),
+            boost_cache,
         )
         .await;
 
@@ -238,6 +243,7 @@ impl AsyncWallet {
             self.db.clone(),
             &pm,
             &self.header_store,
+            &self.delta_store,
             sk_bytes,
             &request,
             &self.core.guards,
@@ -412,9 +418,8 @@ impl AsyncWallet {
         }
     }
 
-    /// Run a database repair.
+    /// Run a database repair (light: clear tree + witnesses only).
     pub async fn repair_database(&self) -> Result<(), CoreError> {
-        // Use compare_exchange on is_repairing to acquire
         let acquired = self
             .core
             .guards
@@ -431,12 +436,54 @@ impl AsyncWallet {
             return Err(CoreError::RepairInProgress);
         }
 
-        // Repair logic: clear tree state, reload from boost, rescan
         let db_clone = self.db.clone();
-        let result = tokio::task::spawn_blocking(move || db_clone.clear_tree_state_only())
+        let result = tokio::task::spawn_blocking(move || db_clone.clear_tree_state_for_rebuild())
             .await
             .map_err(|e| CoreError::RuntimeError(e.to_string()))?
             .map_err(|e| CoreError::Storage(e.to_string()));
+
+        self.core
+            .guards
+            .is_repairing
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        result
+    }
+
+    /// Full rescan: clear tree state, witnesses, and force re-validation.
+    ///
+    /// Clears tree state + all witnesses + resets delta_bundle_verified.
+    /// Notes are preserved — they'll get fresh witnesses on next sync.
+    /// This is safe on Android where the boost file may not be at the
+    /// same path as the delta store (deleting notes would lose them forever).
+    pub async fn full_rescan(&self) -> Result<(), CoreError> {
+        let acquired = self
+            .core
+            .guards
+            .is_repairing
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok();
+
+        if !acquired {
+            return Err(CoreError::RepairInProgress);
+        }
+
+        // Clear tree state + witnesses (notes preserved)
+        let db_clone = self.db.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            db_clone.clear_tree_state_for_rebuild()?;
+            // Also reset delta_bundle_verified to force fresh tree validation
+            db_clone.set_delta_bundle_verified(false)?;
+            Ok::<(), zipherx_storage::types::StorageError>(())
+        })
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+        .map_err(|e| CoreError::Storage(e.to_string()));
 
         self.core
             .guards
@@ -468,6 +515,7 @@ mod tests {
             output_params_path: "/tmp/output.params".into(),
             account_index: 0,
             db_encryption_key: None,
+            boost_cache_dir: None,
         }
     }
 

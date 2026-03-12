@@ -162,7 +162,8 @@ pub fn get_tor_data_dir() -> PathBuf {
         }
     }
 
-    // Fallback
+    // Fallback (unreachable on Android/macOS/Windows where earlier cfg blocks return)
+    #[allow(unreachable_code)]
     PathBuf::from("/tmp/zipherx_tor")
 }
 
@@ -328,9 +329,9 @@ pub async fn start_tor(data_dir: Option<PathBuf>) -> Result<u16, TorError> {
                 #[cfg(debug_assertions)]
                 eprintln!("[ZipherX-Tor] Port {port} listening but not SOCKS5");
             }
-            Err(e) => {
+            Err(_e) => {
                 #[cfg(debug_assertions)]
-                eprintln!("[ZipherX-Tor] Port {port} not reachable: {e}");
+                eprintln!("[ZipherX-Tor] Port {port} not reachable: {_e}");
             }
         }
     }

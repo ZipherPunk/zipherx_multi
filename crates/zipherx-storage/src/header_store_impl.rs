@@ -4,6 +4,7 @@
 //! sapling root caching and both-byte-order lookups (FIX #1230).
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use rusqlite::params;
@@ -17,6 +18,8 @@ pub struct SqliteHeaderStore {
     /// FIX #1253: In-memory cache of delta sapling roots.
     /// Checked before SQL for fast lookups.
     delta_sapling_roots: Mutex<HashSet<Vec<u8>>>,
+    /// Rows inserted since last WAL checkpoint (for bulk import disk pressure management).
+    bulk_insert_count: AtomicU64,
 }
 
 impl SqliteHeaderStore {
@@ -95,6 +98,7 @@ impl SqliteHeaderStore {
         Ok(Self {
             conn: Mutex::new(conn),
             delta_sapling_roots: Mutex::new(HashSet::new()),
+            bulk_insert_count: AtomicU64::new(0),
         })
     }
 
@@ -118,6 +122,7 @@ impl SqliteHeaderStore {
              DROP INDEX IF EXISTS idx_sapling_roots_reversed;",
         )
         .map_err(|e| NetworkError::HeaderSyncFailed(format!("begin_bulk_import: {e}")))?;
+        self.bulk_insert_count.store(0, Ordering::Relaxed);
         eprintln!(
             "[ZipherX] HeaderStore: bulk import mode ON (synchronous=NORMAL, indexes dropped)"
         );
@@ -125,13 +130,33 @@ impl SqliteHeaderStore {
     }
 
     /// End bulk import mode: rebuild indexes and restore safe pragmas.
+    ///
+    /// Rebuilds indexes one at a time with WAL checkpoints between each to
+    /// prevent "database or disk is full" on space-constrained devices
+    /// (e.g. Android emulators). Each checkpoint merges WAL back into the
+    /// main DB file and truncates the WAL, freeing disk space for the next
+    /// index build.
     pub fn end_bulk_import(&self) -> Result<(), NetworkError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Checkpoint WAL before rebuilding indexes to reclaim space from bulk inserts
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
+
+        // Build indexes one at a time with checkpoints between each
+        let indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_headers_hash ON block_headers(hash)",
+            "CREATE INDEX IF NOT EXISTS idx_sapling_roots_root ON sapling_roots(root)",
+            "CREATE INDEX IF NOT EXISTS idx_sapling_roots_reversed ON sapling_roots(root_reversed)",
+        ];
+        for idx_sql in &indexes {
+            conn.execute_batch(idx_sql)
+                .map_err(|e| NetworkError::HeaderSyncFailed(format!("end_bulk_import: {e}")))?;
+            // Checkpoint after each index to free WAL space for the next one
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+
         conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_headers_hash ON block_headers(hash);
-             CREATE INDEX IF NOT EXISTS idx_sapling_roots_root ON sapling_roots(root);
-             CREATE INDEX IF NOT EXISTS idx_sapling_roots_reversed ON sapling_roots(root_reversed);
-             PRAGMA synchronous = NORMAL;
+            "PRAGMA synchronous = NORMAL;
              PRAGMA journal_mode = WAL;
              PRAGMA cache_size = -8000;",
         )
@@ -558,6 +583,17 @@ impl HeaderStore for SqliteHeaderStore {
 
         tx.commit()
             .map_err(|e| NetworkError::HeaderSyncFailed(e.to_string()))?;
+
+        // Periodic WAL checkpoint during bulk import to prevent disk exhaustion.
+        // Every 200k rows (~every 4 batches of 50k), checkpoint to merge WAL
+        // back into the main DB file. This prevents the WAL from growing to
+        // hundreds of MB on space-constrained devices (Android emulators).
+        let prev = self
+            .bulk_insert_count
+            .fetch_add(headers.len() as u64, Ordering::Relaxed);
+        if prev / 200_000 != (prev + headers.len() as u64) / 200_000 {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE)");
+        }
 
         // Update in-memory cache with new roots
         let mut cache = self

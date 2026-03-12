@@ -4,6 +4,7 @@ import LocalAuthentication
 @main
 struct ZipherXApp: App {
 
+    @AppStorage("disclaimer_accepted") private var disclaimerAccepted = false
     @State private var walletReady: Bool
     @State private var walletLocked: Bool
     @Environment(\.scenePhase) private var scenePhase
@@ -22,7 +23,12 @@ struct ZipherXApp: App {
     var body: some Scene {
         WindowGroup {
             if #available(macOS 14, iOS 17, *) {
-                if walletReady && walletLocked {
+                if !disclaimerAccepted {
+                    DisclaimerView(onAccept: {
+                        disclaimerAccepted = true
+                    })
+                    .frame(minWidth: 400, minHeight: 600)
+                } else if walletReady && walletLocked {
                     LockScreenView(onUnlocked: {
                         walletLocked = false
                     })

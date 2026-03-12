@@ -70,14 +70,19 @@ fun StatusBar(viewModel: WalletViewModel) {
             color = Color(0xFF555555),
         )
 
-        // Peers
+        // Peers — color-coded: green (>=3), orange (1-2), red (0)
+        val peerColor = when {
+            peers >= 3u -> Color(0xFF00E676)
+            peers >= 1u -> Color(0xFFFFC107)
+            else -> Color(0xFFFF5252)
+        }
         Text(
             text = "${peers} peers",
             style = MaterialTheme.typography.labelSmall.copy(
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
             ),
-            color = if (peers > 0u) Color(0xFF888888) else Color(0xFFFF5252),
+            color = peerColor,
         )
 
         // Block height + status

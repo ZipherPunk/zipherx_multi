@@ -54,6 +54,10 @@ pub struct WalletConfig {
     /// Optional 32-byte encryption key for SQLCipher database encryption.
     /// When provided, the database is encrypted at rest.
     pub db_encryption_key: Option<Vec<u8>>,
+    /// Optional directory for boost file cache (large files: 2-4 GB).
+    /// On Android, should point to external storage to avoid filling internal storage.
+    /// When `None`, defaults to `delta_store_dir/../BoostCache`.
+    pub boost_cache_dir: Option<String>,
 }
 
 /// Balance information.
@@ -306,6 +310,7 @@ mod tests {
             output_params_path: "/tmp/output.params".into(),
             account_index: 0,
             db_encryption_key: None,
+            boost_cache_dir: None,
         }
     }
 

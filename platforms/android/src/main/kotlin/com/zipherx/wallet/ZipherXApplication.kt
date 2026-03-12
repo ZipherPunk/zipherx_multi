@@ -67,6 +67,15 @@ class ZipherXApplication : Application() {
         try {
             val dataDir = filesDir.absolutePath
             val dbKey = getOrCreateDbEncryptionKey()
+
+            // Use external storage for boost cache (large 2-4 GB files)
+            // to avoid filling up limited internal storage.
+            // Falls back to internal storage if external is unavailable.
+            val boostCacheDir = (getExternalFilesDir(null) ?: filesDir).let {
+                "$it/BoostCache"
+            }
+            Log.i(TAG, "Boost cache dir: $boostCacheDir")
+
             val config = WalletConfig(
                 dbPath = "$dataDir/wallet.db",
                 headerStorePath = "$dataDir/headers.bin",
@@ -74,6 +83,7 @@ class ZipherXApplication : Application() {
                 spendParamsPath = "$dataDir/sapling-spend.params",
                 outputParamsPath = "$dataDir/sapling-output.params",
                 dbEncryptionKey = dbKey,
+                boostCacheDir = boostCacheDir,
             )
             ZipherXWrapper.initializeWallet(config)
             Log.i(TAG, "Wallet storage initialized (encrypted)")

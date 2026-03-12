@@ -8,6 +8,61 @@
 
 import SwiftUI
 
+// MARK: - Cypherpunk Quotes
+
+private let pendingSettlementMessages: [String] = [
+    "Your proof floats in the mempool.\nMiners compete to etch it into the next block.\nPatience \u{2014} privacy takes time.",
+    "The zero-knowledge proof is verified.\nNow the chain must seal it.\nNo one knows what you sent. Not even the miners.",
+    "Cypherpunks wait for blocks, not banks.\nYour shielded TX is queued.\nThe math is done. The mining continues.",
+    "Your transaction is invisible to surveillance.\nA miner will lock it into stone shortly.\nTrust the protocol.",
+    "Mempool accepted. Block pending.\nThe network validates without seeing.\nThis is what financial privacy looks like.",
+    "Shielded and waiting.\nNo address. No amount. No trace.\nJust a proof waiting for its block.",
+]
+
+private let cypherpunkQuotes: [String] = [
+    // Eric Hughes - A Cypherpunk's Manifesto (1993)
+    "\"Privacy is necessary for an open society in the electronic age.\" \u{2014} Eric Hughes",
+    "\"Privacy is not secrecy. A private matter is something one doesn't want the whole world to know, but a secret matter is something one doesn't want anybody to know.\" \u{2014} Eric Hughes",
+    "\"Privacy is the power to selectively reveal oneself to the world.\" \u{2014} Eric Hughes",
+    "\"We must defend our own privacy if we expect to have any.\" \u{2014} Eric Hughes",
+    "\"Cypherpunks write code.\" \u{2014} Eric Hughes",
+    "\"We know that software can't be destroyed and that a widely dispersed system can't be shut down.\" \u{2014} Eric Hughes",
+    "\"We the Cypherpunks are dedicated to building anonymous systems.\" \u{2014} Eric Hughes",
+    // Timothy C. May
+    "\"Just as the technology of printing altered and reduced the power of medieval guilds, so too will cryptologic methods fundamentally alter the nature of corporations and of government interference in economic transactions.\" \u{2014} Timothy C. May",
+    // Satoshi Nakamoto
+    "\"The root problem with conventional currency is all the trust that's required to make it work.\" \u{2014} Satoshi Nakamoto",
+    "\"What is needed is an electronic payment system based on cryptographic proof instead of trust.\" \u{2014} Satoshi Nakamoto",
+    "\"If you don't believe it or don't get it, I don't have the time to try to convince you, sorry.\" \u{2014} Satoshi Nakamoto",
+    "\"I've been working on a new electronic cash system that's fully peer-to-peer, with no trusted third party.\" \u{2014} Satoshi Nakamoto",
+    // Phil Zimmermann
+    "\"If privacy is outlawed, only outlaws will have privacy.\" \u{2014} Phil Zimmermann",
+    "\"Privacy is an inherent human right, and a requirement for maintaining the human condition with dignity and respect.\" \u{2014} Phil Zimmermann",
+    // Julian Assange
+    "\"Privacy for the weak, transparency for the powerful.\" \u{2014} Julian Assange",
+    "\"Cryptography is the ultimate form of non-violent direct action.\" \u{2014} Julian Assange",
+    // John Perry Barlow
+    "\"Relying on the government to protect your privacy is like asking a peeping tom to install your window blinds.\" \u{2014} John Perry Barlow",
+    // Bruce Schneier
+    "\"Privacy is not something that I'm merely entitled to, it's an absolute prerequisite.\" \u{2014} Bruce Schneier",
+    "\"Security is a process, not a product.\" \u{2014} Bruce Schneier",
+    // Edward Snowden
+    "\"Arguing that you don't care about the right to privacy because you have nothing to hide is no different than saying you don't care about free speech because you have nothing to say.\" \u{2014} Edward Snowden",
+    "\"Privacy isn't about something to hide. Privacy is about something to protect.\" \u{2014} Edward Snowden",
+    // Hal Finney
+    "\"Running bitcoin.\" \u{2014} Hal Finney",
+    // Nick Szabo
+    "\"Trusted third parties are security holes.\" \u{2014} Nick Szabo",
+    // Others
+    "\"In a time of deceit, telling the truth is a revolutionary act.\" \u{2014} George Orwell",
+    "\"Those who would give up essential Liberty, to purchase a little temporary Safety, deserve neither Liberty nor Safety.\" \u{2014} Benjamin Franklin",
+    "\"The only way to deal with an unfree world is to become so absolutely free that your very existence is an act of rebellion.\" \u{2014} Albert Camus",
+    // ZipherX
+    "\"Zero-knowledge. Zero trust. Zero compromise.\" \u{2014} ZipherX",
+    "\"Your keys, your coins. Your privacy, your right.\" \u{2014} ZipherX",
+    "\"In math we trust.\" \u{2014} ZipherX",
+]
+
 @available(iOS 17, macOS 14, *)
 public struct WalletView: View {
 
@@ -17,6 +72,8 @@ public struct WalletView: View {
     @State private var showPendingWarning = false
     /// H-15: Obscure the view when app enters background/inactive (app switcher protection).
     @State private var isObscured = false
+    @State private var currentQuote: String?
+    @State private var showQuote = false
     @Environment(\.scenePhase) private var scenePhase
 
     public init() {}
@@ -29,13 +86,22 @@ public struct WalletView: View {
                 VStack(spacing: 16) {
                     // Menu bar
                     HStack {
-                        Image(systemName: "lock.shield.fill")
-                            .font(ZFonts.heading)
-                            .foregroundColor(ZColors.primary)
-                            .shadow(color: ZColors.glow, radius: 3)
-                        Text("ZIPHERX")
-                            .font(ZFonts.title)
-                            .foregroundColor(ZColors.primary)
+                        HStack(spacing: 6) {
+                            Image(systemName: "lock.shield.fill")
+                                .font(ZFonts.heading)
+                                .foregroundColor(ZColors.primary)
+                                .shadow(color: ZColors.glow, radius: 3)
+                            Text("ZIPHERX")
+                                .font(ZFonts.title)
+                                .foregroundColor(ZColors.primary)
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            currentQuote = cypherpunkQuotes.randomElement()
+                            withAnimation(.easeIn(duration: 0.2)) {
+                                showQuote = true
+                            }
+                        }
                         Spacer()
                         if viewModel.isSyncing {
                             Button(action: { viewModel.stopSync() }) {
@@ -79,6 +145,20 @@ public struct WalletView: View {
                     .foregroundColor(viewModel.connectedPeers > 0 ? ZColors.success : ZColors.error)
                     .padding(.horizontal, 16)
 
+                    // Cypherpunk quote banner
+                    if showQuote, let quote = currentQuote {
+                        Text(quote)
+                            .font(ZFonts.small)
+                            .foregroundColor(ZColors.primaryDim)
+                            .multilineTextAlignment(.center)
+                            .padding(8)
+                            .frame(maxWidth: .infinity)
+                            .background(ZColors.terminalBlack)
+                            .overlay(Rectangle().stroke(ZColors.primaryDim.opacity(0.4), lineWidth: 1))
+                            .padding(.horizontal, 16)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
                     // Balance
                     BalanceView(
                         balance: viewModel.balance,
@@ -106,37 +186,12 @@ public struct WalletView: View {
                         .padding(.horizontal, 16)
                     }
 
-                    // Pending confirmation banner
+                    // Pending settlement banner with cypherpunk message
                     if viewModel.pendingConfirmationTxid != nil {
-                        HStack(spacing: 8) {
-                            Text("[~]")
-                                .font(ZFonts.mono)
-                                .foregroundColor(ZColors.warning)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("AWAITING CONFIRMATION")
-                                    .font(ZFonts.caption)
-                                    .foregroundColor(ZColors.warning)
-                                // SA-27: Safe unwrap instead of force unwrap
-                                Text({
-                                    if let peerStatus = viewModel.mempoolPeerStatus {
-                                        return "Broadcast to \(peerStatus) peers — waiting for block..."
-                                    } else {
-                                        return "Transaction broadcast — waiting for block confirmation..."
-                                    }
-                                }())
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundColor(ZColors.warning.opacity(0.7))
-                                if let txid = viewModel.pendingConfirmationTxid {
-                                    Text("tx: \(txid.prefix(16))...")
-                                        .font(.system(size: 8, design: .monospaced))
-                                        .foregroundColor(ZColors.primaryDim)
-                                }
-                            }
-                            Spacer()
-                        }
-                        .padding(12)
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(ZColors.warning, lineWidth: 1))
-                        .background(ZColors.warning.opacity(0.08))
+                        PendingSettlementBanner(
+                            txid: viewModel.pendingConfirmationTxid ?? "",
+                            peerStatus: viewModel.mempoolPeerStatus
+                        )
                         .padding(.horizontal, 16)
                     }
 
@@ -174,12 +229,12 @@ public struct WalletView: View {
             }
 
             // TX confirmation toast — slides down when a pending TX gets first confirmation
-            if let message = viewModel.confirmationMessage, viewModel.confirmedTxid != nil {
+            if viewModel.confirmationMessage != nil, viewModel.confirmedTxid != nil {
                 ConfirmationToast(
                     icon: "cube.fill",
                     iconColor: ZColors.success,
                     title: "BLOCK CONFIRMED",
-                    message: message
+                    message: WalletViewModel.randomSettlementMessage()
                 ) {
                     viewModel.dismissConfirmation()
                 }
@@ -193,8 +248,8 @@ public struct WalletView: View {
                 ConfirmationToast(
                     icon: "hourglass",
                     iconColor: ZColors.warning,
-                    title: "ACCEPTED IN MEMPOOL",
-                    message: "TX broadcast to \(viewModel.mempoolPeerStatus ?? "?") peers. Waiting for a miner to seal it into a block..."
+                    title: "MEMPOOL CLEARED",
+                    message: WalletViewModel.randomClearingMessage()
                 ) {
                     viewModel.clearSendStatus()
                 }
@@ -206,14 +261,14 @@ public struct WalletView: View {
             // Incoming TX toast
             if let incomingTx = viewModel.incomingTxNotification {
                 let amount = Double(incomingTx.amount) / 1e8
+                let incomingMessage = incomingTx.confirmations > 0
+                    ? String(format: "[ +%.8f ZCL ]\n%@", amount, WalletViewModel.randomSettlementMessage())
+                    : String(format: "[ +%.8f ZCL ]\n%@", amount, WalletViewModel.randomClearingMessage())
                 ConfirmationToast(
-                    icon: "arrow.down.left",
-                    iconColor: ZColors.success,
-                    title: "INCOMING TRANSACTION",
-                    message: String(format: "+%.8f ZCL received. %@", amount,
-                        incomingTx.confirmations > 0
-                            ? "\(incomingTx.confirmations) confirmation(s)."
-                            : "In mempool — waiting for miner.")
+                    icon: incomingTx.confirmations > 0 ? "lock.fill" : "arrow.down.left",
+                    iconColor: incomingTx.confirmations > 0 ? ZColors.success : Color(hex: 0x00BCD4),
+                    title: incomingTx.confirmations > 0 ? "BLOCK CONFIRMED" : "INCOMING TX",
+                    message: incomingMessage
                 ) {
                     viewModel.dismissIncomingNotification()
                 }
@@ -265,6 +320,17 @@ public struct WalletView: View {
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: viewModel.confirmedTxid != nil)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: viewModel.mempoolAccepted)
         .animation(.spring(response: 0.4, dampingFraction: 0.8), value: viewModel.incomingTxNotification?.txid)
+        .animation(.easeInOut(duration: 0.3), value: showQuote)
+        .onChange(of: showQuote) { _, isShowing in
+            if isShowing {
+                // Auto-dismiss quote after 5 seconds
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        showQuote = false
+                    }
+                }
+            }
+        }
         .sheet(item: $activeSheet, onDismiss: {
             // Clear lastSentTxid so celebration doesn't replay on next send
             viewModel.lastSentTxid = nil
@@ -390,6 +456,44 @@ struct ConfirmationToast: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Pending Settlement Banner
+
+/// Cypherpunk-themed banner shown while waiting for block confirmation after mempool acceptance.
+@available(iOS 17, macOS 14, *)
+struct PendingSettlementBanner: View {
+    let txid: String
+    let peerStatus: String?
+
+    // Pick one random message and keep it stable for this view's lifetime
+    @State private var message: String = pendingSettlementMessages.randomElement() ?? ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("[~]")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(ZColors.warning)
+                Text("AWAITING SETTLEMENT")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(ZColors.warning)
+            }
+            Text(message)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(ZColors.warning.opacity(0.8))
+                .fixedSize(horizontal: false, vertical: true)
+            if !txid.isEmpty {
+                Text("tx: \(txid.prefix(16))...")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(ZColors.primaryDim)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(ZColors.warning, lineWidth: 1))
+        .background(ZColors.warning.opacity(0.08))
     }
 }
 

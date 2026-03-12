@@ -20,8 +20,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.zipherx.wallet.ui.DisclaimerScreen
 import com.zipherx.wallet.ui.ReceiveScreen
 import com.zipherx.wallet.ui.SendScreen
+import com.zipherx.wallet.ui.SetupScreen
 import com.zipherx.wallet.ui.SettingsScreen
 import com.zipherx.wallet.ui.StatusBar
 import com.zipherx.wallet.ui.TransactionHistoryScreen
@@ -72,12 +74,62 @@ class MainActivity : FragmentActivity() {
 
 @Composable
 fun ZipherXNavHost(viewModel: WalletViewModel) {
-    var currentScreen by rememberSaveable { mutableStateOf("wallet") }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = androidx.compose.runtime.remember {
+        context.getSharedPreferences("zipherx_prefs", android.content.Context.MODE_PRIVATE)
+    }
+    val walletState by viewModel.walletState.collectAsState()
+
+    // Determine starting screen based on disclaimer + wallet state
+    val isLoading = walletState == "loading"
+    val walletReady = walletState == "ready" || walletState == "syncing" ||
+        walletState == "synced" || walletState == "created"
+    val disclaimerAccepted = prefs.getBoolean("disclaimer_accepted", false)
+
+    val startScreen = when {
+        isLoading -> "loading"  // blank screen while checking wallet existence
+        !disclaimerAccepted -> "disclaimer"
+        !walletReady -> "setup"
+        else -> "wallet"
+    }
+
+    var currentScreen by rememberSaveable { mutableStateOf(startScreen) }
+
+    // Auto-advance when loading completes or wallet becomes ready
+    LaunchedEffect(walletState, disclaimerAccepted) {
+        when {
+            currentScreen == "loading" && !isLoading -> {
+                // Loading finished — decide where to go
+                currentScreen = when {
+                    !disclaimerAccepted -> "disclaimer"
+                    walletReady -> "wallet"
+                    else -> "setup"
+                }
+            }
+            walletReady && currentScreen == "setup" -> {
+                currentScreen = "wallet"
+            }
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Main content takes remaining space
         Box(modifier = Modifier.weight(1f)) {
             when (currentScreen) {
+                "loading" -> {
+                    // Blank screen while wallet state is loading — prevents setup flash
+                    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF0A0A0A)))
+                }
+                "disclaimer" -> DisclaimerScreen(
+                    onAccept = {
+                        prefs.edit().putBoolean("disclaimer_accepted", true).apply()
+                        currentScreen = "setup"
+                    },
+                )
+                "setup" -> SetupScreen(
+                    viewModel = viewModel,
+                    onWalletCreated = { currentScreen = "wallet" },
+                )
                 "wallet" -> WalletScreen(
                     viewModel = viewModel,
                     onNavigateToSend = { currentScreen = "send" },
@@ -121,6 +173,8 @@ object ZColors {
     val error         = Color(0xFFFF3131)
     val warning       = Color(0xFFFFC107)
     val glow          = Color(0x4D00FF40)  // 30% opacity
+    val border        = Color(0x4D00FF40)
+    val textDim       = Color(0xFF6B8F6B)
 }
 
 @Composable

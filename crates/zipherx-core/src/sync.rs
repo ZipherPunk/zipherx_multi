@@ -62,6 +62,10 @@ pub enum SyncStatus {
         current_height: u64,
         target_height: u64,
     },
+    /// Scanning boost file for wallet outputs (CPU-intensive trial decryption).
+    BoostScan {
+        outputs_total: u64,
+    },
     /// Scanning blocks for notes.
     BlockScan {
         current_height: u64,

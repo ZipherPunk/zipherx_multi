@@ -36,8 +36,17 @@ const MAX_RESYNCS: usize = 5;
 /// (3) higher-level protocols (header sync, block fetch) have timeout-based
 /// retry logic that will re-request any missing data.
 const MAX_RESYNC_SCAN: usize = 65536;
-/// Block listener idle timeout (no data for this long = peer dead).
-const LISTENER_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Block listener idle timeout — disabled.
+///
+/// TCP keepalive (15s interval) handles dead connection detection at the OS
+/// level. The 120s idle timeout was killing healthy listeners during long
+/// sync operations (boost scan, delta scan) where no P2P messages flow.
+/// This caused "zombie peers" — connected but listener dead — requiring
+/// full disconnect/reconnect cycles and breaking mempool detection.
+///
+/// With TCP keepalive, a truly dead peer triggers a read error within ~45s.
+/// Peers that are alive but idle (normal during sync) stay connected and
+/// the listener + dispatcher + mempool callback remain active.
 /// Handshake message timeout.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default send/receive timeout.
@@ -85,6 +94,24 @@ pub struct Peer {
 
     /// Whether connected via Tor.
     pub is_tor: bool,
+
+    /// Callback fired when an unsolicited "tx" message arrives (mempool detection).
+    /// Receives the raw transaction bytes — trial decryption happens at the caller level.
+    ///
+    /// Wrapped in Arc<Mutex<>> so running block listeners share the same slot.
+    /// When `set_on_mempool_tx_data` updates this, all running listeners see the change
+    /// immediately — no need to restart listeners.
+    pub on_mempool_tx_data: Arc<Mutex<Option<Arc<dyn Fn(Vec<u8>) + Send + Sync>>>>,
+
+    /// Callback fired when an inv MSG_BLOCK arrives (new block mined).
+    /// Signals the background sync loop to trigger an immediate sync instead
+    /// of waiting for the 30s timer. Shared via Arc<Mutex<>> like on_mempool_tx_data.
+    pub on_new_block: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+
+    /// Callback fired when addr/addrv2 messages arrive with peer addresses.
+    /// Used for peer discovery — harvested addresses feed into PeerManager's
+    /// known_addresses pool for future connections.
+    pub on_addr: Arc<Mutex<Option<Arc<dyn Fn(Vec<(String, u16)>) + Send + Sync>>>>,
 }
 
 impl Peer {
@@ -110,6 +137,9 @@ impl Peer {
             listener_cancel: None,
             listener_handle: None,
             is_tor: false,
+            on_mempool_tx_data: Arc::new(Mutex::new(None)),
+            on_new_block: Arc::new(Mutex::new(None)),
+            on_addr: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -194,9 +224,12 @@ impl Peer {
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
         let peer_id = self.id.clone();
+        let on_mempool_tx_data = self.on_mempool_tx_data.clone(); // shares the same Mutex slot
+        let on_new_block = self.on_new_block.clone();
+        let on_addr = self.on_addr.clone();
 
         let handle = tokio::spawn(async move {
-            block_listener_loop(reader, writer, dispatcher, cancel_clone, peer_id).await;
+            block_listener_loop(reader, writer, dispatcher, cancel_clone, peer_id, on_mempool_tx_data, on_new_block, on_addr).await;
         });
 
         self.listener_cancel = Some(cancel);
@@ -338,6 +371,30 @@ async fn send_frame(
     let result = writer_taken.write_all(&frame).await;
     *writer.lock().unwrap() = Some(writer_taken);
     result.map_err(|e| NetworkError::ConnectionFailed(format!("Write: {e}")))
+}
+
+/// Send a framed P2P message with retry when the writer is temporarily busy.
+///
+/// Used inside the block listener loop where another task (send_message,
+/// request_mempool_from_all) may briefly hold the writer. Retries up to
+/// `max_retries` times with 50ms delay between attempts.
+async fn send_frame_retry(
+    writer: &Arc<Mutex<Option<OwnedWriteHalf>>>,
+    command: &str,
+    payload: &[u8],
+    max_retries: usize,
+) -> Result<(), NetworkError> {
+    for attempt in 0..max_retries {
+        match send_frame(writer, command, payload).await {
+            Ok(()) => return Ok(()),
+            Err(NetworkError::NotConnected) if attempt + 1 < max_retries => {
+                // Writer temporarily taken by another task — retry after brief delay
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(NetworkError::NotConnected)
 }
 
 /// Perform the version/verack handshake exchange.
@@ -509,12 +566,23 @@ fn configure_tcp_stream(stream: &TcpStream) -> Result<(), NetworkError> {
 pub async fn receive_message(
     reader: &mut BufReader<OwnedReadHalf>,
 ) -> Result<(String, Vec<u8>), NetworkError> {
+    receive_message_timeout(reader, DEFAULT_TIMEOUT).await
+}
+
+/// Read a single P2P message with a custom timeout.
+///
+/// Block listeners use a long timeout (10 min) so they don't die during
+/// idle periods. The 15s DEFAULT_TIMEOUT is only for request/response flows.
+pub async fn receive_message_timeout(
+    reader: &mut BufReader<OwnedReadHalf>,
+    timeout: Duration,
+) -> Result<(String, Vec<u8>), NetworkError> {
     let mut resync_count = 0;
 
     loop {
         // Read 24-byte message header
         let mut header_buf = [0u8; MESSAGE_HEADER_SIZE];
-        tokio::time::timeout(DEFAULT_TIMEOUT, reader.read_exact(&mut header_buf))
+        tokio::time::timeout(timeout, reader.read_exact(&mut header_buf))
             .await
             .map_err(|_| NetworkError::ResponseTimeout)?
             .map_err(|e| {
@@ -532,7 +600,7 @@ pub async fn receive_message(
                 let len = payload_len as usize;
                 let mut payload = vec![0u8; len];
                 if len > 0 {
-                    tokio::time::timeout(DEFAULT_TIMEOUT, reader.read_exact(&mut payload))
+                    tokio::time::timeout(timeout, reader.read_exact(&mut payload))
                         .await
                         .map_err(|_| NetworkError::ResponseTimeout)?
                         .map_err(|e| NetworkError::Io(e))?;
@@ -586,6 +654,14 @@ pub async fn receive_message(
     }
 }
 
+/// Block listener idle timeout — 10 minutes.
+///
+/// TCP keepalive (15s interval) handles dead connection detection at the OS
+/// level. A truly dead peer triggers a read error within ~45s. Peers that are
+/// alive but idle (normal between syncs) stay connected. The old 15s timeout
+/// (DEFAULT_TIMEOUT) killed healthy listeners that were just waiting for inv.
+const LISTENER_READ_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// Block listener loop — runs in a spawned task.
 ///
 /// Reads messages from the TCP stream and routes them through the dispatcher.
@@ -596,6 +672,9 @@ async fn block_listener_loop(
     dispatcher: Arc<Mutex<Dispatcher>>,
     cancel: CancellationToken,
     peer_id: String,
+    on_mempool_tx_data: Arc<Mutex<Option<Arc<dyn Fn(Vec<u8>) + Send + Sync>>>>,
+    on_new_block: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    on_addr: Arc<Mutex<Option<Arc<dyn Fn(Vec<(String, u16)>) + Send + Sync>>>>,
 ) {
     dispatcher.lock().unwrap().set_active(true);
 
@@ -604,20 +683,16 @@ async fn block_listener_loop(
             _ = cancel.cancelled() => {
                 break;
             }
-            result = tokio::time::timeout(LISTENER_IDLE_TIMEOUT, receive_message(&mut reader)) => {
+            result = receive_message_timeout(&mut reader, LISTENER_READ_TIMEOUT) => {
                 match result {
-                    Ok(Ok((cmd, payload))) => {
+                    Ok((cmd, payload)) => {
                         let dispatched = dispatcher.lock().unwrap().dispatch(&cmd, payload.clone());
                         if !dispatched {
-                            handle_background_message(&cmd, &payload, &writer, &peer_id).await;
+                            handle_background_message(&cmd, &payload, &writer, &peer_id, &on_mempool_tx_data, &on_new_block, &on_addr).await;
                         }
                     }
-                    Ok(Err(_)) => {
-                        // Read error (disconnect, desync, etc.)
-                        break;
-                    }
                     Err(_) => {
-                        // Idle timeout — peer is dead
+                        // Read error (disconnect, TCP keepalive timeout, desync)
                         break;
                     }
                 }
@@ -631,32 +706,146 @@ async fn block_listener_loop(
 }
 
 /// Handle a message that no dispatcher handler was waiting for.
+///
+/// Event-driven mempool detection:
+/// - "inv" MSG_TX → immediately send getdata back to the peer
+/// - "tx" → fire `on_mempool_tx_data` callback with raw TX bytes
+/// No separate task, no channel, no extra TCP connection.
 async fn handle_background_message(
     command: &str,
     payload: &[u8],
     writer: &Arc<Mutex<Option<OwnedWriteHalf>>>,
     _peer_id: &str,
+    on_mempool_tx_data: &Arc<Mutex<Option<Arc<dyn Fn(Vec<u8>) + Send + Sync>>>>,
+    on_new_block: &Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    on_addr: &Arc<Mutex<Option<Arc<dyn Fn(Vec<(String, u16)>) + Send + Sync>>>>,
 ) {
     match command {
+        // ── Keepalive ──
         "ping" => {
-            // Respond with pong (same nonce)
-            let frame = protocol::frame_message("pong", payload);
-            let mut writer_taken = {
-                let mut guard = writer.lock().unwrap();
-                match guard.take() {
-                    Some(w) => w,
-                    None => return,
+            let _ = send_frame(writer, "pong", payload).await;
+        }
+        "pong" => {
+            // Response to our ping — latency measurement (not used yet)
+        }
+
+        // ── Inventory announcements ──
+        "inv" => {
+            if let Some(items) = crate::messages::deserialize_inv(payload) {
+                // MSG_BLOCK: new block mined — notify for instant sync
+                let has_block = items.iter().any(|item| item.inv_type == crate::types::InvType::Block);
+                if has_block {
+                    let cb = on_new_block.lock().unwrap().clone();
+                    if let Some(cb) = cb {
+                        cb();
+                    }
                 }
-            };
-            let _ = writer_taken.write_all(&frame).await;
-            *writer.lock().unwrap() = Some(writer_taken);
+
+                // MSG_TX: mempool detection — fetch TX for trial decryption
+                if on_mempool_tx_data.lock().unwrap().is_some() {
+                    let tx_items: Vec<crate::types::InvVector> = items
+                        .into_iter()
+                        .filter(|item| item.inv_type == crate::types::InvType::Tx)
+                        .collect();
+                    if !tx_items.is_empty() {
+                        let getdata_payload = crate::messages::serialize_inv(&tx_items);
+                        let _ = send_frame_retry(writer, "getdata", &getdata_payload, 10).await;
+                    }
+                }
+            }
         }
-        "inv" | "addr" | "addrv2" | "alert" | "getdata" | "notfound" | "mempool" | "getblocks"
-        | "getheaders" => {
-            // Silently ignore unsolicited messages
+
+        // ── Transaction data (mempool detection) ──
+        "tx" => {
+            let cb = on_mempool_tx_data.lock().unwrap().clone();
+            if let Some(cb) = cb {
+                cb(payload.to_vec());
+            }
         }
+
+        // ── Peer address discovery ──
+        "addr" => {
+            let cb = on_addr.lock().unwrap().clone();
+            if let Some(cb) = cb {
+                if let Some(addrs) = crate::messages::deserialize_addr(payload) {
+                    let peers: Vec<(String, u16)> = addrs
+                        .into_iter()
+                        .filter_map(|a| {
+                            let ip = &a.address.ip;
+                            // IPv4-mapped IPv6 (::ffff:x.x.x.x)
+                            if ip[..12] == [0,0,0,0, 0,0,0,0, 0,0,0xff,0xff] {
+                                let host = format!("{}.{}.{}.{}", ip[12], ip[13], ip[14], ip[15]);
+                                Some((host, a.address.port))
+                            } else {
+                                None // Skip pure IPv6 for now
+                            }
+                        })
+                        .collect();
+                    if !peers.is_empty() {
+                        cb(peers);
+                    }
+                }
+            }
+        }
+        "addrv2" => {
+            let cb = on_addr.lock().unwrap().clone();
+            if let Some(cb) = cb {
+                if let Some(addrs) = crate::messages::deserialize_addrv2(payload) {
+                    let peers: Vec<(String, u16)> = addrs
+                        .into_iter()
+                        .filter_map(|a| {
+                            match a.network {
+                                crate::types::AddrV2Network::IPv4 if a.address.len() == 4 => {
+                                    let host = format!("{}.{}.{}.{}", a.address[0], a.address[1], a.address[2], a.address[3]);
+                                    Some((host, a.port))
+                                }
+                                _ => None // Skip IPv6/Tor/I2P/CJDNS for now
+                            }
+                        })
+                        .collect();
+                    if !peers.is_empty() {
+                        cb(peers);
+                    }
+                }
+            }
+        }
+
+        // ── Reject (undispatched — no broadcast handler waiting) ──
+        "reject" => {
+            #[cfg(debug_assertions)]
+            {
+                // Parse reject: string(command) + u8(code) + string(reason)
+                if payload.len() > 2 {
+                    eprintln!(
+                        "[ZipherX] Undispatched reject from peer (payload {} bytes)",
+                        payload.len(),
+                    );
+                }
+            }
+        }
+
+        // ── Data requests from peers (we're a light client, don't serve) ──
+        "getdata" | "getblocks" | "getheaders" | "mempool" => {}
+
+        // ── Responses we didn't request (or arrived after timeout) ──
+        "notfound" => {
+            #[cfg(debug_assertions)]
+            eprintln!("[ZipherX] notfound from peer ({} bytes)", payload.len());
+        }
+        "headers" | "block" | "merkleblock" => {
+            // Unsolicited or late — dispatcher handler already expired
+        }
+
+        // ── Bloom filters (SPV, not used) ──
+        "filterload" | "filteradd" | "filterclear" => {}
+
+        // ── Legacy/deprecated ──
+        "alert" | "sendaddrv2" => {}
+
+        // ── Unknown ──
         _ => {
-            // Unknown command — ignore
+            #[cfg(debug_assertions)]
+            eprintln!("[ZipherX] Unknown P2P message: '{}' ({} bytes)", command, payload.len());
         }
     }
 }
