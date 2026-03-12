@@ -161,6 +161,8 @@ pub struct ZipherXApp {
     pub overall_progress: f32,
     pub sync_start_time: Option<Instant>,
     pub sync_error: Option<String>,
+    /// Boost download failed: (reason, attempts). UI shows a dialog.
+    pub boost_failed: Option<(String, u32)>,
 
     // -- send --
     pub send_address: String,
@@ -341,6 +343,7 @@ impl Default for ZipherXApp {
             overall_progress: 0.0,
             sync_start_time: None,
             sync_error: None,
+            boost_failed: None,
 
             send_address: String::new(),
             send_amount: String::new(),

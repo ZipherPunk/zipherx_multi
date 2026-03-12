@@ -202,6 +202,11 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
         ui.add_space(15.0);
 
+        // -- Boost download failure dialog --
+        if let Some((ref reason, attempts)) = app.boost_failed.clone() {
+            show_boost_failed_dialog(app, ui, &reason, attempts);
+        }
+
         // -- Sync progress (only during initial sync, not background resyncs) --
         if app.is_syncing && !app.initial_sync_done {
             show_sync_progress(app, ui);
@@ -311,6 +316,7 @@ fn show_sync_progress(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     // Friendly phase label
     let phase_label = match app.sync_phase.as_str() {
         "boost_download" => "Downloading boost",
+        "boost_failed" => "Boost download failed",
         "boost_load" => "Loading headers",
         "header_sync" => "Syncing headers",
         "delta_sync" => "Downloading outputs",
@@ -664,4 +670,71 @@ fn show_celebrations(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Contex
             });
         ui.add_space(5.0);
     }
+}
+
+fn show_boost_failed_dialog(app: &mut ZipherXApp, ui: &mut egui::Ui, reason: &str, attempts: u32) {
+    ui.add_space(10.0);
+    egui::Frame::none()
+        .fill(egui::Color32::from_rgb(40, 10, 10))
+        .stroke(egui::Stroke::new(1.0, theme::RED))
+        .inner_margin(12.0)
+        .rounding(4.0)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("BOOST DOWNLOAD FAILED")
+                    .font(theme::mono(13.0))
+                    .color(theme::RED),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "Failed after {} attempts: {}",
+                    attempts,
+                    if reason.len() > 80 { &reason[..80] } else { reason }
+                ))
+                .font(theme::mono(10.0))
+                .color(theme::MUTED),
+            );
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(
+                    "The fast sync (boost) file could not be downloaded.\n\
+                     You can continue with P2P header sync (much slower, may\n\
+                     take hours), or quit and try again later."
+                )
+                .font(theme::mono(10.0))
+                .color(egui::Color32::from_rgb(200, 200, 200)),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ CONTINUE WITH P2P SYNC ]")
+                            .font(theme::mono(11.0))
+                            .color(theme::GREEN),
+                    ))
+                    .clicked()
+                {
+                    // User chose to continue
+                    if let Some(ref state) = app.shared_state {
+                        if let Ok(mut s) = state.lock() {
+                            s.boost_failed_continue = Some(true);
+                        }
+                    }
+                    app.boost_failed = None;
+                }
+                ui.add_space(15.0);
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ QUIT ]")
+                            .font(theme::mono(11.0))
+                            .color(theme::RED),
+                    ))
+                    .clicked()
+                {
+                    std::process::exit(0);
+                }
+            });
+        });
+    ui.add_space(10.0);
 }

@@ -71,6 +71,13 @@ pub struct SharedState {
     // -- new block notification (from inv MSG_BLOCK) --
     pub new_block_pending: bool,
 
+    // -- boost download failure (user must decide) --
+    /// Set when boost download fails after all retries.
+    /// Contains (reason, attempts). UI shows a dialog.
+    pub boost_failed: Option<(String, u32)>,
+    /// User's response to boost failure: true = continue with P2P, false = quit.
+    pub boost_failed_continue: Option<bool>,
+
     // -- commands from UI -> sync thread --
     pub command: Option<SyncCommand>,
 }
@@ -135,6 +142,9 @@ impl Default for SharedState {
 
             mempool_tx: None,
             new_block_pending: false,
+
+            boost_failed: None,
+            boost_failed_continue: None,
 
             command: None,
         }
@@ -393,6 +403,10 @@ fn handle_sync(
                     s.sync_phase = format!("Synced to {}", height);
                     s.sync_current = *height;
                     s.sync_target = *height;
+                }
+                SyncStatus::BoostFailed { reason, attempts } => {
+                    s.sync_phase = "boost_failed".to_string();
+                    s.boost_failed = Some((reason.clone(), *attempts));
                 }
                 SyncStatus::Failed(msg) => {
                     s.sync_error = Some(msg.clone());

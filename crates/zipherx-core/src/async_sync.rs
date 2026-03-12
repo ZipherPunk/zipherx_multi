@@ -290,19 +290,121 @@ pub async fn sync_to_tip(
     }
     tracing::info!("{} peers connected", peer_count);
 
-    // Step 1c: Await boost download result (may already be done if peers were slow)
+    // Step 1c: Await boost download result with retry logic.
+    // On failure, retry up to 3 times with increasing delay.
+    // If all retries fail, notify user via BoostFailed status and wait
+    // for their decision (continue with slow P2P sync, or abort).
+    const BOOST_MAX_RETRIES: u32 = 3;
     let mut boost_download_result: Option<(String, String)> = None;
     if let Some(handle) = boost_download_handle {
+        // First attempt (already spawned)
+        let mut last_error: Option<String> = None;
         match handle.await {
             Ok(Ok(result)) => {
                 boost_download_result = Some(result);
             }
             Ok(Err(e)) => {
-                eprintln!("[ZipherX] Boost download failed: {e}");
+                last_error = Some(e.to_string());
+                eprintln!("[ZipherX] Boost download failed (attempt 1/{}): {e}", BOOST_MAX_RETRIES);
             }
             Err(e) => {
-                eprintln!("[ZipherX] Boost download task panicked: {e}");
+                last_error = Some(e.to_string());
+                eprintln!("[ZipherX] Boost download task panicked (attempt 1/{}): {e}", BOOST_MAX_RETRIES);
             }
+        }
+
+        // Retry on failure
+        if boost_download_result.is_none() {
+            if let Some(ref boost_dir) = boost_cache_dir {
+                for attempt in 2..=BOOST_MAX_RETRIES {
+                    eprintln!(
+                        "[ZipherX] Retrying boost download (attempt {}/{}), waiting {}s...",
+                        attempt, BOOST_MAX_RETRIES, attempt * 5,
+                    );
+                    // Clean up partial downloads before retry
+                    let _ = std::fs::remove_file(boost_dir.join("_part_0.tmp"));
+                    let _ = std::fs::remove_file(boost_dir.join("_part_1.tmp"));
+
+                    tokio::time::sleep(tokio::time::Duration::from_secs((attempt * 5) as u64)).await;
+
+                    if let Some(ref p) = progress {
+                        p(SyncStatus::BoostDownload {
+                            downloaded_bytes: 0,
+                            total_bytes: 0,
+                        });
+                    }
+
+                    let boost_dir_retry = boost_dir.clone();
+                    let tag_retry = update_tag.clone();
+                    let progress_retry: Option<boost_download::DownloadProgressFn> =
+                        progress.as_ref().map(|p| {
+                            let p = p.clone();
+                            Arc::new(move |downloaded: u64, total: u64, _label: &str| {
+                                eprintln!(
+                                    "[ZipherX] Boost download: {} / {} MB",
+                                    downloaded / (1024 * 1024),
+                                    total / (1024 * 1024),
+                                );
+                                p(SyncStatus::BoostDownload {
+                                    downloaded_bytes: downloaded,
+                                    total_bytes: total,
+                                });
+                            }) as Arc<dyn Fn(u64, u64, &str) + Send + Sync>
+                        });
+
+                    let retry_handle = tokio::spawn(async move {
+                        let tag_ref = tag_retry.as_deref();
+                        boost_download::download_boost_file_if_needed(
+                            &boost_dir_retry,
+                            progress_retry,
+                            tag_ref,
+                        )
+                        .await
+                    });
+
+                    match retry_handle.await {
+                        Ok(Ok(result)) => {
+                            eprintln!("[ZipherX] Boost download succeeded on attempt {}", attempt);
+                            boost_download_result = Some(result);
+                            last_error = None;
+                            break;
+                        }
+                        Ok(Err(e)) => {
+                            last_error = Some(e.to_string());
+                            eprintln!(
+                                "[ZipherX] Boost download failed (attempt {}/{}): {e}",
+                                attempt, BOOST_MAX_RETRIES,
+                            );
+                        }
+                        Err(e) => {
+                            last_error = Some(e.to_string());
+                            eprintln!(
+                                "[ZipherX] Boost download task panicked (attempt {}/{}): {e}",
+                                attempt, BOOST_MAX_RETRIES,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // All retries exhausted — notify user via BoostFailed status
+        if boost_download_result.is_none() {
+            let reason = last_error.unwrap_or_else(|| "Unknown error".to_string());
+            eprintln!(
+                "[ZipherX] Boost download failed after {} attempts: {}",
+                BOOST_MAX_RETRIES, reason,
+            );
+            eprintln!("[ZipherX] Falling back to P2P header sync (much slower)...");
+            if let Some(ref p) = progress {
+                p(SyncStatus::BoostFailed {
+                    reason: reason.clone(),
+                    attempts: BOOST_MAX_RETRIES,
+                });
+            }
+            // Give UI time to show the BoostFailed status and let user decide.
+            // The sync will continue with P2P header sync after this pause.
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
     }
 

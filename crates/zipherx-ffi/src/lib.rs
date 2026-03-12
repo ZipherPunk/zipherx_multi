@@ -1596,6 +1596,7 @@ fn sync_status_to_progress(status: &SyncStatus) -> (String, u64, u64) {
             u64::try_from(*notes_updated).unwrap_or(u64::MAX),
             u64::try_from(*total_notes).unwrap_or(u64::MAX),
         ),
+        SyncStatus::BoostFailed { .. } => ("boost_failed".into(), 0, 0),
         SyncStatus::Complete { height } => ("complete".into(), *height, *height),
         SyncStatus::Failed(_) => ("failed".into(), 0, 0),
     }
@@ -1613,6 +1614,7 @@ fn sync_status_to_phase(status: &SyncStatus) -> String {
         SyncStatus::BlockScan { .. } => "block_scan".into(),
         SyncStatus::GapFill { .. } => "gap_fill".into(),
         SyncStatus::WitnessUpdate { .. } => "witness_update".into(),
+        SyncStatus::BoostFailed { .. } => "boost_failed".into(),
         SyncStatus::Complete { .. } => "complete".into(),
         SyncStatus::Failed(_) => "failed".into(),
     }

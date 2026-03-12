@@ -1097,6 +1097,17 @@ fn cmd_sync(state: &WalletState) {
                 SyncStatus::Complete { height } => {
                     format!("Sync complete at height {}", height)
                 }
+                SyncStatus::BoostFailed { ref reason, attempts } => {
+                    eprintln!(
+                        "\n{}[sync]{} Boost download failed after {} attempts: {}",
+                        RED, RESET, attempts, reason,
+                    );
+                    eprintln!(
+                        "{}[sync]{} Continuing with P2P header sync (slower)...",
+                        YELLOW, RESET,
+                    );
+                    format!("Boost failed, falling back to P2P sync")
+                }
                 SyncStatus::Failed(ref reason) => {
                     format!("Sync failed: {}", reason)
                 }

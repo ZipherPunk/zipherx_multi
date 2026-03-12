@@ -79,6 +79,12 @@ pub enum SyncStatus {
         notes_updated: usize,
         total_notes: usize,
     },
+    /// Boost download failed after all retries. User must decide whether
+    /// to continue with slow P2P header sync or abort.
+    BoostFailed {
+        reason: String,
+        attempts: u32,
+    },
     /// Sync complete.
     Complete { height: u64 },
     /// Sync failed.

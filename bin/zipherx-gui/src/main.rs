@@ -320,6 +320,27 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
             s.sync_phase = "Idle".to_string();
         }
 
+        // Boost download failure — transfer to app for dialog display
+        if let Some(ref bf) = s.boost_failed {
+            app.boost_failed = Some(bf.clone());
+            s.boost_failed = None;
+        }
+        // User responded to boost failure dialog
+        if let Some(continue_sync) = app.boost_failed.as_ref().and_then(|_| {
+            // Check if user has responded via the shared state
+            s.boost_failed_continue.take()
+        }) {
+            if !continue_sync {
+                // User chose to quit
+                app.is_syncing = false;
+                app.boost_failed = None;
+                s.sync_phase = "Idle".to_string();
+            } else {
+                // User chose to continue — clear the dialog
+                app.boost_failed = None;
+            }
+        }
+
         // Balance — suppress updates while TX pending confirmation to avoid
         // showing incorrect intermediate state (sent notes marked but change
         // not yet mined). The wallet view shows a "pending" indicator.
