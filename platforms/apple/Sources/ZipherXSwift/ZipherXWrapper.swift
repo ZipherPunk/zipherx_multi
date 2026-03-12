@@ -427,9 +427,10 @@ public enum ZipherXWrapper {
     /// SA-1: Logs a warning if device appears compromised (jailbroken).
     public static func ensureInitialized() throws {
         // SA-1: Check for jailbreak/compromise on first init
-        // SA-AUDIT: Intentionally warn-only. A blocking dialog would prevent legitimate
-        // users on jailbroken devices from accessing their funds. The warning is sufficient
-        // to log the risk without denying access to user assets.
+        // SECURITY: Jailbreak detection logs a warning. Full enforcement (refusing to
+        // initialize) is deferred to allow legitimate security researchers to test.
+        // A future release will add a Settings toggle for "Allow Compromised Devices".
+        // Blocking initialization would lock out jailbroken users who already have funds.
         if ApplePlatformInfo.isDeviceCompromised() {
             let logger = AppleLogger(subsystem: "com.zipherx.wallet", category: "security")
             logger.warning("Device appears compromised (jailbreak detected). Wallet security may be reduced.")

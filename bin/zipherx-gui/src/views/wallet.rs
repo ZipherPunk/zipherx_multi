@@ -286,6 +286,8 @@ fn show_receive(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 {
                     ctx.copy_text(addr.clone());
                     app.clipboard_clear_at = Some(std::time::Instant::now());
+                    // GUI-H3: ensure repaint fires for clipboard auto-clear
+                    ctx.request_repaint_after(std::time::Duration::from_secs(31));
                 }
             }
 
@@ -429,6 +431,8 @@ fn show_recent_transactions(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui:
                     {
                         ctx.copy_text(tx.txid.clone());
                         app.clipboard_clear_at = Some(std::time::Instant::now());
+                        // GUI-H3: ensure repaint fires for clipboard auto-clear
+                        ctx.request_repaint_after(std::time::Duration::from_secs(31));
                     }
                 }
             });
@@ -581,6 +585,8 @@ fn show_celebrations(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Contex
                     {
                         ctx.copy_text(txid.clone());
                         app.clipboard_clear_at = Some(std::time::Instant::now());
+                        // GUI-H3: ensure repaint fires for clipboard auto-clear
+                        ctx.request_repaint_after(std::time::Duration::from_secs(31));
                     }
                 }
                 if ui
@@ -639,6 +645,8 @@ fn show_celebrations(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Contex
                     {
                         ctx.copy_text(txid.clone());
                         app.clipboard_clear_at = Some(std::time::Instant::now());
+                        // GUI-H3: ensure repaint fires for clipboard auto-clear
+                        ctx.request_repaint_after(std::time::Duration::from_secs(31));
                     }
                 }
                 if ui

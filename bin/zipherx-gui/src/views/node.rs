@@ -811,6 +811,9 @@ fn detect_external_daemon(app: &mut ZipherXApp) {
 }
 
 /// Poll daemon for updated info. Called periodically from the main loop.
+///
+// Note (GUI-L2): RPC credentials are held in memory for the duration of full
+// node mode. They are zeroized when the app locks or drops (see ZipherXApp::Drop).
 pub fn poll_node_info(app: &mut ZipherXApp) {
     // Auto-detect: if status is Stopped, try to find a running daemon
     if app.node_daemon_status == DaemonStatus::Stopped {

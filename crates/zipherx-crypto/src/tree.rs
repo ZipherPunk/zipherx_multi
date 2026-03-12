@@ -352,6 +352,10 @@ pub fn witness_count() -> Result<u64, CryptoError> {
 ///
 /// Does NOT check against HeaderStore — the network validates the anchor
 /// when the transaction is broadcast.
+// Note: This 100-byte minimum is a defensive sanity check, not a full
+// structural validation. The primary anchor validation occurs downstream
+// in async_send.rs via HeaderStore.contains_sapling_root(), which verifies
+// the computed root matches a known blockchain anchor.
 pub fn verify_witness_consistency(witness_data: &[u8]) -> Result<(), CryptoError> {
     verify_witness_and_get_root(witness_data)?;
     Ok(())

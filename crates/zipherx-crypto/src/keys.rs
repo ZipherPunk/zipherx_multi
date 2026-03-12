@@ -36,9 +36,9 @@ pub fn derive_spending_key(seed: &[u8], account: u32) -> Result<Zeroizing<Vec<u8
         .write(&mut buf)
         .map_err(|e| CryptoError::InvalidData(format!("SK serialize: {e}")))?;
 
-    // Defense-in-depth: explicitly drop key material to shorten its lifetime.
-    // Rust's Drop doesn't zero memory, but explicit drop ensures the values
-    // are not held longer than necessary.
+    // Note: explicit drop() ends the scope of these temporaries but does NOT
+    // zero memory. The actual zeroization is provided by the Zeroizing<Vec<u8>>
+    // return type, which zeros on drop via the zeroize crate.
     drop(account_key);
     drop(master);
 
@@ -181,56 +181,56 @@ mod tests {
     fn test_seed() -> [u8; 64] {
         // Generate a deterministic seed from a known mnemonic
         let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
-        mnemonic::to_seed(phrase).unwrap()
+        mnemonic::to_seed(phrase).expect("test seed derivation")
     }
 
     #[test]
     fn test_derive_spending_key() {
-        let sk = derive_spending_key(&test_seed(), 0).unwrap();
+        let sk = derive_spending_key(&test_seed(), 0).expect("derive spending key");
         assert_eq!(sk.len(), SPENDING_KEY_LENGTH);
     }
 
     #[test]
     fn test_derive_spending_key_deterministic() {
-        let sk1 = derive_spending_key(&test_seed(), 0).unwrap();
-        let sk2 = derive_spending_key(&test_seed(), 0).unwrap();
+        let sk1 = derive_spending_key(&test_seed(), 0).expect("derive sk1");
+        let sk2 = derive_spending_key(&test_seed(), 0).expect("derive sk2");
         assert_eq!(sk1, sk2);
     }
 
     #[test]
     fn test_derive_different_accounts() {
-        let sk0 = derive_spending_key(&test_seed(), 0).unwrap();
-        let sk1 = derive_spending_key(&test_seed(), 1).unwrap();
+        let sk0 = derive_spending_key(&test_seed(), 0).expect("derive account 0");
+        let sk1 = derive_spending_key(&test_seed(), 1).expect("derive account 1");
         assert_ne!(sk0, sk1);
     }
 
     #[test]
     fn test_derive_address() {
-        let sk = derive_spending_key(&test_seed(), 0).unwrap();
-        let (addr, _idx) = derive_address(&sk, 0).unwrap();
+        let sk = derive_spending_key(&test_seed(), 0).expect("derive sk");
+        let (addr, _idx) = derive_address(&sk, 0).expect("derive address");
         assert_eq!(addr.len(), 43);
     }
 
     #[test]
     fn test_derive_ivk() {
-        let sk = derive_spending_key(&test_seed(), 0).unwrap();
-        let ivk = derive_ivk(&sk).unwrap();
+        let sk = derive_spending_key(&test_seed(), 0).expect("derive sk");
+        let ivk = derive_ivk(&sk).expect("derive ivk");
         assert_eq!(ivk.len(), 32);
     }
 
     #[test]
     fn test_derive_ovk() {
-        let sk = derive_spending_key(&test_seed(), 0).unwrap();
-        let ovk = derive_ovk(&sk).unwrap();
+        let sk = derive_spending_key(&test_seed(), 0).expect("derive sk");
+        let ovk = derive_ovk(&sk).expect("derive ovk");
         assert_eq!(ovk.len(), 32);
     }
 
     #[test]
     fn test_encode_decode_spending_key() {
-        let sk = derive_spending_key(&test_seed(), 0).unwrap();
-        let encoded = encode_spending_key(&sk).unwrap();
+        let sk = derive_spending_key(&test_seed(), 0).expect("derive sk");
+        let encoded = encode_spending_key(&sk).expect("encode sk");
         assert!(encoded.starts_with("secret-extended-key-main1"));
-        let decoded = decode_spending_key(&encoded).unwrap();
+        let decoded = decode_spending_key(&encoded).expect("decode sk");
         assert_eq!(*sk, decoded);
     }
 

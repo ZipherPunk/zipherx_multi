@@ -173,6 +173,8 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             {
                                 ctx.copy_text(tx.txid.clone());
                                 app.clipboard_clear_at = Some(std::time::Instant::now());
+                                // GUI-H3: ensure repaint fires for clipboard auto-clear
+                                ctx.request_repaint_after(std::time::Duration::from_secs(31));
                             }
 
                             detail_row(ui, "Type", &tx.tx_type);

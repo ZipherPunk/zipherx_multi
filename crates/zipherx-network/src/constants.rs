@@ -35,6 +35,9 @@ pub const MAX_HEADERS_PER_RESPONSE: usize = 160;
 /// ZCL mainnet has very few active nodes (~4-6). A threshold of 5
 /// causes connection failures when fewer nodes are reachable.
 /// 3 peers is sufficient given median consensus height + Equihash PoW.
+/// WARNING: With only 3 peers, a Sybil attacker controlling 2 peers
+/// can influence the median. This is an accepted tradeoff for ZCL's
+/// limited network topology. Consider increasing to 5 when network grows.
 pub const CONSENSUS_THRESHOLD: usize = 3;
 
 /// P2P message header size: magic(4) + command(12) + length(4) + checksum(4).
@@ -95,17 +98,21 @@ pub const CHECKPOINTS: &[(u64, &str)] = &[
         0,
         "0007104ccda289427919efc39dc9e4d499804b7bebc22df55f8b834301571b40",
     ),
-    // Height 100,000
-    (100_000, ""), // TODO: populate with `zclassic-cli getblockhash 100000`
-    // Height 250,000
-    (250_000, ""), // TODO: populate with `zclassic-cli getblockhash 250000`
-    // Sapling activation (height 476969)
-    (476_969, ""), // TODO: populate with `zclassic-cli getblockhash 476969`
-    // Height 600,000
-    (600_000, ""), // TODO: populate with `zclassic-cli getblockhash 600000`
-    // Buttercup activation (height 707000)
-    (707_000, ""), // TODO: populate with `zclassic-cli getblockhash 707000`
+    // SECURITY: Populate these with verified mainnet block hashes.
+    // Run: zclassic-cli getblockhash <height> on a trusted full node.
+    // Empty checkpoints provide NO chain validation beyond genesis.
+    (100_000, ""),  // TODO(CRITICAL): populate from trusted source
+    (250_000, ""),  // TODO(CRITICAL): populate from trusted source
+    (476_969, ""),  // TODO(CRITICAL): Sapling activation — populate
+    (600_000, ""),  // TODO(CRITICAL): populate from trusted source
+    (707_000, ""),  // TODO(CRITICAL): Buttercup activation — populate
 ];
+
+/// Returns true if checkpoint validation is incomplete (empty hashes present).
+/// Header sync should log a warning when this returns true.
+pub fn has_unpopulated_checkpoints() -> bool {
+    CHECKPOINTS.iter().any(|(_, hash)| hash.is_empty())
+}
 
 /// DNS seeds for peer discovery.
 ///

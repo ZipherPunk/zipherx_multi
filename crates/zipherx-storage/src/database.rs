@@ -13,6 +13,20 @@ use sha2::{Digest, Sha256};
 use crate::schema;
 use crate::types::*;
 
+/// Recover from a poisoned mutex. Logs a warning on poison recovery.
+/// This pattern is used instead of unwrap() to prevent app crashes when
+/// a thread panics while holding the database lock. The recovered state
+/// may be inconsistent if the panic occurred mid-transaction.
+fn recover_lock<T>(result: Result<std::sync::MutexGuard<'_, T>, std::sync::PoisonError<std::sync::MutexGuard<'_, T>>>) -> std::sync::MutexGuard<'_, T> {
+    match result {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("[ZipherX] WARN: Database mutex poisoned — a thread panicked while holding the lock. Recovering.");
+            e.into_inner()
+        }
+    }
+}
+
 /// The main wallet database.
 pub struct WalletDatabase {
     conn: Mutex<rusqlite::Connection>,
@@ -176,7 +190,7 @@ impl WalletDatabase {
 
     /// Force WAL checkpoint.
     pub fn checkpoint(&self) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
         Ok(())
     }
@@ -204,7 +218,7 @@ impl WalletDatabase {
         position: Option<u64>,
     ) -> Result<i64, StorageError> {
         let hashed_nf = nullifier.map(hash_nullifier);
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "INSERT OR IGNORE INTO notes
              (account_id, height, cmu, value, nullifier, rcm, epk, ciphertext,
@@ -231,7 +245,7 @@ impl WalletDatabase {
 
     /// Get a note by its database ID.
     pub fn get_note_by_id(&self, id: i64) -> Result<Option<Note>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.query_row("SELECT * FROM notes WHERE id = ?1", params![id], |row| {
             row_to_note(row)
         })
@@ -250,7 +264,7 @@ impl WalletDatabase {
         &self,
         hashed_nf: &[u8],
     ) -> Result<Option<Note>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.query_row(
             "SELECT * FROM notes WHERE nullifier = ?1",
             params![hashed_nf],
@@ -262,7 +276,7 @@ impl WalletDatabase {
 
     /// Get all unspent notes for an account.
     pub fn get_all_unspent_notes(&self, account_id: i64) -> Result<Vec<Note>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let mut stmt =
             conn.prepare("SELECT * FROM notes WHERE account_id = ?1 AND is_spent = 0")?;
         let notes = stmt
@@ -273,7 +287,7 @@ impl WalletDatabase {
 
     /// Get all notes for an account (spent + unspent).
     pub fn get_all_notes(&self, account_id: i64) -> Result<Vec<Note>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let mut stmt = conn.prepare("SELECT * FROM notes WHERE account_id = ?1")?;
         let notes = stmt
             .query_map(params![account_id], |row| row_to_note(row))?
@@ -283,7 +297,7 @@ impl WalletDatabase {
 
     /// Count unspent notes for an account.
     pub fn count_unspent_notes(&self, account_id: i64) -> Result<usize, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM notes WHERE account_id = ?1 AND is_spent = 0",
             params![account_id],
@@ -310,7 +324,7 @@ impl WalletDatabase {
         txid: &str,
         spent_height: u64,
     ) -> Result<bool, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let updated = conn.execute(
             "UPDATE notes SET is_spent = 1, spent_in_tx = ?1, spent_height = ?2
              WHERE nullifier = ?3 AND is_spent = 0",
@@ -329,7 +343,7 @@ impl WalletDatabase {
         spent_height: u64,
     ) -> Result<Option<u64>, StorageError> {
         let hashed = hash_nullifier(raw_nullifier);
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
 
         // RS-3: Wrap SELECT + UPDATE in an IMMEDIATE transaction to prevent
         // TOCTOU race where another thread could mark the note spent between
@@ -376,7 +390,7 @@ impl WalletDatabase {
         &self,
         txid: &str,
     ) -> Result<(usize, u64), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         // Get value of notes being restored
         let total_value: i64 = conn
             .query_row(
@@ -405,7 +419,7 @@ impl WalletDatabase {
         txid: &str,
         spent_height: u64,
     ) -> Result<bool, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let updated = conn.execute(
             "UPDATE notes SET is_spent = 1, spent_in_tx = ?1, spent_height = ?2
              WHERE id = ?3 AND is_spent = 0",
@@ -418,7 +432,7 @@ impl WalletDatabase {
     /// (spent_height = 0). These are candidates for auto-recovery if the TX has expired.
     /// FIX #1300: Auto-recover notes from unconfirmed sends.
     pub fn get_unconfirmed_spent_txids(&self) -> Result<Vec<String>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let mut stmt = conn.prepare(
             "SELECT DISTINCT spent_in_tx FROM notes
              WHERE is_spent = 1 AND spent_height = 0 AND spent_in_tx IS NOT NULL",
@@ -432,7 +446,7 @@ impl WalletDatabase {
     /// Check if a transaction was confirmed (mined into a block).
     /// Returns true if the txid appears in transaction_history with height > 0.
     pub fn is_transaction_confirmed(&self, txid: &str) -> Result<bool, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM transaction_history
              WHERE txid = ?1 AND height > 0",
@@ -460,7 +474,7 @@ impl WalletDatabase {
         let mut total_restored = 0usize;
         let mut total_value = 0u64;
 
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
 
         for txid in &unconfirmed_txids {
             // Check if this TX was confirmed in any block
@@ -556,7 +570,7 @@ impl WalletDatabase {
     /// A future improvement could store a hash alongside the witness and
     /// verify it on retrieval.
     pub fn update_note_witness(&self, note_id: i64, witness: &[u8]) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE notes SET witness = ?1 WHERE id = ?2",
             params![witness, note_id],
@@ -566,7 +580,7 @@ impl WalletDatabase {
 
     /// Update anchor for a note.
     pub fn update_note_anchor(&self, note_id: i64, anchor: &[u8]) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE notes SET anchor = ?1 WHERE id = ?2",
             params![anchor, note_id],
@@ -576,7 +590,7 @@ impl WalletDatabase {
 
     /// Clear witness for a single note.
     pub fn clear_witness_for_note(&self, note_id: i64) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE notes SET witness = NULL WHERE id = ?1",
             params![note_id],
@@ -586,7 +600,7 @@ impl WalletDatabase {
 
     /// Clear all witnesses (FIX #1238). Returns count of cleared notes.
     pub fn clear_all_witnesses(&self) -> Result<usize, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let count = conn.execute(
             "UPDATE notes SET witness = NULL WHERE witness IS NOT NULL",
             [],
@@ -604,7 +618,7 @@ impl WalletDatabase {
         position: u64,
     ) -> Result<bool, StorageError> {
         let hashed_nf = hash_nullifier(raw_nullifier);
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let updated = conn.execute(
             "UPDATE notes SET nullifier = ?1, position = ?2 WHERE cmu = ?3",
             params![hashed_nf, position as i64, cmu],
@@ -614,7 +628,7 @@ impl WalletDatabase {
 
     /// Delete all notes (for full wipe).
     pub fn delete_all_notes(&self) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute("DELETE FROM notes", [])?;
         Ok(())
     }
@@ -625,7 +639,7 @@ impl WalletDatabase {
 
     /// Spendable balance: unspent notes WITH valid witnesses (FIX #1210).
     pub fn get_balance(&self, account_id: i64) -> Result<u64, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let val: i64 = conn.query_row(
             "SELECT COALESCE(SUM(value), 0) FROM notes
              WHERE account_id = ?1 AND is_spent = 0
@@ -638,7 +652,7 @@ impl WalletDatabase {
 
     /// Total unspent balance: includes notes WITHOUT witnesses + orphan-spent (FIX #1210/1233).
     pub fn get_total_unspent_balance(&self, account_id: i64) -> Result<u64, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let val: i64 = conn.query_row(
             "SELECT COALESCE(SUM(value), 0) FROM notes
              WHERE account_id = ?1
@@ -655,7 +669,7 @@ impl WalletDatabase {
         &self,
         account_id: i64,
     ) -> Result<(usize, u64, u64), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let (count, value, min_h): (i64, i64, Option<i64>) = conn.query_row(
             "SELECT COUNT(*), COALESCE(SUM(value), 0), MIN(height) FROM notes
              WHERE account_id = ?1 AND is_spent = 0
@@ -687,7 +701,7 @@ impl WalletDatabase {
         memo: Option<&str>,
         status: TxStatus,
     ) -> Result<i64, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "INSERT OR IGNORE INTO transaction_history
              (txid, height, timestamp, tx_type, amount, fee, address, memo, status)
@@ -712,7 +726,7 @@ impl WalletDatabase {
         &self,
         txid: &str,
     ) -> Result<Option<TransactionRecord>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.query_row(
             "SELECT * FROM transaction_history WHERE txid = ?1",
             params![txid],
@@ -734,7 +748,7 @@ impl WalletDatabase {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<TransactionRecord>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
 
         // Fetch raw records, excluding explicit "change" type
         let mut stmt = conn.prepare(
@@ -960,7 +974,7 @@ impl WalletDatabase {
 
     /// Get pending transactions.
     pub fn get_pending_transactions(&self) -> Result<Vec<TransactionRecord>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let mut stmt =
             conn.prepare("SELECT * FROM transaction_history WHERE status = 'pending'")?;
         let records = stmt
@@ -977,7 +991,7 @@ impl WalletDatabase {
         height: Option<u64>,
         timestamp: Option<u64>,
     ) -> Result<bool, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let updated = if let (Some(h), Some(ts)) = (height, timestamp) {
             conn.execute(
                 "UPDATE transaction_history SET status = ?1, height = ?2, timestamp = ?3
@@ -1000,7 +1014,7 @@ impl WalletDatabase {
 
     /// Update confirmations for all confirmed TXs based on chain height.
     pub fn update_all_confirmations(&self, chain_height: u64) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
 
         // FIX: "sent" entries from record_sent_transaction_atomic have height=0
         // (unconfirmed at send time). Once a "received" entry for the same txid
@@ -1030,7 +1044,7 @@ impl WalletDatabase {
 
     /// Get distinct block heights for transactions with missing timestamps.
     pub fn get_heights_needing_timestamps(&self) -> Result<Vec<u64>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let mut stmt = conn.prepare(
             "SELECT DISTINCT height FROM transaction_history
              WHERE (timestamp IS NULL OR timestamp = 0) AND height > 0",
@@ -1049,7 +1063,7 @@ impl WalletDatabase {
         height: u64,
         timestamp: u64,
     ) -> Result<usize, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let updated = conn.execute(
             "UPDATE transaction_history SET timestamp = ?1
              WHERE height = ?2 AND (timestamp IS NULL OR timestamp = 0)",
@@ -1060,7 +1074,7 @@ impl WalletDatabase {
 
     /// Delete a phantom transaction. Returns deleted amount if found.
     pub fn delete_phantom_transaction(&self, txid: &str) -> Result<Option<u64>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let amount: Option<i64> = conn
             .query_row(
                 "SELECT amount FROM transaction_history WHERE txid = ?1",
@@ -1080,7 +1094,7 @@ impl WalletDatabase {
 
     /// Get total transaction count.
     pub fn get_transaction_count(&self) -> Result<usize, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM transaction_history", [], |row| {
             row.get(0)
         })?;
@@ -1089,7 +1103,7 @@ impl WalletDatabase {
 
     /// Count transactions by type (sent, received, change).
     pub fn get_transaction_type_counts(&self) -> Result<(usize, usize, usize), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let sent: i64 = conn.query_row(
             "SELECT COUNT(*) FROM transaction_history WHERE tx_type = 'sent'",
             [],
@@ -1110,7 +1124,7 @@ impl WalletDatabase {
 
     /// Clear all transaction history.
     pub fn clear_transaction_history(&self) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute("DELETE FROM transaction_history", [])?;
         Ok(())
     }
@@ -1127,7 +1141,7 @@ impl WalletDatabase {
     ///    (SUM of spent note values - change - fee) to avoid double-subtraction
     ///    when the boost scan already stored net amounts.
     pub fn reconcile_change_outputs(&self) -> Result<usize, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
 
         // Find txids with BOTH "sent" and "received" entries.
         // The "received" entries on these txids are change, not real receives.
@@ -1222,7 +1236,7 @@ impl WalletDatabase {
         // note never marked as spent → balance inflation on self-sends.
         let hashed_nf = hash_nullifier(raw_nullifier);
 
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = recover_lock(self.conn.lock());
         let tx = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|e| StorageError::TransactionFailed(e.to_string()))?;
@@ -1273,7 +1287,7 @@ impl WalletDatabase {
 
     /// Get sync state (singleton row id=1).
     pub fn get_sync_state(&self) -> Result<SyncState, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.query_row(
             "SELECT last_scanned_height, verified_checkpoint_height, tree_state,
                     tree_height, boost_file_height, boost_cmu_count, delta_bundle_verified
@@ -1296,7 +1310,7 @@ impl WalletDatabase {
 
     /// Update last scanned height.
     pub fn update_last_scanned_height(&self, height: u64) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE sync_state SET last_scanned_height = ?1 WHERE id = 1",
             params![height as i64],
@@ -1306,7 +1320,7 @@ impl WalletDatabase {
 
     /// Save tree state blob + height.
     pub fn save_tree_state(&self, state: &[u8], height: u64) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE sync_state SET tree_state = ?1, tree_height = ?2 WHERE id = 1",
             params![state, height as i64],
@@ -1316,7 +1330,7 @@ impl WalletDatabase {
 
     /// Get tree state blob.
     pub fn get_tree_state(&self) -> Result<Option<Vec<u8>>, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let state: Option<Vec<u8>> = conn.query_row(
             "SELECT tree_state FROM sync_state WHERE id = 1",
             [],
@@ -1327,7 +1341,7 @@ impl WalletDatabase {
 
     /// Get tree height.
     pub fn get_tree_height(&self) -> Result<u64, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let h: i64 = conn.query_row(
             "SELECT tree_height FROM sync_state WHERE id = 1",
             [],
@@ -1338,7 +1352,7 @@ impl WalletDatabase {
 
     /// Update tree height only.
     pub fn update_tree_height(&self, height: u64) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE sync_state SET tree_height = ?1 WHERE id = 1",
             params![height as i64],
@@ -1348,7 +1362,7 @@ impl WalletDatabase {
 
     /// Clear tree state only — preserves witnesses (FIX #1210).
     pub fn clear_tree_state_only(&self) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE sync_state SET tree_state = NULL, tree_height = 0 WHERE id = 1",
             [],
@@ -1358,7 +1372,7 @@ impl WalletDatabase {
 
     /// Clear tree state AND all witnesses (for full rebuild).
     pub fn clear_tree_state_for_rebuild(&self) -> Result<(), StorageError> {
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = recover_lock(self.conn.lock());
         let tx = conn.transaction()?;
         tx.execute(
             "UPDATE sync_state SET tree_state = NULL, tree_height = 0 WHERE id = 1",
@@ -1387,7 +1401,7 @@ impl WalletDatabase {
     /// Returns the number of notes cleaned up (0 = no migration needed).
     pub fn fix_zero_txid_notes(&self) -> Result<usize, StorageError> {
         let zero_txid = "0000000000000000000000000000000000000000000000000000000000000000";
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = recover_lock(self.conn.lock());
 
         // Check if any notes have the zero txid
         let count: usize = conn.query_row(
@@ -1423,7 +1437,7 @@ impl WalletDatabase {
     /// Used before boost scan to start fresh with correct data.
     /// Deletes all notes, all TX history, and resets tree state to empty.
     pub fn clear_notes_and_history(&self) -> Result<(), StorageError> {
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = recover_lock(self.conn.lock());
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM notes", [])?;
         tx.execute("DELETE FROM transaction_history", [])?;
@@ -1445,7 +1459,7 @@ impl WalletDatabase {
     /// 4. Reset last_scanned_height to 0 (triggers fresh scan from boost)
     /// 5. Reset delta_bundle_verified (forces fresh delta validation)
     pub fn full_rescan_reset(&self) -> Result<(), StorageError> {
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = recover_lock(self.conn.lock());
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM notes", [])?;
         tx.execute("DELETE FROM transaction_history", [])?;
@@ -1460,7 +1474,7 @@ impl WalletDatabase {
 
     /// Get delta bundle verified flag.
     pub fn get_delta_bundle_verified(&self) -> Result<bool, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let val: i64 = conn.query_row(
             "SELECT delta_bundle_verified FROM sync_state WHERE id = 1",
             [],
@@ -1471,7 +1485,7 @@ impl WalletDatabase {
 
     /// Set delta bundle verified flag.
     pub fn set_delta_bundle_verified(&self, verified: bool) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE sync_state SET delta_bundle_verified = ?1 WHERE id = 1",
             params![verified as i64],
@@ -1481,7 +1495,7 @@ impl WalletDatabase {
 
     /// Get verified checkpoint height.
     pub fn get_verified_checkpoint_height(&self) -> Result<u64, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let h: i64 = conn.query_row(
             "SELECT verified_checkpoint_height FROM sync_state WHERE id = 1",
             [],
@@ -1492,7 +1506,7 @@ impl WalletDatabase {
 
     /// Update verified checkpoint height.
     pub fn update_verified_checkpoint_height(&self, height: u64) -> Result<(), StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         conn.execute(
             "UPDATE sync_state SET verified_checkpoint_height = ?1 WHERE id = 1",
             params![height as i64],
@@ -1509,7 +1523,7 @@ impl WalletDatabase {
     where
         F: FnOnce(&rusqlite::Transaction<'_>) -> Result<T, StorageError>,
     {
-        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = recover_lock(self.conn.lock());
         let tx = conn.transaction()?;
         let result = f(&tx)?;
         tx.commit()?;
@@ -2401,7 +2415,7 @@ impl WalletDatabase {
     /// Check if the delta store should be cleared (set by migration v4).
     /// Returns true if the flag is set, then clears it.
     pub fn check_and_clear_redownload_flag(&self) -> Result<bool, StorageError> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = recover_lock(self.conn.lock());
         let flag: i64 = conn
             .query_row(
                 "SELECT applied_at FROM _migrations WHERE name = 'full_redownload_v4'",
@@ -2720,7 +2734,7 @@ mod tests {
 
         // Simulate orphan: is_spent=1 but spent_in_tx is empty
         {
-            let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
+            let conn = recover_lock(db.conn.lock());
             conn.execute(
                 "UPDATE notes SET is_spent = 1, spent_in_tx = '' WHERE cmu = ?1",
                 params![cmu.as_slice()],

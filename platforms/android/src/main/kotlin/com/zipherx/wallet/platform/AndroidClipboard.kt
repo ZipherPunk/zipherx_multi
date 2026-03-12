@@ -3,6 +3,8 @@ package com.zipherx.wallet.platform
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 
 /**
  * System clipboard operations for copying addresses, txids, and other text.
@@ -18,12 +20,21 @@ class AndroidClipboard(private val context: Context) {
 
     /**
      * Copy text to the system clipboard.
+     * Auto-clears after 30 seconds to prevent sensitive data leakage.
      *
      * @param text The string to copy (e.g. a Zclassic shielded address).
      */
     fun copyText(text: String) {
         val clip = ClipData.newPlainText("ZipherX", text)
         clipboardManager.setPrimaryClip(clip)
+
+        // SECURITY: Auto-clear clipboard after 30 seconds to prevent sensitive data leakage
+        Handler(Looper.getMainLooper()).postDelayed({
+            val current = clipboardManager.primaryClip
+            if (current != null && current.itemCount > 0 && current.getItemAt(0).text == text) {
+                clipboardManager.setPrimaryClip(ClipData.newPlainText("", ""))
+            }
+        }, 30_000)
     }
 
     /**

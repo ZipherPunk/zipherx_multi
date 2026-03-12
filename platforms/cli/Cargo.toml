@@ -23,7 +23,7 @@ tokio = { workspace = true }
 
 # CLI
 rustyline = "14"
-rpassword = "7"
+rpassword = "=7.4.0"  # Pinned for supply chain security
 crossterm = "0.27"
 
 # Encryption for secure storage

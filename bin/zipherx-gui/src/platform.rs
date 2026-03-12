@@ -16,6 +16,9 @@ use rand::RngCore;
 
 use zipherx_platform::*;
 
+/// Legacy fixed salt used before per-installation random salts.
+const LEGACY_SALT: &[u8; SALT_LEN] = b"ZipherX_session_";
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -63,21 +66,63 @@ impl GuiSecureStorage {
         self.base_dir.join(format!("{}.key", safe_name))
     }
 
+    /// Return the per-installation 16-byte session salt.
+    ///
+    /// - If `{data_dir}/session.salt` exists, read it.
+    /// - If it doesn't exist but wallet keys exist, use the legacy fixed salt
+    ///   AND write it to file (migration path for existing installs).
+    /// - If neither exists, generate a random salt with OsRng and persist it.
+    fn session_salt(&self) -> [u8; SALT_LEN] {
+        let salt_path = self.data_dir.join("session.salt");
+
+        // Try to load existing salt file
+        if let Ok(data) = fs::read(&salt_path) {
+            if data.len() == SALT_LEN {
+                let mut salt = [0u8; SALT_LEN];
+                salt.copy_from_slice(&data);
+                return salt;
+            }
+        }
+
+        // No salt file — check if this is a legacy installation (has wallet keys)
+        let has_wallet_keys = self.key_path("spending_key").exists();
+        if has_wallet_keys {
+            // Migration: use legacy salt so existing encrypted keys remain decryptable
+            let salt = *LEGACY_SALT;
+            let _ = fs::write(&salt_path, &salt);
+            return salt;
+        }
+
+        // Fresh install: generate random salt
+        let mut salt = [0u8; SALT_LEN];
+        OsRng.fill_bytes(&mut salt);
+        let _ = fs::write(&salt_path, &salt);
+        salt
+    }
+
     /// Set the session password. Derives the AES-256 key via Argon2id.
     /// Must be called before any store/load operations.
     pub fn set_password(&self, password: &str) {
-        let salt = b"ZipherX_session_"; // 16 bytes fixed salt for session key
+        let salt = self.session_salt();
         let mut key = [0u8; KEY_LEN];
+        // Argon2id failure is extremely unlikely (only on memory exhaustion)
         Argon2::default()
-            .hash_password_into(password.as_bytes(), salt, &mut key)
-            .expect("Argon2 hash failed");
-        *self.derived_key.lock().unwrap() = Some(key);
+            .hash_password_into(password.as_bytes(), &salt, &mut key)
+            .expect("Argon2id key derivation failed — likely memory exhaustion");
+        *self.derived_key.lock().unwrap_or_else(|e| {
+            eprintln!("[ZipherX] WARN: derived_key mutex poisoned, recovering");
+            e.into_inner()
+        }) = Some(key);
     }
 
     /// Check if a password has been set for this session.
     #[allow(dead_code)]
     pub fn has_password(&self) -> bool {
-        self.derived_key.lock().unwrap().is_some()
+        // Recover from mutex poisoning rather than crashing (GUI app resilience)
+        self.derived_key.lock().unwrap_or_else(|e| {
+            eprintln!("[ZipherX] WARN: derived_key mutex poisoned, recovering");
+            e.into_inner()
+        }).is_some()
     }
 
     /// Lock the storage — clears the derived key and cache.
@@ -93,12 +138,14 @@ impl GuiSecureStorage {
             *dk = None;
         }
         if let Ok(mut cache) = self.cache.lock() {
-            // Zeroize cached values
+            // Zeroize cached values — shrink first so capacity bytes are also zeroed
             for (_, v) in cache.iter_mut() {
+                v.shrink_to_fit(); // Shrink capacity to match len so all bytes are zeroed
                 for byte in v.iter_mut() {
                     unsafe { std::ptr::write_volatile(byte, 0) };
                 }
             }
+            std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
             cache.clear();
         }
     }
@@ -117,7 +164,7 @@ impl GuiSecureStorage {
         let mut nonce_bytes = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce_bytes);
 
-        let file_key = Self::derive_key_from_password(session_key, &salt);
+        let mut file_key = Self::derive_key_from_password(session_key, &salt);
         let cipher = Aes256Gcm::new_from_slice(&file_key)
             .map_err(|e| PlatformError::StorageError(format!("cipher init: {}", e)))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
@@ -125,6 +172,12 @@ impl GuiSecureStorage {
         let ciphertext = cipher
             .encrypt(nonce, plaintext)
             .map_err(|e| PlatformError::StorageError(format!("encrypt: {}", e)))?;
+
+        // Zeroize per-file key after use
+        for b in file_key.iter_mut() {
+            unsafe { std::ptr::write_volatile(b, 0) };
+        }
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
 
         let mut output = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
         output.extend_from_slice(&salt);
@@ -141,14 +194,22 @@ impl GuiSecureStorage {
         let nonce_bytes = &encrypted[SALT_LEN..SALT_LEN + NONCE_LEN];
         let ciphertext = &encrypted[SALT_LEN + NONCE_LEN..];
 
-        let file_key = Self::derive_key_from_password(session_key, salt);
+        let mut file_key = Self::derive_key_from_password(session_key, salt);
         let cipher = Aes256Gcm::new_from_slice(&file_key)
             .map_err(|e| PlatformError::StorageError(format!("cipher init: {}", e)))?;
         let nonce = Nonce::from_slice(nonce_bytes);
 
-        cipher
+        let result = cipher
             .decrypt(nonce, ciphertext)
-            .map_err(|_| PlatformError::StorageError("decryption failed — wrong password?".into()))
+            .map_err(|_| PlatformError::StorageError("decryption failed — wrong password?".into()));
+
+        // Zeroize per-file key after use
+        for b in file_key.iter_mut() {
+            unsafe { std::ptr::write_volatile(b, 0) };
+        }
+        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+
+        result
     }
 
     /// Delete all wallet data from disk (keys, databases, everything).
@@ -164,11 +225,11 @@ impl GuiSecureStorage {
     /// Verify a password by attempting to decrypt the spending key.
     /// Does NOT affect current session state.
     pub fn verify_password(&self, password: &str) -> bool {
-        let salt = b"ZipherX_session_";
+        let salt = self.session_salt();
         let mut test_key = [0u8; KEY_LEN];
         Argon2::default()
-            .hash_password_into(password.as_bytes(), salt, &mut test_key)
-            .expect("Argon2 hash failed");
+            .hash_password_into(password.as_bytes(), &salt, &mut test_key)
+            .expect("Argon2id key derivation failed — likely memory exhaustion");
 
         let path = self.key_path("spending_key");
         let hex_data = match fs::read_to_string(&path) {
@@ -202,7 +263,11 @@ impl GuiSecureStorage {
 impl SecureStorage for GuiSecureStorage {
     fn store_key(&self, identifier: &str, data: &[u8]) -> Result<(), PlatformError> {
         let session_key = {
-            let dk = self.derived_key.lock().unwrap();
+            // Recover from mutex poisoning rather than crashing (GUI app resilience)
+            let dk = self.derived_key.lock().unwrap_or_else(|e| {
+                eprintln!("[ZipherX] WARN: derived_key mutex poisoned, recovering");
+                e.into_inner()
+            });
             dk.ok_or_else(|| PlatformError::StorageError("password not set".into()))?
         };
         let encrypted = Self::encrypt_data(&session_key, data)?;
@@ -210,16 +275,25 @@ impl SecureStorage for GuiSecureStorage {
         let path = self.key_path(identifier);
         fs::write(&path, hex_data)
             .map_err(|e| PlatformError::StorageError(format!("write {}: {}", path.display(), e)))?;
-        self.cache.lock().unwrap().insert(identifier.to_string(), data.to_vec());
+        self.cache.lock().unwrap_or_else(|e| {
+            eprintln!("[ZipherX] WARN: cache mutex poisoned, recovering");
+            e.into_inner()
+        }).insert(identifier.to_string(), data.to_vec());
         Ok(())
     }
 
     fn load_key(&self, identifier: &str) -> Result<Vec<u8>, PlatformError> {
-        if let Some(data) = self.cache.lock().unwrap().get(identifier) {
+        if let Some(data) = self.cache.lock().unwrap_or_else(|e| {
+            eprintln!("[ZipherX] WARN: cache mutex poisoned, recovering");
+            e.into_inner()
+        }).get(identifier) {
             return Ok(data.clone());
         }
         let session_key = {
-            let dk = self.derived_key.lock().unwrap();
+            let dk = self.derived_key.lock().unwrap_or_else(|e| {
+                eprintln!("[ZipherX] WARN: derived_key mutex poisoned, recovering");
+                e.into_inner()
+            });
             dk.ok_or_else(|| PlatformError::StorageError("password not set".into()))?
         };
         let path = self.key_path(identifier);
@@ -228,19 +302,28 @@ impl SecureStorage for GuiSecureStorage {
         let encrypted = hex::decode(hex_data.trim())
             .map_err(|e| PlatformError::StorageError(format!("hex decode: {}", e)))?;
         let data = Self::decrypt_data(&session_key, &encrypted)?;
-        self.cache.lock().unwrap().insert(identifier.to_string(), data.clone());
+        self.cache.lock().unwrap_or_else(|e| {
+            eprintln!("[ZipherX] WARN: cache mutex poisoned, recovering");
+            e.into_inner()
+        }).insert(identifier.to_string(), data.clone());
         Ok(data)
     }
 
     fn delete_key(&self, identifier: &str) -> Result<(), PlatformError> {
         let path = self.key_path(identifier);
         let _ = fs::remove_file(path);
-        self.cache.lock().unwrap().remove(identifier);
+        self.cache.lock().unwrap_or_else(|e| {
+            eprintln!("[ZipherX] WARN: cache mutex poisoned, recovering");
+            e.into_inner()
+        }).remove(identifier);
         Ok(())
     }
 
     fn has_key(&self, identifier: &str) -> bool {
-        self.cache.lock().unwrap().contains_key(identifier) || self.key_path(identifier).exists()
+        self.cache.lock().unwrap_or_else(|e| {
+            eprintln!("[ZipherX] WARN: cache mutex poisoned, recovering");
+            e.into_inner()
+        }).contains_key(identifier) || self.key_path(identifier).exists()
     }
 
     fn load_encrypted_key_pair(&self, identifier: &str) -> Result<(Vec<u8>, Vec<u8>), PlatformError> {

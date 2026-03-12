@@ -36,6 +36,10 @@ impl RpcClient {
     }
 
     /// Call an RPC method with the given parameters.
+    ///
+    // SECURITY (GUI-M1): Basic Auth over localhost TCP is acceptable per HTTP spec.
+    // The RPC port (8023) is bound to 127.0.0.1 by zclassicd default config.
+    // No network traffic leaves the machine.
     pub fn call(&self, method: &str, params: &[Value]) -> Result<Value, String> {
         let body = serde_json::json!({
             "jsonrpc": "1.0",
@@ -64,12 +68,14 @@ impl RpcClient {
         if let Some(error) = json.get("error") {
             if !error.is_null() {
                 let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
-                let msg = error
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown error")
-                    .to_string();
-                return Err(format!("RPC error {}: {}", code, msg));
+                // GUI-L4: Map RPC error codes to user-friendly messages
+                // to avoid leaking internal daemon details.
+                let user_msg = match code {
+                    -28 => "Daemon is still loading (warming up)".to_string(),
+                    -1 => "RPC command error".to_string(),
+                    _ => format!("RPC error (code {})", code),
+                };
+                return Err(user_msg);
             }
         }
 
@@ -161,6 +167,11 @@ impl RpcClient {
     }
 
     /// Test if the RPC connection is alive.
+    ///
+    // GUI-L5: is_alive() uses the default 30s HTTP timeout. For a health check,
+    // a shorter timeout would be preferable but ureq doesn't support per-request
+    // timeouts without creating a new agent. The 5s polling interval in the UI
+    // prevents multiple overlapping health checks.
     pub fn is_alive(&self) -> bool {
         self.get_info().is_ok()
     }

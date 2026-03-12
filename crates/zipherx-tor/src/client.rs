@@ -224,12 +224,10 @@ const PROBE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(3)
 /// Future improvement: verify the proxy routes through actual Tor circuits
 /// (e.g., by connecting to check.torproject.org).
 ///
-/// RT-3: All P2P connections through this SOCKS5 proxy share the same Tor
-/// circuit (no circuit isolation). This means the Tor exit node (or the
-/// peer if using .onion addresses) can correlate connections to different
-/// Zclassic peers as coming from the same wallet. For stronger privacy,
-/// Arti's `isolation` API should be used (Phase 2) to assign different
-/// circuits per peer connection, preventing cross-peer correlation.
+/// RT-3: SECURITY WARNING: All connections share one Tor circuit — exit node
+/// can correlate peer connections to this wallet. Phase 2 will implement
+/// Arti circuit isolation (one circuit per peer) to prevent cross-peer
+/// correlation attacks. See: https://docs.rs/arti-client/latest/
 async fn probe_socks5_proxy(port: u16) -> Result<bool, String> {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 

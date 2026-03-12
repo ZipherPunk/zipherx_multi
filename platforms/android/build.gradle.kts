@@ -47,7 +47,8 @@ android {
             //   -keep class com.sun.jna.** { *; }
             //   -dontwarn com.sun.jna.**
             // Then run a full regression test on all FFI entry points before release.
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -107,6 +108,8 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.6.2")
 
     // Security (EncryptedSharedPreferences)
+    // Note: 1.1.0-alpha06 is the latest available version. AndroidX security-crypto
+    // has not released a stable 1.1.x. The underlying Tink crypto primitives are stable.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Process lifecycle (foreground detection)

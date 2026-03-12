@@ -62,10 +62,15 @@ impl eframe::App for ZipherXApp {
             if clear_at.elapsed().as_secs() >= 30 {
                 ctx.copy_text(String::new());
                 self.clipboard_clear_at = None;
+            } else {
+                // Ensure repaint fires even when the window is unfocused
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
             }
         }
 
         // -- Auto-lock: detect user interaction --
+        // Note: interaction detection runs BEFORE auto-lock check, so any
+        // activity in the current frame resets the timer before it's checked.
         let had_interaction = ctx.input(|i| {
             i.pointer.any_click()
                 || i.key_pressed(egui::Key::Enter)
@@ -94,6 +99,8 @@ impl eframe::App for ZipherXApp {
             self.send_address.zeroize();
             self.send_amount.zeroize();
             self.send_memo.zeroize();
+            self.node_rpc_password.zeroize();
+            self.node_rpc_user.zeroize();
             self.show_export = false;
             self.show_export_confirm = false;
             self.show_send_confirm = false;
@@ -313,8 +320,9 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
             s.sync_phase = "Idle".to_string();
         }
 
-        // Balance — suppress updates while TX pending confirmation
-        // (spent notes marked but change note not yet mined = wrong balance)
+        // Balance — suppress updates while TX pending confirmation to avoid
+        // showing incorrect intermediate state (sent notes marked but change
+        // not yet mined). The wallet view shows a "pending" indicator.
         if app.pending_confirmation_txid.is_none() {
             app.balance.total = s.total_balance;
             app.balance.spendable = s.spendable_balance;
@@ -396,11 +404,14 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
 
         // Mempool TX notification (incoming)
         // Skip if we've already seen/confirmed this txid, are already tracking it,
-        // or it's our own sent TX (change output back to us).
+        // or it's likely our own sent TX's change output coming back to us.
         if let Some(info) = s.mempool_tx.take() {
+            let is_likely_change = app.send_in_progress
+                || app.send_timestamp.map(|t| t.elapsed().as_secs() < 120).unwrap_or(false);
             let dominated = app.known_received_txids.contains(&info.txid)
                 || app.pending_incoming_txid.as_deref() == Some(&info.txid)
-                || app.pending_confirmation_txid.as_deref() == Some(&info.txid);
+                || app.pending_confirmation_txid.as_deref() == Some(&info.txid)
+                || is_likely_change;
             if !dominated {
                 app.mempool_tx_notification = Some((info.txid.clone(), info.amount));
                 app.mempool_notification_time = Some(std::time::Instant::now());
@@ -658,10 +669,9 @@ fn update_sync_tasks(app: &mut ZipherXApp, phase: &str, current: u64, target: u6
 }
 
 fn check_pending_confirmation(app: &mut ZipherXApp, ctx: &egui::Context) {
-    if app.pending_confirmation_txid.is_none() {
+    let Some(pending_txid) = app.pending_confirmation_txid.clone() else {
         return;
-    }
-    let pending_txid = app.pending_confirmation_txid.as_ref().unwrap().clone();
+    };
 
     // Strategy 1: exact txid match
     let matched_by_txid = app

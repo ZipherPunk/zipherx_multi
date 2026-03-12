@@ -99,16 +99,16 @@ TOTAL_STEPS=$((TOTAL_STEPS + 1))  # Collect & verify
 # ╚══════════════════════════════════════════════════════════════╝
 
 echo ">>> Running cargo audit..."
-if command -v cargo-audit &>/dev/null; then
-    if ! cargo audit --deny warnings 2>&1; then
-        echo "FATAL: cargo audit found vulnerabilities. Fix before release."
-        exit 1
-    fi
-    echo "  [OK] No known vulnerabilities found"
-else
-    echo "WARNING: cargo-audit not installed, skipping vulnerability scan"
-    echo "  Install with: cargo install cargo-audit"
+if ! command -v cargo-audit &>/dev/null; then
+    echo "FATAL: cargo-audit is required for release builds."
+    echo "Install: cargo install cargo-audit"
+    exit 1
 fi
+if ! cargo audit --deny warnings 2>&1; then
+    echo "FATAL: cargo audit found vulnerabilities. Fix before release."
+    exit 1
+fi
+echo "  [OK] No known vulnerabilities found"
 echo ""
 
 # ╔══════════════════════════════════════════════════════════════╗

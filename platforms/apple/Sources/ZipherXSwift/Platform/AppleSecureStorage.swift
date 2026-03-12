@@ -48,9 +48,10 @@ public final class AppleSecureStorage: @unchecked Sendable {
 
         // C-4: On iOS, add SecAccessControl with .userPresence for spending key
         // so the OS requires biometric/passcode before the item can be read.
-        // On macOS, skip .userPresence — Hardened Runtime + sandbox causes
-        // errSecMissingEntitlement (-34018) with SecAccessControl in dev builds.
-        // macOS biometric auth is enforced separately via LAContext before key access.
+        // SECURITY NOTE: macOS Hardened Runtime sandbox restrictions prevent
+        // SecAccessControl with .userPresence on Keychain items. Re-authentication
+        // is enforced at the application layer (password re-entry for send/export)
+        // rather than at the Keychain level.
         #if os(iOS)
         if requireUserPresence {
             var error: Unmanaged<CFError>?

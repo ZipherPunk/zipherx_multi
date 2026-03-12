@@ -105,6 +105,15 @@ pub struct BalanceDisplay {
     pub spendable_note_count: usize,
 }
 
+/// Snapshot of validated send parameters, captured at validation time to
+/// prevent TOCTOU race between validation and execution (GUI-H2).
+pub struct ValidatedSend {
+    pub address: String,
+    pub amount: u64,
+    pub fee: u64,
+    pub memo: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // ZipherXApp
 // ---------------------------------------------------------------------------
@@ -166,6 +175,9 @@ pub struct ZipherXApp {
     pub show_send_confirm: bool,
     pub show_send_reauth: bool,
     pub reauth_password: String,
+    pub validated_send: Option<ValidatedSend>,
+    pub reauth_failed_attempts: u32,
+    pub reauth_lockout_until: Option<std::time::Instant>,
 
     // -- send lifecycle (clearing + settlement) --
     pub mempool_accepted: bool,
@@ -342,6 +354,9 @@ impl Default for ZipherXApp {
             show_send_confirm: false,
             show_send_reauth: false,
             reauth_password: String::new(),
+            validated_send: None,
+            reauth_failed_attempts: 0,
+            reauth_lockout_until: None,
 
             mempool_accepted: false,
             mempool_peer_status: None,

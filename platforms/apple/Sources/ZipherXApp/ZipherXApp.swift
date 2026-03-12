@@ -1,5 +1,10 @@
 import SwiftUI
 import LocalAuthentication
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 @main
 struct ZipherXApp: App {
@@ -55,6 +60,16 @@ struct ZipherXApp: App {
             // Lock wallet when app goes to background (iOS) or resigns active (macOS)
             if newPhase == .background && walletReady {
                 walletLocked = true
+            }
+            // SECURITY: When app enters background, clear clipboard immediately.
+            // The 30s auto-clear timer won't fire reliably while backgrounded,
+            // so we clear proactively to prevent sensitive data leakage.
+            if newPhase == .background || newPhase == .inactive {
+                #if canImport(UIKit)
+                UIPasteboard.general.string = ""
+                #elseif canImport(AppKit)
+                NSPasteboard.general.clearContents()
+                #endif
             }
             _ = oldPhase
         }

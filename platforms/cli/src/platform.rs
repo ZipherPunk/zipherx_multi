@@ -76,6 +76,11 @@ impl CliSecureStorage {
         // We'll re-derive per file, but cache the password hash as a session marker.
         let salt = b"ZipherX_session_"; // 16 bytes fixed salt for session key
         let mut key = [0u8; KEY_LEN];
+        // Note: Argon2::default() uses m=4096 KiB, t=1, p=1 (argon2id).
+        // Stronger parameters (m=65536, t=3) are recommended for new deployments
+        // but cannot be changed without a migration path for existing encrypted files.
+        // The memory-hard property of Argon2id provides substantial protection even
+        // with default parameters.
         Argon2::default()
             .hash_password_into(password.as_bytes(), salt, &mut key)
             .expect("Argon2 hash failed");

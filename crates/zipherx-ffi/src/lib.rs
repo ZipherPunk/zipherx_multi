@@ -27,6 +27,8 @@ use zipherx_core::{runtime, CoreError};
 struct SecureVec(Vec<u8>);
 impl Drop for SecureVec {
     fn drop(&mut self) {
+        // Shrink to len so capacity bytes are also covered by zeroization
+        self.0.shrink_to_fit();
         for byte in self.0.iter_mut() {
             // SAFETY: `byte` is a valid, aligned, initialized reference inside the Vec.
             unsafe { std::ptr::write_volatile(byte, 0) };

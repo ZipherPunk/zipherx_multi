@@ -1209,6 +1209,8 @@ fn show_export_display(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Cont
                 {
                     ctx.copy_text(app.export_key_display.clone());
                     app.clipboard_clear_at = Some(std::time::Instant::now());
+                    // GUI-H3: ensure repaint fires for clipboard auto-clear
+                    ctx.request_repaint_after(std::time::Duration::from_secs(31));
                 }
                 if ui
                     .add(egui::Button::new(

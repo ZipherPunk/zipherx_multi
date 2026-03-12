@@ -461,8 +461,17 @@ struct CelebrationOverlay: View {
         }
     }
 
+    /// Format zatoshis as ZCL using integer-only arithmetic to avoid
+    /// IEEE 754 floating-point precision loss (e.g., 0.29 * 1e8 != 29000000).
     private func formatZCL(_ zatoshis: UInt64) -> String {
-        let zcl = Double(zatoshis) / 1e8
-        return String(format: "%.8f ZCL", zcl)
+        let whole = zatoshis / 100_000_000
+        let frac = zatoshis % 100_000_000
+        if frac == 0 {
+            return "\(whole).0 ZCL"
+        }
+        let fracStr = String(format: "%08d", frac)
+        // Trim trailing zeros
+        let trimmed = fracStr.replacingOccurrences(of: "0+$", with: "", options: .regularExpression)
+        return "\(whole).\(trimmed) ZCL"
     }
 }

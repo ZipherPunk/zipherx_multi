@@ -663,11 +663,15 @@ impl PeerManager {
         }
 
         // If block listener inv notifications have pushed live_chain_tip beyond
-        // the stale peer_start_height median, use the higher value. This prevents
-        // header sync from short-circuiting when peers haven't been reconnected
-        // but ARE announcing new blocks via inv messages.
+        // the stale peer_start_height median, accept it only if within 10 blocks.
+        // This prevents a single malicious peer from inflating consensus height
+        // via fabricated inv messages while still allowing live tip advancement.
         let live_tip = self.live_chain_tip.load(Ordering::Relaxed);
-        let consensus_height = median_height.max(live_tip);
+        let consensus_height = if live_tip > median_height && live_tip <= median_height + 10 {
+            live_tip  // Accept live tip if within 10 blocks of median
+        } else {
+            median_height  // Strict median otherwise
+        };
 
         // Sybil detection: ban peers >500 blocks above consensus
         let to_ban: Vec<String> = heights
@@ -851,12 +855,20 @@ impl PeerManager {
         Ok(true)
     }
 
+    /// Check rate limit for a peer. Returns false if the peer should be disconnected.
+    /// MUST be called for every incoming P2P message.
+    ///
+    /// This is the public API for rate limiting. Delegates to `record_peer_message()`.
+    pub fn check_rate_limit(&mut self, peer_id: &str) -> bool {
+        self.record_peer_message(peer_id)
+    }
+
     /// RN-N4: Record a message from a peer and check rate limits.
     ///
     /// Returns `true` if the peer is within rate limits, `false` if the peer
     /// has exceeded MAX_MESSAGES_PER_MINUTE and should be disconnected.
     /// Automatically disconnects and bans flooding peers.
-    pub fn record_peer_message(&mut self, peer_id: &str) -> bool {
+    fn record_peer_message(&mut self, peer_id: &str) -> bool {
         let now = Instant::now();
         let entry = self
             .rate_limits

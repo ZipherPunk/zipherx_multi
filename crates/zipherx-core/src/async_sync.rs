@@ -4332,12 +4332,12 @@ async fn post_boost_full_block_scan(
                     .iter()
                     .map(|o| o.height as u64)
                     .min()
-                    .unwrap();
+                    .expect("chunk_delta_outputs confirmed non-empty");
                 let max_h = chunk_delta_outputs
                     .iter()
                     .map(|o| o.height as u64)
                     .max()
-                    .unwrap();
+                    .expect("chunk_delta_outputs confirmed non-empty");
                 delta_store
                     .append_outputs_no_dedup(&chunk_delta_outputs, min_h, max_h, None)
                     .map_err(|e| CoreError::Storage(e.to_string()))?;
@@ -4604,6 +4604,8 @@ async fn post_boost_full_block_scan(
             let mut dedup_skipped: usize = 0;
             let mut cmu_page_offset: usize = 0;
 
+            // INVARIANT: delta store may contain duplicates from delta_sync + block_scan.
+            // Deduplication via HashSet<(height, cmu)> is REQUIRED for correct position counting.
             // Track (height, cmu) pairs to deduplicate — delta_sync and block_scan
             // both append to the same delta store with no_dedup, so duplicates
             // are possible when they process overlapping height ranges.
@@ -5229,8 +5231,8 @@ async fn scan_blocks_for_pending_txs(
 
         // Persist to delta store
         if !chunk_delta_outputs.is_empty() {
-            let min_h = chunk_delta_outputs.iter().map(|o| o.height as u64).min().unwrap();
-            let max_h = chunk_delta_outputs.iter().map(|o| o.height as u64).max().unwrap();
+            let min_h = chunk_delta_outputs.iter().map(|o| o.height as u64).min().expect("chunk_delta_outputs confirmed non-empty");
+            let max_h = chunk_delta_outputs.iter().map(|o| o.height as u64).max().expect("chunk_delta_outputs confirmed non-empty");
             delta_store
                 .append_outputs_no_dedup(&chunk_delta_outputs, min_h, max_h, None)
                 .map_err(|e| CoreError::Storage(e.to_string()))?;

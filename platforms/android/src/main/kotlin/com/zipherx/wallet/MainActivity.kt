@@ -45,8 +45,10 @@ class MainActivity : FragmentActivity() {
                 walletViewModel.setActivity(this@MainActivity)
                 walletViewModel.initPrefs(this@MainActivity)
 
-                // Screenshot protection: enable FLAG_SECURE only when wallet is active
-                // (past setup/mnemonic display) so users can screenshot their mnemonic
+                // SECURITY NOTE: FLAG_SECURE is intentionally disabled during wallet setup
+                // to allow users to photograph their mnemonic phrase. This creates a brief
+                // window where screenshots are possible. Once setup completes, FLAG_SECURE
+                // is re-enabled to block all screen capture.
                 val isWalletActive by walletViewModel.isWalletActive.collectAsState()
                 val screenshotProtection by walletViewModel.screenshotProtection.collectAsState()
                 LaunchedEffect(isWalletActive, screenshotProtection) {

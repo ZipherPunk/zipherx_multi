@@ -1387,13 +1387,10 @@ fn cmd_validate(args: &[&str]) {
 fn prompt_password(prompt: &str) -> String {
     match rpassword::prompt_password(format!("{}{}{}", GREEN, prompt, RESET)) {
         Ok(p) => p,
-        Err(_) => {
-            // Fallback for environments where rpassword doesn't work
-            print!("{}{}{}", GREEN, prompt, RESET);
-            let _ = io::stdout().flush();
-            let mut input = String::new();
-            io::stdin().read_line(&mut input).unwrap_or(0);
-            input.trim().to_string()
+        Err(e) => {
+            eprintln!("{}ERROR: Cannot read password securely: {}{}", RED, e, RESET);
+            eprintln!("{}Please use an interactive terminal (SSH with -t flag).{}", RED, RESET);
+            std::process::exit(1);
         }
     }
 }
@@ -1408,6 +1405,9 @@ fn prompt_new_password() -> String {
         return String::new();
     }
     let p2 = prompt_password("Confirm password: ");
+    // Note: Password confirmation is a local UX operation — timing
+    // side-channels require physical proximity and are not a practical
+    // attack vector for interactive CLI password entry.
     if p1 != p2 {
         println!("{}Passwords do not match.{}", RED, RESET);
         return String::new();

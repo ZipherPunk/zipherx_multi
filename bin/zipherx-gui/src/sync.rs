@@ -250,7 +250,7 @@ fn wallet_thread_main(
         };
 
         match cmd {
-            Some(SyncCommand::StartSync { sk_bytes }) => {
+            Some(SyncCommand::StartSync { mut sk_bytes }) => {
                 // Set up event-driven mempool detector before first sync
                 // so block listeners started during sync already fire the callback.
                 if !mempool_detector_set {
@@ -274,13 +274,24 @@ fn wallet_thread_main(
                     handle_sync(&runtime, &wallet, &sk_bytes, &state);
                     refresh_balance_and_history(&runtime, &wallet, &state);
                 }
+
+                // GUI-C5: Zeroize the cloned key material after use
+                for b in sk_bytes.iter_mut() {
+                    unsafe { std::ptr::write_volatile(b, 0) };
+                }
+                std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
             }
-            Some(SyncCommand::Send { to_address, amount, fee, memo, sk_bytes }) => {
+            Some(SyncCommand::Send { to_address, amount, fee, memo, mut sk_bytes }) => {
                 handle_send(&runtime, &wallet, &to_address, amount, fee, memo.as_deref(), &sk_bytes, &state);
+                // GUI-C5: Zeroize the cloned key material after use
+                for b in sk_bytes.iter_mut() {
+                    unsafe { std::ptr::write_volatile(b, 0) };
+                }
+                std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
             }
             Some(SyncCommand::SetTorEnabled(enabled)) => {
-                // Tor toggle handled via peer manager
-                let _ = enabled; // TODO: wire to TorManager
+                // GUI-L1: Tor toggle not yet implemented
+                eprintln!("[ZipherX] Tor toggle requested (enabled={}), not yet implemented", enabled);
             }
             Some(SyncCommand::RepairDatabase) => {
                 handle_repair(&runtime, &wallet, &state);

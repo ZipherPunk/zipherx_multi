@@ -291,6 +291,38 @@ fn show_reauth(app: &mut ZipherXApp, ui: &mut egui::Ui) {
             );
             ui.add_space(10.0);
 
+            // GUI-H4: Rate limiting on re-authentication attempts
+            if let Some(lockout) = app.reauth_lockout_until {
+                let elapsed = lockout.elapsed().as_secs();
+                if elapsed < 60 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Too many failed attempts. Try again in {}s",
+                            60 - elapsed
+                        ))
+                        .font(theme::mono(11.0))
+                        .color(theme::RED),
+                    );
+                    ui.add_space(10.0);
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("[ CANCEL ]")
+                                .font(theme::mono(14.0))
+                                .color(theme::MUTED),
+                        ))
+                        .clicked()
+                    {
+                        app.reauth_password.zeroize();
+                        app.show_send_reauth = false;
+                        app.send_error = None;
+                    }
+                    return;
+                } else {
+                    app.reauth_lockout_until = None;
+                    app.reauth_failed_attempts = 0;
+                }
+            }
+
             let response = ui.add(
                 egui::TextEdit::singleline(&mut app.reauth_password)
                     .password(true)
@@ -325,9 +357,16 @@ fn show_reauth(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                         app.reauth_password.zeroize();
                         app.show_send_reauth = false;
                         app.send_error = None;
+                        // Reset rate limiter on success
+                        app.reauth_failed_attempts = 0;
+                        app.reauth_lockout_until = None;
                         execute_send(app);
                     } else {
                         app.send_error = Some("Wrong password".into());
+                        app.reauth_failed_attempts += 1;
+                        if app.reauth_failed_attempts >= 5 {
+                            app.reauth_lockout_until = Some(std::time::Instant::now());
+                        }
                     }
                 }
                 ui.add_space(10.0);
@@ -400,7 +439,9 @@ fn show_send_progress(app: &mut ZipherXApp, ui: &mut egui::Ui) {
 // Validation & execution
 // ---------------------------------------------------------------------------
 
-fn validate_send(app: &ZipherXApp) -> Result<(), String> {
+/// Validate send parameters and snapshot them into `app.validated_send` to
+/// prevent TOCTOU race between validation and execution (GUI-H2).
+fn validate_send(app: &mut ZipherXApp) -> Result<(), String> {
     if app.send_address.is_empty() {
         return Err("Address is required".into());
     }
@@ -418,9 +459,21 @@ fn validate_send(app: &ZipherXApp) -> Result<(), String> {
             fmt_zcl(amount + app.send_fee)
         ));
     }
+    // Rust strings are always valid UTF-8, so only byte length needs checking.
     if app.send_memo.as_bytes().len() > 512 {
         return Err("Memo exceeds 512 byte limit".into());
     }
+    // Snapshot validated parameters so execute_send uses the same values
+    app.validated_send = Some(crate::app::ValidatedSend {
+        address: app.send_address.clone(),
+        amount,
+        fee: app.send_fee,
+        memo: if app.send_memo.is_empty() {
+            None
+        } else {
+            Some(app.send_memo.clone())
+        },
+    });
     Ok(())
 }
 
@@ -433,10 +486,11 @@ fn execute_send(app: &mut ZipherXApp) {
         }
     };
 
-    let amount = match parse_zcl(&app.send_amount) {
-        Some(a) => a,
+    // Use the validated snapshot (GUI-H2: prevents TOCTOU race with text fields)
+    let validated = match app.validated_send.take() {
+        Some(v) => v,
         None => {
-            app.send_error = Some("Invalid amount".into());
+            app.send_error = Some("No validated send parameters".into());
             return;
         }
     };
@@ -444,18 +498,14 @@ fn execute_send(app: &mut ZipherXApp) {
     app.send_in_progress = true;
     app.send_timestamp = Some(std::time::Instant::now());
 
-    // Send command to wallet thread
+    // Send command to wallet thread using snapshotted parameters
     if let Some(ref state) = app.shared_state {
         if let Ok(mut s) = state.lock() {
             s.command = Some(SyncCommand::Send {
-                to_address: app.send_address.clone(),
-                amount,
-                fee: app.send_fee,
-                memo: if app.send_memo.is_empty() {
-                    None
-                } else {
-                    Some(app.send_memo.clone())
-                },
+                to_address: validated.address,
+                amount: validated.amount,
+                fee: validated.fee,
+                memo: validated.memo,
                 sk_bytes: sk,
             });
         }
