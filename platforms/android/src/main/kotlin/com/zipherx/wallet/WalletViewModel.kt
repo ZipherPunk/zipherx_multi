@@ -157,6 +157,10 @@ class WalletViewModel : ViewModel() {
     private val _screenshotProtection = MutableStateFlow(true)
     val screenshotProtection: StateFlow<Boolean> = _screenshotProtection.asStateFlow()
 
+    /** Boost download failure — set when all retry attempts exhausted. Pair of (reason, attempts). */
+    private val _boostFailed = MutableStateFlow<Pair<String, Int>?>(null)
+    val boostFailed: StateFlow<Pair<String, Int>?> = _boostFailed.asStateFlow()
+
     private var secureStorage: AndroidSecureStorage? = null
     private var appContext: Context? = null
 
@@ -640,6 +644,15 @@ class WalletViewModel : ViewModel() {
                     val callback = object : uniffi.zipherx.SyncProgressCallback {
                         override fun onProgress(phase: String, current: ULong, target: ULong) {
                             if (BuildConfig.DEBUG) Log.d(TAG, "Sync progress: phase=$phase current=$current target=$target")
+
+                            // Detect boost download failure (all retries exhausted)
+                            if (phase == "boost_failed") {
+                                if (BuildConfig.DEBUG) Log.w(TAG, "Boost download failed after $target attempts")
+                                _boostFailed.value = Pair("Boost download failed after $target attempts", target.toInt())
+                                markCurrentTaskFailed("boost_download", "Failed after $target attempts")
+                                return
+                            }
+
                             // Update peer count on every progress tick so status bar stays current
                             viewModelScope.launch(Dispatchers.IO) {
                                 try {
@@ -764,6 +777,29 @@ class WalletViewModel : ViewModel() {
             _isSyncing.value = false
             _syncPhase.value = "idle"
         }
+    }
+
+    /**
+     * User chose to continue with slow P2P header sync after boost failure.
+     */
+    fun onBoostFailedContinue() {
+        if (BuildConfig.DEBUG) Log.i(TAG, "Boost failed — user chose to continue with P2P sync")
+        _boostFailed.value = null
+        // Sync continues automatically on the Rust side (falls through to header_sync)
+    }
+
+    /**
+     * User chose to quit the app after boost failure.
+     */
+    fun onBoostFailedQuit() {
+        if (BuildConfig.DEBUG) Log.i(TAG, "Boost failed — user chose to quit")
+        _boostFailed.value = null
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try { uniffi.zipherx.stopSync() } catch (_: Exception) {}
+            }
+        }
+        // Activity will call finishAffinity() from the UI layer
     }
 
     // -----------------------------------------------------------------------

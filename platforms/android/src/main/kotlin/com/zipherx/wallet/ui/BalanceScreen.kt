@@ -225,6 +225,7 @@ private fun formatSyncPhase(phase: String): String {
         "block_scan" -> "Scanning blocks"
         "gap_fill" -> "Filling gaps"
         "witness_update" -> "Updating witnesses"
+        "boost_failed" -> "Boost download failed"
         "complete" -> "Sync complete"
         "failed" -> "Sync failed"
         else -> base.replaceFirstChar { it.uppercase() }

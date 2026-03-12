@@ -66,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import com.zipherx.wallet.R
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -175,11 +176,13 @@ fun WalletScreen(
     val pendingIncomingAmount by viewModel.pendingIncomingAmount.collectAsState()
     val incomingSettlementCelebration by viewModel.incomingSettlementCelebration.collectAsState()
     val incomingSettlementTxid by viewModel.incomingSettlementTxid.collectAsState()
+    val boostFailed by viewModel.boostFailed.collectAsState()
 
     // KA-N3: These remember{} states survive configuration changes (rotation) but NOT
     // process death. Critical wallet state lives in WalletViewModel (ViewModel-scoped) which
     // survives config changes. For full process-death resilience, consider SavedStateHandle
     // for transient UI state like showConfirmationToast in the future.
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var showMempoolToast by remember { mutableStateOf(false) }
     var showConfirmationToast by remember { mutableStateOf(false) }
@@ -315,6 +318,20 @@ fun WalletScreen(
                         overallProgress = overallProgress,
                         syncStartTimeMs = syncStartTimeMs,
                         isSyncing = isSyncing,
+                    )
+                }
+
+                // Boost download failure dialog
+                if (boostFailed != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    BoostFailedCard(
+                        reason = boostFailed!!.first,
+                        attempts = boostFailed!!.second,
+                        onContinue = { viewModel.onBoostFailedContinue() },
+                        onQuit = {
+                            viewModel.onBoostFailedQuit()
+                            (context as? android.app.Activity)?.finishAffinity()
+                        },
                     )
                 }
 
@@ -1136,6 +1153,104 @@ private fun CelebrationCard(
                 fontSize = 12.sp,
                 letterSpacing = 2.sp,
             )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Boost Failed Card
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun BoostFailedCard(
+    reason: String,
+    attempts: Int,
+    onContinue: () -> Unit,
+    onQuit: () -> Unit,
+) {
+    val pulse = rememberInfiniteTransition(label = "boost_fail_pulse")
+    val borderAlpha by pulse.animateFloat(
+        initialValue = 0.5f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ), label = "boost_fail_border",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(2.dp, ZColors.error.copy(alpha = borderAlpha), RoundedCornerShape(4.dp))
+            .background(ZColors.error.copy(alpha = 0.08f), RoundedCornerShape(4.dp))
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "[!] BOOST DOWNLOAD FAILED",
+            fontSize = 14.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = ZColors.error,
+            letterSpacing = 2.sp,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            "Failed after $attempts attempts.\n$reason",
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            color = ZColors.error.copy(alpha = 0.9f),
+            textAlign = TextAlign.Center,
+            lineHeight = 18.sp,
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            "You can continue with slow P2P header sync\nor quit and try again later.",
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            color = ZColors.textDim,
+            textAlign = TextAlign.Center,
+            lineHeight = 16.sp,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Button(
+                onClick = onContinue,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(2.dp),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = ZColors.primary,
+                    contentColor = Color.Black,
+                ),
+            ) {
+                Text(
+                    "CONTINUE",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.sp,
+                )
+            }
+            Button(
+                onClick = onQuit,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(2.dp),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = ZColors.error,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(
+                    "QUIT",
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    letterSpacing = 1.sp,
+                )
+            }
         }
     }
 }

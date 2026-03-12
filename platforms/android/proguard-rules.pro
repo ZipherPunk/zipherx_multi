@@ -23,3 +23,12 @@
 
 # Keep Compose runtime
 -keep class androidx.compose.** { *; }
+
+# Google Tink (used by androidx.security:security-crypto)
+-keep class com.google.crypto.tink.** { *; }
+-dontwarn com.google.crypto.tink.**
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
+-dontwarn javax.annotation.concurrent.**
+-dontwarn com.google.api.client.**
+-dontwarn org.joda.time.**
