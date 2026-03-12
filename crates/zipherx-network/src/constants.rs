@@ -82,45 +82,43 @@ pub const MSG_TX: u32 = 1;
 pub const MSG_BLOCK: u32 = 2;
 pub const MSG_FILTERED_BLOCK: u32 = 3;
 
-/// RN-5: Known checkpoints — (height, block_hash_hex_le).
+/// RN-5: Known checkpoints — (height, block_hash_hex).
 /// Headers at these heights MUST match the expected hash.
-/// Block hashes are in internal (little-endian) byte order.
-/// The genesis hash and subsequent checkpoint hashes anchor the chain
-/// and prevent an attacker from feeding an entirely fabricated chain.
 ///
-/// All checkpoint hashes are populated from a trusted Zclassic full node
-/// via `zclassic-cli getblockhash <height>`. Headers at these heights
-/// MUST match the expected hash, preventing fabricated chain attacks.
+/// Block hashes are in INTERNAL byte order (raw double-SHA256 output),
+/// matching what `compute_block_hash()` returns. This is the REVERSE of
+/// the display order shown by `getblockhash` RPC.
+///
+/// Note: genesis (height 0) is NOT included because `getheaders` with a
+/// null locator returns headers starting from block 1, not genesis.
+/// The genesis block is implicitly trusted by all nodes.
+///
+/// All hashes verified against a trusted Zclassic full node.
 pub const CHECKPOINTS: &[(u64, &str)] = &[
-    // Genesis block (height 0)
-    (
-        0,
-        "0007104ccda289427919efc39dc9e4d499804b7bebc22df55f8b834301571b40",
-    ),
     // Height 100,000
     (
         100_000,
-        "000000016845a9f945079aa52680def9eafd5ea39c86dfdb5ef5630d18e3e74f",
+        "4fe7e3180d63f55edbdf869ca35efdeaf9de8026a59a0745f9a9456801000000",
     ),
     // Height 250,000
     (
         250_000,
-        "000000001e58184b4db769088543b3493c9006b6489715701d9a8100650b0b61",
+        "610b0b6500819a1d70159748b606903c49b343850869b74d4b18581e00000000",
     ),
     // Sapling activation (height 476,969)
     (
         476_969,
-        "0000000048245efbc142c0f0f0f64e8c9dcc7b2938ba544667c803568a2b53d3",
+        "d3532b8a5603c8674654ba38297bcc9d8c4ef6f0f0c042c1fb5e244800000000",
     ),
     // Height 600,000
     (
         600_000,
-        "0000005d7286ac9c6f6776685d7132890215924c50c3f17bfb8812480832a6d9",
+        "d9a63208481288fb7bf1c3504c9215028932715d6876676f9cac86725d000000",
     ),
     // Buttercup activation (height 707,000)
     (
         707_000,
-        "0000f4ccb39f2ccd3fdd3417db384620adac73661e33b66bafcf1f0e026b3dab",
+        "ab3d6b020e1fcfaf6bb6331e6673acad204638db1734dd3fcd2c9fb3ccf40000",
     ),
 ];
 
