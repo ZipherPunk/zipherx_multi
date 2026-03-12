@@ -5,7 +5,7 @@
 //! when integrating with async code.
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -17,7 +17,7 @@ use crate::types::*;
 /// This pattern is used instead of unwrap() to prevent app crashes when
 /// a thread panics while holding the database lock. The recovered state
 /// may be inconsistent if the panic occurred mid-transaction.
-fn recover_lock<T>(result: Result<std::sync::MutexGuard<'_, T>, std::sync::PoisonError<std::sync::MutexGuard<'_, T>>>) -> std::sync::MutexGuard<'_, T> {
+fn recover_lock(result: std::sync::LockResult<MutexGuard<'_, rusqlite::Connection>>) -> MutexGuard<'_, rusqlite::Connection> {
     match result {
         Ok(guard) => guard,
         Err(e) => {

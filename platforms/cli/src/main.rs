@@ -941,7 +941,7 @@ fn cmd_send(args: &[&str], state: &WalletState) {
             }
             SendPhase::Broadcasting => "Broadcasting to network...".to_string(),
             SendPhase::PeerResponse { accepted, rejected, total } => {
-                if *rejected > 0 {
+                if rejected > 0 {
                     format!("Peers: {}/{} accepted, {} REJECTED", accepted, total, rejected)
                 } else {
                     format!("Peers: {}/{} accepted", accepted, total)

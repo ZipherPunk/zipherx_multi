@@ -147,8 +147,7 @@ struct RateLimitEntry {
     window_start: Instant,
 }
 
-/// RN-N4: Maximum messages allowed per peer per minute.
-const MAX_MESSAGES_PER_MINUTE: u32 = 1000;
+// MAX_MESSAGES_PER_MINUTE is defined in constants.rs (shared with peer.rs)
 
 /// Known peer address info.
 #[derive(Debug, Clone)]

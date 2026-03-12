@@ -67,6 +67,10 @@ pub const ACTIVITY_GRACE_PERIOD_SECS: u64 = 90;
 /// Default fee in zatoshis.
 pub const DEFAULT_FEE: u64 = 10_000;
 
+/// RN-N4: Maximum messages allowed per peer per minute.
+/// Peers exceeding this rate are disconnected to prevent flooding.
+pub const MAX_MESSAGES_PER_MINUTE: u32 = 1000;
+
 /// Maximum known addresses to store.
 pub const MAX_KNOWN_ADDRESSES: usize = 1000;
 
@@ -84,28 +88,40 @@ pub const MSG_FILTERED_BLOCK: u32 = 3;
 /// The genesis hash and subsequent checkpoint hashes anchor the chain
 /// and prevent an attacker from feeding an entirely fabricated chain.
 ///
-/// SECURITY WARNING: 5 of 6 checkpoints have empty hashes, making them
-/// ineffective. An attacker who controls all connected peers could feed
-/// a fabricated chain that only needs to match the genesis hash. Until
-/// real hashes are populated, header sync relies primarily on Equihash
-/// PoW verification and nBits range checks for chain validity.
-///
-/// TODO: Replace placeholder hashes with verified mainnet block hashes.
-/// Run `zclassic-cli getblockhash <height>` to obtain the real hashes.
+/// All checkpoint hashes are populated from a trusted Zclassic full node
+/// via `zclassic-cli getblockhash <height>`. Headers at these heights
+/// MUST match the expected hash, preventing fabricated chain attacks.
 pub const CHECKPOINTS: &[(u64, &str)] = &[
-    // Genesis block (height 0) — Zclassic genesis
+    // Genesis block (height 0)
     (
         0,
         "0007104ccda289427919efc39dc9e4d499804b7bebc22df55f8b834301571b40",
     ),
-    // SECURITY: Populate these with verified mainnet block hashes.
-    // Run: zclassic-cli getblockhash <height> on a trusted full node.
-    // Empty checkpoints provide NO chain validation beyond genesis.
-    (100_000, ""),  // TODO(CRITICAL): populate from trusted source
-    (250_000, ""),  // TODO(CRITICAL): populate from trusted source
-    (476_969, ""),  // TODO(CRITICAL): Sapling activation — populate
-    (600_000, ""),  // TODO(CRITICAL): populate from trusted source
-    (707_000, ""),  // TODO(CRITICAL): Buttercup activation — populate
+    // Height 100,000
+    (
+        100_000,
+        "000000016845a9f945079aa52680def9eafd5ea39c86dfdb5ef5630d18e3e74f",
+    ),
+    // Height 250,000
+    (
+        250_000,
+        "000000001e58184b4db769088543b3493c9006b6489715701d9a8100650b0b61",
+    ),
+    // Sapling activation (height 476,969)
+    (
+        476_969,
+        "0000000048245efbc142c0f0f0f64e8c9dcc7b2938ba544667c803568a2b53d3",
+    ),
+    // Height 600,000
+    (
+        600_000,
+        "0000005d7286ac9c6f6776685d7132890215924c50c3f17bfb8812480832a6d9",
+    ),
+    // Buttercup activation (height 707,000)
+    (
+        707_000,
+        "0000f4ccb39f2ccd3fdd3417db384620adac73661e33b66bafcf1f0e026b3dab",
+    ),
 ];
 
 /// Returns true if checkpoint validation is incomplete (empty hashes present).

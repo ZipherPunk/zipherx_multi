@@ -678,6 +678,11 @@ async fn block_listener_loop(
 ) {
     dispatcher.lock().unwrap().set_active(true);
 
+    // Per-peer rate limiting (NET-C2): track messages per minute.
+    // If a peer exceeds MAX_MESSAGES_PER_MINUTE, disconnect immediately.
+    let mut rl_count: u32 = 0;
+    let mut rl_window = Instant::now();
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
@@ -686,6 +691,18 @@ async fn block_listener_loop(
             result = receive_message_timeout(&mut reader, LISTENER_READ_TIMEOUT) => {
                 match result {
                     Ok((cmd, payload)) => {
+                        // Rate limit check: reset window every 60s, disconnect if exceeded
+                        let now = Instant::now();
+                        if now.duration_since(rl_window) >= Duration::from_secs(60) {
+                            rl_count = 0;
+                            rl_window = now;
+                        }
+                        rl_count += 1;
+                        if rl_count > MAX_MESSAGES_PER_MINUTE {
+                            eprintln!("[ZipherX] Peer {} exceeded rate limit ({} msgs/min), disconnecting", peer_id, rl_count);
+                            break;
+                        }
+
                         let dispatched = dispatcher.lock().unwrap().dispatch(&cmd, payload.clone());
                         if !dispatched {
                             handle_background_message(&cmd, &payload, &writer, &peer_id, &on_mempool_tx_data, &on_new_block, &on_addr).await;
