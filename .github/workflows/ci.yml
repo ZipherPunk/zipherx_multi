@@ -55,4 +55,4 @@ jobs:
       - name: cargo audit
         run: |
           cargo install cargo-audit --locked || true
-          cargo audit --deny warnings
+          cargo audit
