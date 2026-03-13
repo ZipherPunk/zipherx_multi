@@ -1739,9 +1739,16 @@ mod tests {
         assert!(validate_address(addr));
     }
 
+    /// Generate a valid bech32-encoded "zs" address for testing.
+    fn test_zs_address() -> String {
+        use bech32::ToBase32;
+        let dummy_data = vec![0xAAu8; 43]; // 43 bytes = Sapling payment address
+        bech32::encode("zs", dummy_data.to_base32(), bech32::Variant::Bech32).unwrap()
+    }
+
     #[test]
     fn test_validate_send_request_params_valid() {
-        let addr = "zs".to_string() + &"1".repeat(76);
+        let addr = test_zs_address();
         let result = validate_send_request_params(addr, 50_000, 10_000, None);
         assert!(result.is_ok());
     }
