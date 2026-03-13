@@ -91,50 +91,70 @@ fun BalanceCard(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Balance amount with glow
-        Text(
-            text = formatZcl(balance?.total ?: 0L),
-            style = MaterialTheme.typography.headlineLarge.copy(
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
-                fontSize = 24.sp,
-            ),
-            color = ZColors.primary,
-            modifier = Modifier
-                .testTag("balance_text")
-                .align(Alignment.CenterHorizontally),
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Spendable
-        Row(
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        ) {
-            Text(
-                text = "Spendable: ",
-                style = MaterialTheme.typography.labelMedium,
-                color = ZColors.primaryDim,
-            )
-            Text(
-                text = formatZcl(balance?.spendable ?: 0L),
-                style = MaterialTheme.typography.labelMedium,
-                color = ZColors.primaryDark,
-            )
-        }
-
-        // Pending confirmation notice
         if (isPendingConfirmation) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "AWAITING CONFIRMATION...",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    letterSpacing = 1.sp,
+            // TX broadcast but change note not yet mined — hide balance
+            // to avoid showing misleading intermediate value.
+            val blink = rememberInfiniteTransition(label = "pending_blink")
+            val alpha by blink.animateFloat(
+                initialValue = 1f,
+                targetValue = 0.4f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(800),
+                    repeatMode = RepeatMode.Reverse,
                 ),
-                color = ZColors.warning,
+                label = "pending_alpha",
+            )
+            Text(
+                text = "AWAITING CONFIRMATION",
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp,
+                ),
+                color = ZColors.warning.copy(alpha = alpha),
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "TX broadcast — waiting for block...",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                ),
+                color = ZColors.warning.copy(alpha = 0.7f),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+        } else {
+            // Balance amount with glow
+            Text(
+                text = formatZcl(balance?.total ?: 0L),
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 24.sp,
+                ),
+                color = ZColors.primary,
+                modifier = Modifier
+                    .testTag("balance_text")
+                    .align(Alignment.CenterHorizontally),
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Spendable
+            Row(
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            ) {
+                Text(
+                    text = "Spendable: ",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ZColors.primaryDim,
+                )
+                Text(
+                    text = formatZcl(balance?.spendable ?: 0L),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = ZColors.primaryDark,
+                )
+            }
         }
 
         // Note count

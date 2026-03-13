@@ -129,32 +129,47 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 .font(theme::mono(11.0))
                 .color(theme::MUTED),
         );
-        ui.label(
-            egui::RichText::new(format!("{} ZCL", fmt_zcl(app.balance.spendable)))
-                .font(theme::mono(28.0))
-                .color(theme::GREEN),
-        );
-        if app.balance.note_count > 0 {
-            if app.balance.total != app.balance.spendable {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "({} ZCL total, {}/{} spendable notes)",
-                        fmt_zcl(app.balance.total),
-                        app.balance.spendable_note_count,
-                        app.balance.note_count,
-                    ))
+        if app.pending_confirmation_txid.is_some() {
+            // Hide balance while change note is unconfirmed to avoid
+            // showing misleading intermediate values.
+            ui.label(
+                egui::RichText::new("AWAITING CONFIRMATION")
+                    .font(theme::mono(22.0))
+                    .color(theme::YELLOW),
+            );
+            ui.label(
+                egui::RichText::new("TX broadcast — waiting for block...")
                     .font(theme::mono(10.0))
-                    .color(theme::MUTED),
-                );
-            } else {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{}/{} spendable notes",
-                        app.balance.spendable_note_count, app.balance.note_count,
-                    ))
-                    .font(theme::mono(10.0))
-                    .color(theme::MUTED),
-                );
+                    .color(egui::Color32::from_rgba_unmultiplied(255, 215, 0, 180)),
+            );
+        } else {
+            ui.label(
+                egui::RichText::new(format!("{} ZCL", fmt_zcl(app.balance.spendable)))
+                    .font(theme::mono(28.0))
+                    .color(theme::GREEN),
+            );
+            if app.balance.note_count > 0 {
+                if app.balance.total != app.balance.spendable {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "({} ZCL total, {}/{} spendable notes)",
+                            fmt_zcl(app.balance.total),
+                            app.balance.spendable_note_count,
+                            app.balance.note_count,
+                        ))
+                        .font(theme::mono(10.0))
+                        .color(theme::MUTED),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}/{} spendable notes",
+                            app.balance.spendable_note_count, app.balance.note_count,
+                        ))
+                        .font(theme::mono(10.0))
+                        .color(theme::MUTED),
+                    );
+                }
             }
         }
 

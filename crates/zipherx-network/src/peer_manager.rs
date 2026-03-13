@@ -1275,6 +1275,6 @@ mod tests {
         let config = PeerManagerConfig::default();
         assert_eq!(config.min_peers, 8);
         assert_eq!(config.max_peers, 30);
-        assert_eq!(config.consensus_threshold, 5);
+        assert_eq!(config.consensus_threshold, 3);
     }
 }
