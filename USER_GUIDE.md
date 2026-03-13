@@ -9,6 +9,7 @@ Welcome to ZipherX Multi. This guide will get you from zero to private in minute
 
 ## Table of Contents
 
+- [Platforms](#platforms)
 - [First Launch](#first-launch)
 - [Create a New Wallet](#create-a-new-wallet)
 - [Restore a Wallet](#restore-a-wallet)
@@ -16,6 +17,7 @@ Welcome to ZipherX Multi. This guide will get you from zero to private in minute
 - [Receiving ZCL](#receiving-zcl)
 - [Sending ZCL](#sending-zcl)
 - [Tor -- Hide Your IP](#tor----hide-your-ip)
+- [Full Node Mode](#full-node-mode)
 - [Settings & Security](#settings--security)
 - [Backup -- Read This or Cry Later](#backup----read-this-or-cry-later)
 - [Peer Management](#peer-management)
@@ -24,6 +26,23 @@ Welcome to ZipherX Multi. This guide will get you from zero to private in minute
 - [CLI Mode](#cli-mode)
 - [Troubleshooting](#troubleshooting)
 - [Glossary](#glossary)
+
+---
+
+## Platforms
+
+ZipherX Multi runs on everything:
+
+| Platform | App | How to run |
+|----------|-----|------------|
+| **macOS / Linux / Windows** | egui Desktop (native) | `cargo build --release -p zipherx-gui` then run `target/release/zipherx-gui`, or download from [Releases](https://github.com/ZipherPunk/zipherx_multi/releases) |
+| **Android** | Jetpack Compose | Install APK from [Releases](https://github.com/ZipherPunk/zipherx_multi/releases) or build with `./scripts/build-android.sh` |
+| **iOS / macOS** | SwiftUI | Build with Xcode: `open platforms/apple/ZipherXApp.xcodeproj` |
+| **Terminal** | CLI | `cargo run -p zipherx-cli` |
+
+The **egui Desktop app** is the recommended desktop experience. It's a single native binary -- no JVM, no Electron, no runtime dependencies. It calls the Rust core directly (no FFI bridge), making it the fastest and most lightweight option.
+
+All platforms share the same Rust core and provide identical privacy guarantees.
 
 ---
 
@@ -80,6 +99,14 @@ ZipherX Multi syncs directly with the Zclassic peer-to-peer network. No central 
 
 The sync phase is shown in the status bar. You can also see the current sync phase in **Settings > About**.
 
+### Autonomous background sync
+
+ZipherX syncs automatically in the background:
+- When new blocks are announced by the network, sync starts immediately
+- Periodic sync every 90 seconds to catch anything missed
+- If the initial sync fails (e.g., no internet), retries every 30 seconds until connected
+- **On desktop (egui):** Background sync continues even while the screen is locked -- your wallet stays up to date without manual intervention
+
 ### Auto-sync after sending
 
 After you send a transaction, ZipherX Multi automatically syncs every 30 seconds (up to 3 minutes) to detect confirmation. You'll see a banner showing the pending transaction status.
@@ -131,6 +158,37 @@ By default, ZipherX Multi connects directly to Zclassic peers. Your IP address i
 - **CONNECTED** -- You're anonymous (green)
 
 **Note:** Tor is slower than direct connections. Sync will take longer. That's the price of network-level privacy. Worth it.
+
+---
+
+## Full Node Mode
+
+*(egui Desktop only)*
+
+For maximum sovereignty, you can run your own Zclassic full node and have ZipherX verify blocks locally instead of trusting peers.
+
+### Setup
+
+1. Install `zclassicd` (the Zclassic daemon)
+2. Start it and let it sync the full blockchain
+3. In ZipherX, go to the **Node** tab
+4. Switch from **P2P Light Mode** to **Full Node Mode**
+5. ZipherX will detect and connect to your local daemon via JSON-RPC
+
+### What you get
+
+- **Block validation**: Your node validates every block -- you trust math, not peers
+- **Blockchain info**: See current height, difficulty, network hashrate, mempool size
+- **Network info**: Monitor connections, protocol version, relay status
+- **Daemon controls**: Start/stop your node from within the wallet
+
+### Configuration
+
+ZipherX reads your `zclassicd` credentials from:
+- macOS: `~/Library/Application Support/Zclassic/zclassic.conf`
+- Linux: `~/.zclassic/zclassic.conf`
+
+The conf file should contain `rpcuser` and `rpcpassword`. ZipherX connects to `localhost:8023` (Zclassic mainnet RPC port).
 
 ---
 

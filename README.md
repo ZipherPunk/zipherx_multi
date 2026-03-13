@@ -50,6 +50,10 @@ ZipherX Multi exists because **privacy is the default, not the option.**
 | **Hardware-backed encryption** | Keys stored in Secure Enclave (Apple), StrongBox Keystore (Android), or encrypted file (Desktop). |
 | **Screenshot protection** | Optional screen capture blocking on mobile. |
 | **Security audit** | Built-in audit report showing your wallet's security posture. |
+| **Full Node mode** | Optional local `zclassicd` integration — validate blocks yourself, trust no one. |
+| **Native desktop** | egui-based native binary. No JVM, no Electron. One binary, runs everywhere. |
+| **Auto-sync** | Autonomous background sync detects new blocks even while screen is locked. |
+| **Network recovery** | Automatic reconnection and retry when network connectivity drops. |
 
 ---
 
@@ -64,10 +68,13 @@ cd zipherx_multi
 
 ### 2. Build for your platform
 
-**Desktop (macOS / Windows / Linux):**
+**Desktop -- Native egui (macOS / Windows / Linux):**
 ```bash
-./scripts/build-desktop.sh run
+cargo build --release -p zipherx-gui
+# Binary: target/release/zipherx-gui
 ```
+
+No JVM. No Electron. No runtime dependencies. One native binary.
 
 **Android:**
 ```bash
@@ -87,9 +94,9 @@ open platforms/apple/ZipherXApp.xcodeproj   # Cmd+R
 cargo run -p zipherx-cli
 ```
 
-**Everything at once:**
+**All platforms at once:**
 ```bash
-./scripts/build-all-ui.sh
+./scripts/distribute.sh
 ```
 
 ### 3. Use it
@@ -107,27 +114,38 @@ See the **[User Guide](USER_GUIDE.md)** for the full walkthrough.
                     |    ZipherX Multi |
                     +--------+---------+
                              |
-            +----------------+----------------+
-            |                |                |
-     +------+------+  +-----+------+  +------+------+
-     |   SwiftUI   |  |  Compose   |  |     CLI     |
-     | iOS / macOS |  | Desktop /  |  |  Terminal   |
-     |             |  |  Android   |  |             |
-     +------+------+  +-----+------+  +------+------+
-            |                |                |
-            +--------+-------+--------+-------+
-                     |       UniFFI          |
-            +--------+----------------------+--------+
-            |              Rust Core                  |
-            |                                         |
-            |  zipherx-core     Sync, send, scan      |
-            |  zipherx-crypto   Sapling, trees, proofs|
-            |  zipherx-network  P2P, headers, blocks  |
-            |  zipherx-storage  Encrypted SQLite      |
-            |  zipherx-tor      Tor client            |
-            |  zipherx-ffi      FFI bridge            |
-            +-----------------------------------------+
+       +----------+----------+----------+----------+
+       |          |          |          |           |
+  +----+----+ +---+----+ +--+---+ +----+----+ +---+---+
+  | SwiftUI | |  Jetpack| | egui | |  CLI   | | Full  |
+  | iOS /   | | Compose | |Desktop| |Terminal| | Node  |
+  | macOS   | | Android | |Native | |        | |       |
+  +----+----+ +---+----+ +--+---+ +----+----+ +---+---+
+       |          |          |          |           |
+       +-----+----+    +----+----+-----+           |
+             |         |              |             |
+        +----+----+    |         +----+----+        |
+        | UniFFI  |    |         | Direct  |        |
+        | Bridge  |    |         | Rust    |        |
+        +----+----+    |         +----+----+        |
+             |         |              |             |
+       +-----+---------+--------------+-------------+
+       |                Rust Core                    |
+       |                                             |
+       |  zipherx-core     Sync, send, scan          |
+       |  zipherx-crypto   Sapling, trees, proofs    |
+       |  zipherx-network  P2P, headers, blocks      |
+       |  zipherx-storage  Encrypted SQLite           |
+       |  zipherx-tor      Tor client                 |
+       |  zipherx-ffi      FFI bridge (mobile/CLI)    |
+       +---------------------------------------------+
 ```
+
+**egui Desktop:** Native binary calling Rust core directly (no FFI bridge, no JVM). Single binary, fastest possible.
+
+**SwiftUI / Jetpack Compose:** Native mobile UIs via UniFFI bridge.
+
+**Full Node:** Optional integration with a local `zclassicd` daemon for maximum sovereignty.
 
 **Why Rust?** Because memory safety isn't optional when you're handling private keys. Because we wanted one codebase that runs everywhere without garbage collection pauses. Because cypherpunks write Rust.
 
@@ -138,7 +156,7 @@ See the **[User Guide](USER_GUIDE.md)** for the full walkthrough.
 | Platform | Requirements |
 |----------|-------------|
 | **All** | [Rust](https://rustup.rs/) (stable) |
-| **Desktop** | JDK 17+, Gradle |
+| **egui Desktop** | Nothing else. Just Rust. That's the point. |
 | **Android** | Android SDK + NDK, `cargo install cargo-ndk` |
 | **iOS/macOS** | Xcode 15+, `xcodegen` |
 | **Windows** (cross-compile) | `cargo install cargo-xwin`, `brew install mingw-w64` |
@@ -182,15 +200,18 @@ ZipherX Multi takes security seriously:
 ./scripts/distribute.sh
 
 # Output: dist/zipherx-VERSION/
-#   ZipherX-VERSION-macos.dmg
-#   ZipherX-VERSION-release.apk
-#   ZipherX-VERSION-release.aab
-#   ZipherX-VERSION-linux.deb
-#   zipherx-cli-macos-arm64
-#   zipherx-cli-linux-x86_64
-#   zipherx-cli-windows-x86_64.exe
+#   zipherx-gui-macos-arm64          (egui native desktop — macOS)
+#   zipherx-gui-linux-x86_64         (egui native desktop — Linux)
+#   zipherx-gui-windows-x86_64.exe   (egui native desktop — Windows)
+#   ZipherX-VERSION-release.apk      (Android)
+#   ZipherX-VERSION-release.aab      (Android App Bundle)
+#   zipherx-cli-macos-arm64          (CLI — macOS)
+#   zipherx-cli-linux-x86_64         (CLI — Linux)
+#   zipherx-cli-windows-x86_64.exe   (CLI — Windows)
 #   SHA256SUMS.txt
 ```
+
+Pre-built binaries are also available on the [Releases](https://github.com/ZipherPunk/zipherx_multi/releases) page.
 
 ---
 

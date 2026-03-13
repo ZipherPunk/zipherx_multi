@@ -84,6 +84,7 @@ TOTAL_STEPS=0
 ERRORS=()
 
 # Count steps
+TOTAL_STEPS=$((TOTAL_STEPS + 1))  # egui native desktop (always)
 [ "$SKIP_TESTS" = false ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
 TOTAL_STEPS=$((TOTAL_STEPS + 1))  # macOS desktop (always)
 [ "$SKIP_IOS" = false ] && TOTAL_STEPS=$((TOTAL_STEPS + 1))
@@ -148,6 +149,48 @@ check_no_sensitive_files() {
     fi
     return 0
 }
+
+# ══════════════════════════════════════════════════════════════
+#  STEP: Build egui Desktop (native binary — macOS/Linux/Windows)
+# ══════════════════════════════════════════════════════════════
+
+STEP=$((STEP + 1))
+echo "── [${STEP}/${TOTAL_STEPS}] Building egui Desktop (native) ──"
+echo ""
+
+# macOS (native)
+if cargo build --release -p zipherx-gui > "${LOG_DIR}/egui-macos.log" 2>&1; then
+    GUI_BIN="target/release/zipherx-gui"
+    if [ -f "${GUI_BIN}" ]; then
+        case "$(uname -s)" in
+            Darwin) GUI_SUFFIX="macos-arm64" ;;
+            Linux)  GUI_SUFFIX="linux-x86_64" ;;
+            *)      GUI_SUFFIX="$(uname -s | tr '[:upper:]' '[:lower:]')" ;;
+        esac
+        cp "${GUI_BIN}" "${DIST_DIR}/zipherx-gui-${GUI_SUFFIX}"
+        strip "${DIST_DIR}/zipherx-gui-${GUI_SUFFIX}" 2>/dev/null || true
+        echo "  [OK] egui: zipherx-gui-${GUI_SUFFIX} ($(du -h "${GUI_BIN}" | cut -f1))"
+    fi
+else
+    echo "  [!!] egui build failed — see ${LOG_DIR}/egui-macos.log"
+    ERRORS+=("egui Desktop")
+fi
+
+# Windows cross-compile (if cargo-xwin available)
+if [ "$SKIP_WINDOWS" = false ] && command -v cargo-xwin &>/dev/null; then
+    echo "  Cross-compiling egui for Windows..."
+    if cargo xwin build --release -p zipherx-gui --target x86_64-pc-windows-msvc > "${LOG_DIR}/egui-windows.log" 2>&1; then
+        WIN_GUI="target/x86_64-pc-windows-msvc/release/zipherx-gui.exe"
+        if [ -f "${WIN_GUI}" ]; then
+            cp "${WIN_GUI}" "${DIST_DIR}/zipherx-gui-windows-x86_64.exe"
+            echo "  [OK] egui: zipherx-gui-windows-x86_64.exe ($(du -h "${WIN_GUI}" | cut -f1))"
+        fi
+    else
+        echo "  [--] egui Windows cross-compile failed — see ${LOG_DIR}/egui-windows.log"
+    fi
+fi
+
+echo ""
 
 # ══════════════════════════════════════════════════════════════
 #  STEP: Cargo Tests
