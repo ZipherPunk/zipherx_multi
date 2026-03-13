@@ -127,7 +127,11 @@ fn show_send_form(app: &mut ZipherXApp, ui: &mut egui::Ui) {
             .desired_rows(2),
     );
     let memo_bytes = app.send_memo.as_bytes().len();
-    let memo_color = if memo_bytes > 512 { theme::RED } else { theme::MUTED };
+    let memo_color = if memo_bytes > 512 {
+        theme::RED
+    } else {
+        theme::MUTED
+    };
     ui.label(
         egui::RichText::new(format!("{}/512 bytes", memo_bytes))
             .font(theme::mono(9.0))
@@ -404,18 +408,12 @@ fn show_send_progress(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                     .color(theme::GREEN),
             );
             if app.send_phase_total > 0 {
-                let progress =
-                    app.send_phase_current as f32 / app.send_phase_total as f32;
+                let progress = app.send_phase_current as f32 / app.send_phase_total as f32;
                 let bar_width = (ui.available_width() - 40.0).max(100.0);
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::Vec2::new(bar_width, 10.0),
-                    egui::Sense::hover(),
-                );
-                ui.painter().rect_filled(
-                    rect,
-                    2.0,
-                    egui::Color32::from_rgb(30, 30, 30),
-                );
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::Vec2::new(bar_width, 10.0), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
                 let filled = egui::Rect::from_min_size(
                     rect.min,
                     egui::Vec2::new(rect.width() * progress, rect.height()),

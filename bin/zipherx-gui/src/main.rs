@@ -123,9 +123,7 @@ impl eframe::App for ZipherXApp {
         }
 
         // -- Poll full node daemon (every 5s) --
-        if self.fullnode_enabled
-            && self.node_poll_interval.elapsed().as_secs() >= 5
-        {
+        if self.fullnode_enabled && self.node_poll_interval.elapsed().as_secs() >= 5 {
             views::node::poll_node_info(self);
             self.node_poll_interval = std::time::Instant::now();
         }
@@ -258,14 +256,12 @@ fn show_ready(app: &mut ZipherXApp, ctx: &egui::Context) {
     });
 
     // -- Central content --
-    egui::CentralPanel::default().show(ctx, |ui| {
-        match app.tab {
-            Tab::Wallet => views::wallet::show(app, ui, ctx),
-            Tab::Send => views::send::show(app, ui, ctx),
-            Tab::History => views::history::show(app, ui, ctx),
-            Tab::Node => views::node::show(app, ui, ctx),
-            Tab::Settings => views::settings::show(app, ui, ctx),
-        }
+    egui::CentralPanel::default().show(ctx, |ui| match app.tab {
+        Tab::Wallet => views::wallet::show(app, ui, ctx),
+        Tab::Send => views::send::show(app, ui, ctx),
+        Tab::History => views::history::show(app, ui, ctx),
+        Tab::Node => views::node::show(app, ui, ctx),
+        Tab::Settings => views::settings::show(app, ui, ctx),
     });
 
     // -- Particle overlay --
@@ -387,13 +383,9 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
                         .count();
 
                     // Clearing celebration
-                    let elapsed = app
-                        .send_timestamp
-                        .map(|t| t.elapsed().as_secs());
-                    app.clearing_celebration =
-                        Some(app::random_clearing_message().to_string());
-                    app.clearing_duration =
-                        elapsed.map(|e| format!("{}s", e));
+                    let elapsed = app.send_timestamp.map(|t| t.elapsed().as_secs());
+                    app.clearing_celebration = Some(app::random_clearing_message().to_string());
+                    app.clearing_duration = elapsed.map(|e| format!("{}s", e));
                     app.mempool_accepted = true;
 
                     // Pre-pick the pending settlement message for after dismiss
@@ -402,10 +394,8 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
 
                     // Spawn confetti
                     let screen = ctx.screen_rect();
-                    app.confetti_particles = effects::confetti::spawn_confetti(
-                        screen.center().x,
-                        screen.center().y,
-                    );
+                    app.confetti_particles =
+                        effects::confetti::spawn_confetti(screen.center().x, screen.center().y);
 
                     // Clear send form
                     app.send_address.zeroize();
@@ -438,7 +428,10 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         // or it's likely our own sent TX's change output coming back to us.
         if let Some(info) = s.mempool_tx.take() {
             let is_likely_change = app.send_in_progress
-                || app.send_timestamp.map(|t| t.elapsed().as_secs() < 120).unwrap_or(false);
+                || app
+                    .send_timestamp
+                    .map(|t| t.elapsed().as_secs() < 120)
+                    .unwrap_or(false);
             let dominated = app.known_received_txids.contains(&info.txid)
                 || app.pending_incoming_txid.as_deref() == Some(&info.txid)
                 || app.pending_confirmation_txid.as_deref() == Some(&info.txid)
@@ -449,7 +442,8 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
                 // Track for confirmation polling (like sent TXs)
                 app.pending_incoming_txid = Some(info.txid);
                 app.pending_incoming_amount = Some(info.amount);
-                app.pending_incoming_message = Some(app::random_pending_incoming_message().to_string());
+                app.pending_incoming_message =
+                    Some(app::random_pending_incoming_message().to_string());
                 app.pending_incoming_resync_timer = None;
                 app.pending_incoming_resync_count = 0;
             }
@@ -491,7 +485,9 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
     check_incoming_confirmation(app, ctx);
 
     // Auto re-sync while awaiting incoming TX confirmation (every 10s, up to 18 retries)
-    if app.pending_incoming_txid.is_some() && !app.is_syncing && !app.send_in_progress
+    if app.pending_incoming_txid.is_some()
+        && !app.is_syncing
+        && !app.send_in_progress
         && app.pending_confirmation_txid.is_none()
     {
         let should_resync = match app.pending_incoming_resync_timer {
@@ -499,7 +495,9 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
                 app.pending_incoming_resync_timer = Some(std::time::Instant::now());
                 false
             }
-            Some(timer) if timer.elapsed().as_secs() >= 10 && app.pending_incoming_resync_count < 18 => {
+            Some(timer)
+                if timer.elapsed().as_secs() >= 10 && app.pending_incoming_resync_count < 18 =>
+            {
                 true
             }
             _ => false,
@@ -531,9 +529,7 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
                 app.pending_resync_timer = Some(std::time::Instant::now());
                 false
             }
-            Some(timer) if timer.elapsed().as_secs() >= 10 && app.pending_resync_count < 18 => {
-                true
-            }
+            Some(timer) if timer.elapsed().as_secs() >= 10 && app.pending_resync_count < 18 => true,
             _ => false,
         };
         if should_resync {
@@ -621,7 +617,11 @@ fn update_sync_tasks(app: &mut ZipherXApp, phase: &str, current: u64, target: u6
                 task.detail = match phase {
                     "boost_download" => {
                         let mb = current / (1024 * 1024);
-                        let total_mb = if target > 0 { target / (1024 * 1024) } else { 0 };
+                        let total_mb = if target > 0 {
+                            target / (1024 * 1024)
+                        } else {
+                            0
+                        };
                         if total_mb > 0 {
                             format!("{}MB / {}MB", mb, total_mb)
                         } else {
@@ -690,11 +690,8 @@ fn check_pending_confirmation(app: &mut ZipherXApp, ctx: &egui::Context) {
                     .find(|t| t.confirmations > 0 && (t.tx_type == "sent" || t.tx_type == "self"))
             });
 
-        app.settlement_txid = confirmed_tx
-            .map(|t| t.txid.clone())
-            .or(Some(pending_txid));
-        app.settlement_celebration =
-            Some(app::random_settlement_message().to_string());
+        app.settlement_txid = confirmed_tx.map(|t| t.txid.clone()).or(Some(pending_txid));
+        app.settlement_celebration = Some(app::random_settlement_message().to_string());
         app.settlement_duration = elapsed.map(|e| format!("{}s", e));
         app.pending_confirmation_txid = None;
         app.pending_settlement_message = None;
@@ -744,17 +741,18 @@ fn check_incoming_confirmation(app: &mut ZipherXApp, ctx: &egui::Context) {
 
         // Spawn cyan confetti
         let screen = ctx.screen_rect();
-        app.confetti_particles = effects::confetti::spawn_receive_confetti(
-            screen.center().x,
-            screen.center().y,
-        );
+        app.confetti_particles =
+            effects::confetti::spawn_receive_confetti(screen.center().x, screen.center().y);
     }
 }
 
 /// Detect new received transactions and trigger receive celebration.
 fn detect_new_received(app: &mut ZipherXApp, ctx: &egui::Context) {
     // Skip if we haven't done initial sync yet or if a send celebration is active
-    if !app.initial_sync_done || app.clearing_celebration.is_some() || app.settlement_celebration.is_some() {
+    if !app.initial_sync_done
+        || app.clearing_celebration.is_some()
+        || app.settlement_celebration.is_some()
+    {
         return;
     }
 
@@ -810,10 +808,8 @@ fn detect_new_received(app: &mut ZipherXApp, ctx: &egui::Context) {
 
         // Spawn cyan confetti
         let screen = ctx.screen_rect();
-        app.confetti_particles = effects::confetti::spawn_receive_confetti(
-            screen.center().x,
-            screen.center().y,
-        );
+        app.confetti_particles =
+            effects::confetti::spawn_receive_confetti(screen.center().x, screen.center().y);
 
         // Switch to wallet tab to show celebration
         app.tab = Tab::Wallet;

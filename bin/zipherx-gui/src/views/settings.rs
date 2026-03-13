@@ -74,7 +74,11 @@ fn show_sync_section(app: &mut ZipherXApp, ui: &mut egui::Ui) {
         } else {
             "[ START SYNC ]"
         };
-        let color = if app.is_syncing { theme::RED } else { theme::GREEN };
+        let color = if app.is_syncing {
+            theme::RED
+        } else {
+            theme::GREEN
+        };
         if ui
             .add(egui::Button::new(
                 egui::RichText::new(label)
@@ -85,9 +89,7 @@ fn show_sync_section(app: &mut ZipherXApp, ui: &mut egui::Ui) {
         {
             if app.is_syncing {
                 app.is_syncing = false;
-            } else if let (Some(ref state), Some(ref sk)) =
-                (&app.shared_state, &app.sk_bytes)
-            {
+            } else if let (Some(ref state), Some(ref sk)) = (&app.shared_state, &app.sk_bytes) {
                 if let Ok(mut s) = state.lock() {
                     s.command = Some(SyncCommand::StartSync {
                         sk_bytes: sk.clone(),
@@ -285,7 +287,11 @@ fn show_wallet_mode(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                 .fill(p2p_fill)
                 .stroke(egui::Stroke::new(
                     1.0,
-                    if p2p_selected { theme::GREEN.linear_multiply(0.5) } else { theme::MUTED.linear_multiply(0.3) },
+                    if p2p_selected {
+                        theme::GREEN.linear_multiply(0.5)
+                    } else {
+                        theme::MUTED.linear_multiply(0.3)
+                    },
                 ))
                 .rounding(4.0);
 
@@ -315,7 +321,11 @@ fn show_wallet_mode(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                 .fill(fn_fill)
                 .stroke(egui::Stroke::new(
                     1.0,
-                    if node_selected { theme::CYAN.linear_multiply(0.5) } else { theme::MUTED.linear_multiply(0.3) },
+                    if node_selected {
+                        theme::CYAN.linear_multiply(0.5)
+                    } else {
+                        theme::MUTED.linear_multiply(0.3)
+                    },
                 ))
                 .rounding(4.0);
 
@@ -454,8 +464,10 @@ fn show_wallet_mode(app: &mut ZipherXApp, ui: &mut egui::Ui) {
         ui.add_space(8.0);
 
         // Daemon connection status (bordered, color-coded)
-        let is_connected =
-            matches!(app.node_daemon_status, crate::fullnode::manager::DaemonStatus::Running);
+        let is_connected = matches!(
+            app.node_daemon_status,
+            crate::fullnode::manager::DaemonStatus::Running
+        );
         let border_color = if is_connected {
             theme::GREEN.linear_multiply(0.5)
         } else {
@@ -494,18 +506,15 @@ fn show_wallet_mode(app: &mut ZipherXApp, ui: &mut egui::Ui) {
 
                     // Block height on the right
                     if is_connected {
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if let Some(ref info) = app.node_chain_info {
-                                    ui.label(
-                                        egui::RichText::new(format!("Block {}", info.blocks))
-                                            .font(theme::mono(10.0))
-                                            .color(theme::MUTED),
-                                    );
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if let Some(ref info) = app.node_chain_info {
+                                ui.label(
+                                    egui::RichText::new(format!("Block {}", info.blocks))
+                                        .font(theme::mono(10.0))
+                                        .color(theme::MUTED),
+                                );
+                            }
+                        });
                     }
                 });
             });
@@ -517,15 +526,10 @@ fn show_wallet_mode(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                     let progress = info.blocks as f32 / info.headers as f32;
                     ui.add_space(4.0);
                     let bar_width = ui.available_width() - 20.0;
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::Vec2::new(bar_width, 4.0),
-                        egui::Sense::hover(),
-                    );
-                    ui.painter().rect_filled(
-                        rect,
-                        2.0,
-                        egui::Color32::from_rgb(30, 30, 30),
-                    );
+                    let (rect, _) = ui
+                        .allocate_exact_size(egui::Vec2::new(bar_width, 4.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
                     let filled = egui::Rect::from_min_size(
                         rect.min,
                         egui::Vec2::new(rect.width() * progress, rect.height()),
@@ -584,18 +588,25 @@ fn show_wallet_mode(app: &mut ZipherXApp, ui: &mut egui::Ui) {
 
 fn show_peer_management(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     // Collapsible header
-    let toggle_icon = if app.peer_section_expanded { "[-]" } else { "[+]" };
+    let toggle_icon = if app.peer_section_expanded {
+        "[-]"
+    } else {
+        "[+]"
+    };
     let header_text = format!(
         "PEER DETAILS  {} connected  {}",
         app.peer_infos.len(),
         toggle_icon,
     );
     if ui
-        .add(egui::Button::new(
-            egui::RichText::new(&header_text)
-                .font(theme::mono(11.0))
-                .color(theme::GREEN),
-        ).frame(false))
+        .add(
+            egui::Button::new(
+                egui::RichText::new(&header_text)
+                    .font(theme::mono(11.0))
+                    .color(theme::GREEN),
+            )
+            .frame(false),
+        )
         .clicked()
     {
         app.peer_section_expanded = !app.peer_section_expanded;
@@ -699,8 +710,7 @@ fn show_peer_management(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                     .clicked()
                 {
                     // TODO: wire to SyncCommand::AddPeer
-                    app.peer_action_result =
-                        Some("Custom peer support coming soon.".to_string());
+                    app.peer_action_result = Some("Custom peer support coming soon.".to_string());
                 }
             });
 
@@ -726,12 +736,7 @@ fn show_security_section(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Co
                 .font(theme::mono(11.0))
                 .color(theme::MUTED),
         );
-        let options = [
-            (60, "1 min"),
-            (300, "5 min"),
-            (900, "15 min"),
-            (0, "Never"),
-        ];
+        let options = [(60, "1 min"), (300, "5 min"), (900, "15 min"), (0, "Never")];
         for (secs, label) in &options {
             let selected = app.auto_lock_secs == *secs;
             let color = if selected { theme::GREEN } else { theme::MUTED };
@@ -902,8 +907,7 @@ fn show_maintenance_section(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                             }
                         }
                         app.maintenance_in_progress = true;
-                        app.maintenance_status =
-                            Some("Starting full rescan...".to_string());
+                        app.maintenance_status = Some("Starting full rescan...".to_string());
                         app.show_rescan_confirm = false;
                     }
                     if ui
@@ -1125,12 +1129,10 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Con
                                     app.export_key_display = encoded;
                                     app.show_export = true;
                                     app.show_export_confirm = false;
-                                    app.export_auto_dismiss =
-                                        Some(std::time::Instant::now());
+                                    app.export_auto_dismiss = Some(std::time::Instant::now());
                                 }
                                 Err(e) => {
-                                    app.password_error =
-                                        Some(format!("Export failed: {}", e));
+                                    app.password_error = Some(format!("Export failed: {}", e));
                                 }
                             }
                         }

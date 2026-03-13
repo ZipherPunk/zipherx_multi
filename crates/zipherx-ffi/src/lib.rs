@@ -956,7 +956,8 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
         runtime::block_on(async {
             let mut pm = wallet.peer_manager.lock().await;
             pm.set_on_mempool_tx_data(mempool_callback);
-        }).ok();
+        })
+        .ok();
     }
 
     // New-block notification: when any peer sends inv MSG_BLOCK, wake the
@@ -969,7 +970,8 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
             pm.set_on_new_block(std::sync::Arc::new(move || {
                 notify.notify_one();
             }));
-        }).ok();
+        })
+        .ok();
     }
 
     #[cfg(debug_assertions)]
@@ -1697,7 +1699,9 @@ fn send_phase_to_progress(phase: &SendPhase) -> (String, u32, u32) {
             total_spends,
         } => ("building".into(), *spend_index, *total_spends),
         SendPhase::Broadcasting => ("broadcasting".into(), 0, 0),
-        SendPhase::PeerResponse { accepted, total, .. } => ("peer_response".into(), *accepted, *total),
+        SendPhase::PeerResponse {
+            accepted, total, ..
+        } => ("peer_response".into(), *accepted, *total),
         SendPhase::Recording => ("recording".into(), 0, 0),
         SendPhase::Complete { .. } => ("complete".into(), 0, 0),
         SendPhase::Error { .. } => ("error".into(), 0, 0),

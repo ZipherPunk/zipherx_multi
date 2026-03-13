@@ -677,9 +677,9 @@ impl PeerManager {
         // to handle long sessions where peer_start_height becomes very stale.
         let live_tip = self.live_chain_tip.load(Ordering::Relaxed);
         let consensus_height = if live_tip > median_height && live_tip <= median_height + 100 {
-            live_tip  // Accept live tip (dedup prevents inflation)
+            live_tip // Accept live tip (dedup prevents inflation)
         } else {
-            median_height  // Strict median otherwise
+            median_height // Strict median otherwise
         };
 
         // Sybil detection: ban peers >500 blocks above consensus
@@ -939,7 +939,10 @@ impl PeerManager {
                 // "mempool" is an empty-payload message per BIP 35
                 if let Err(_e) = peer.send_message("mempool", &[]).await {
                     #[cfg(debug_assertions)]
-                    eprintln!("[ZipherX] Failed to send mempool request to {}: {:?}", peer.id, _e);
+                    eprintln!(
+                        "[ZipherX] Failed to send mempool request to {}: {:?}",
+                        peer.id, _e
+                    );
                 }
             }
         }
@@ -1144,7 +1147,10 @@ impl PeerManager {
 
         eprintln!(
             "[ZipherX] Broadcast result: {}/{} accepted, {} rejected, {} duplicate",
-            total_accepted, total_attempted, rejected_by.len(), duplicate_at.len(),
+            total_accepted,
+            total_attempted,
+            rejected_by.len(),
+            duplicate_at.len(),
         );
 
         let result = BroadcastResult {

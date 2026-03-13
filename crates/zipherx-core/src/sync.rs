@@ -63,9 +63,7 @@ pub enum SyncStatus {
         target_height: u64,
     },
     /// Scanning boost file for wallet outputs (CPU-intensive trial decryption).
-    BoostScan {
-        outputs_total: u64,
-    },
+    BoostScan { outputs_total: u64 },
     /// Scanning blocks for notes.
     BlockScan {
         current_height: u64,
@@ -81,10 +79,7 @@ pub enum SyncStatus {
     },
     /// Boost download failed after all retries. User must decide whether
     /// to continue with slow P2P header sync or abort.
-    BoostFailed {
-        reason: String,
-        attempts: u32,
-    },
+    BoostFailed { reason: String, attempts: u32 },
     /// Sync complete.
     Complete { height: u64 },
     /// Sync failed.

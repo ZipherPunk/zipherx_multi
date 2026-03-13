@@ -16,7 +16,8 @@ fn ensure_logo(app: &mut ZipherXApp, ctx: &egui::Context) {
     let size = [img.width() as usize, img.height() as usize];
     let pixels = img.into_raw();
     let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
-    app.logo_texture = Some(ctx.load_texture("zipherx-logo", color_image, egui::TextureOptions::LINEAR));
+    app.logo_texture =
+        Some(ctx.load_texture("zipherx-logo", color_image, egui::TextureOptions::LINEAR));
 }
 
 /// Display the logo at the given size.

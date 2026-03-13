@@ -150,8 +150,7 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 ui.label(
                     egui::RichText::new(format!(
                         "{}/{} spendable notes",
-                        app.balance.spendable_note_count,
-                        app.balance.note_count,
+                        app.balance.spendable_note_count, app.balance.note_count,
                     ))
                     .font(theme::mono(10.0))
                     .color(theme::MUTED),
@@ -189,7 +188,11 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     egui::Button::new(
                         egui::RichText::new("[ SEND ]")
                             .font(theme::mono(14.0))
-                            .color(if send_enabled { theme::GREEN } else { theme::MUTED }),
+                            .color(if send_enabled {
+                                theme::GREEN
+                            } else {
+                                theme::MUTED
+                            }),
                     ),
                 )
                 .clicked()
@@ -353,19 +356,22 @@ fn show_sync_progress(app: &mut ZipherXApp, ui: &mut egui::Ui) {
 
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new(format!("{} {:.0}%{}", phase_label, progress * 100.0, detail))
-                .font(theme::mono(10.0))
-                .color(theme::CYAN),
+            egui::RichText::new(format!(
+                "{} {:.0}%{}",
+                phase_label,
+                progress * 100.0,
+                detail
+            ))
+            .font(theme::mono(10.0))
+            .color(theme::CYAN),
         );
     });
 
     // Compact progress bar
     let bar_width = ui.available_width() - 20.0;
-    let (rect, _) = ui.allocate_exact_size(
-        egui::Vec2::new(bar_width, 6.0),
-        egui::Sense::hover(),
-    );
-    ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(bar_width, 6.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 30));
     let filled = egui::Rect::from_min_size(
         rect.min,
         egui::Vec2::new(rect.width() * progress, rect.height()),
@@ -513,24 +519,39 @@ fn format_timestamp(ts: u64) -> String {
         let mut y = 1970i64;
         let mut remaining = days as i64;
         loop {
-            let dy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
-            if remaining < dy { break; }
+            let dy = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+                366
+            } else {
+                365
+            };
+            if remaining < dy {
+                break;
+            }
             remaining -= dy;
             y += 1;
         }
         let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
         let mdays = if leap {
-            [31,29,31,30,31,30,31,31,30,31,30,31]
+            [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         } else {
-            [31,28,31,30,31,30,31,31,30,31,30,31]
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
         };
         let mut m = 0usize;
         for md in &mdays {
-            if remaining < *md as i64 { break; }
+            if remaining < *md as i64 {
+                break;
+            }
             remaining -= *md as i64;
             m += 1;
         }
-        format!("{:04}-{:02}-{:02} {:02}:{:02} UTC", y, m + 1, remaining + 1, h, mi)
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+            y,
+            m + 1,
+            remaining + 1,
+            h,
+            mi
+        )
     }
 }
 
@@ -713,7 +734,11 @@ fn show_boost_failed_dialog(app: &mut ZipherXApp, ui: &mut egui::Ui, reason: &st
                 egui::RichText::new(format!(
                     "Failed after {} attempts: {}",
                     attempts,
-                    if reason.len() > 80 { &reason[..80] } else { reason }
+                    if reason.len() > 80 {
+                        &reason[..80]
+                    } else {
+                        reason
+                    }
                 ))
                 .font(theme::mono(10.0))
                 .color(theme::MUTED),
@@ -723,7 +748,7 @@ fn show_boost_failed_dialog(app: &mut ZipherXApp, ui: &mut egui::Ui, reason: &st
                 egui::RichText::new(
                     "The fast sync (boost) file could not be downloaded.\n\
                      You can continue with P2P header sync (much slower, may\n\
-                     take hours), or quit and try again later."
+                     take hours), or quit and try again later.",
                 )
                 .font(theme::mono(10.0))
                 .color(egui::Color32::from_rgb(200, 200, 200)),

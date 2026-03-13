@@ -229,7 +229,17 @@ impl Peer {
         let on_addr = self.on_addr.clone();
 
         let handle = tokio::spawn(async move {
-            block_listener_loop(reader, writer, dispatcher, cancel_clone, peer_id, on_mempool_tx_data, on_new_block, on_addr).await;
+            block_listener_loop(
+                reader,
+                writer,
+                dispatcher,
+                cancel_clone,
+                peer_id,
+                on_mempool_tx_data,
+                on_new_block,
+                on_addr,
+            )
+            .await;
         });
 
         self.listener_cancel = Some(cancel);
@@ -752,14 +762,22 @@ async fn handle_background_message(
         "inv" => {
             if let Some(items) = crate::messages::deserialize_inv(payload) {
                 // MSG_BLOCK: new block mined — notify for instant sync
-                let has_block = items.iter().any(|item| item.inv_type == crate::types::InvType::Block);
+                let has_block = items
+                    .iter()
+                    .any(|item| item.inv_type == crate::types::InvType::Block);
                 if has_block {
-                    eprintln!("[ZipherX] {}: inv MSG_BLOCK received — new block!", _peer_id);
+                    eprintln!(
+                        "[ZipherX] {}: inv MSG_BLOCK received — new block!",
+                        _peer_id
+                    );
                     let cb = on_new_block.lock().unwrap().clone();
                     if let Some(cb) = cb {
                         cb();
                     } else {
-                        eprintln!("[ZipherX] {}: WARNING: on_new_block callback is None!", _peer_id);
+                        eprintln!(
+                            "[ZipherX] {}: WARNING: on_new_block callback is None!",
+                            _peer_id
+                        );
                     }
                 }
 
@@ -795,7 +813,7 @@ async fn handle_background_message(
                         .filter_map(|a| {
                             let ip = &a.address.ip;
                             // IPv4-mapped IPv6 (::ffff:x.x.x.x)
-                            if ip[..12] == [0,0,0,0, 0,0,0,0, 0,0,0xff,0xff] {
+                            if ip[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
                                 let host = format!("{}.{}.{}.{}", ip[12], ip[13], ip[14], ip[15]);
                                 Some((host, a.address.port))
                             } else {
@@ -818,10 +836,13 @@ async fn handle_background_message(
                         .filter_map(|a| {
                             match a.network {
                                 crate::types::AddrV2Network::IPv4 if a.address.len() == 4 => {
-                                    let host = format!("{}.{}.{}.{}", a.address[0], a.address[1], a.address[2], a.address[3]);
+                                    let host = format!(
+                                        "{}.{}.{}.{}",
+                                        a.address[0], a.address[1], a.address[2], a.address[3]
+                                    );
                                     Some((host, a.port))
                                 }
-                                _ => None // Skip IPv6/Tor/I2P/CJDNS for now
+                                _ => None, // Skip IPv6/Tor/I2P/CJDNS for now
                             }
                         })
                         .collect();
@@ -867,7 +888,11 @@ async fn handle_background_message(
         // ── Unknown ──
         _ => {
             #[cfg(debug_assertions)]
-            eprintln!("[ZipherX] Unknown P2P message: '{}' ({} bytes)", command, payload.len());
+            eprintln!(
+                "[ZipherX] Unknown P2P message: '{}' ({} bytes)",
+                command,
+                payload.len()
+            );
         }
     }
 }

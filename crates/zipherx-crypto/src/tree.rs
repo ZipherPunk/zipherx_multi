@@ -375,10 +375,8 @@ pub fn verify_witness_and_get_root(witness_data: &[u8]) -> Result<[u8; 32], Cryp
     }
 
     let mut reader = Cursor::new(witness_data);
-    let witness: IncrementalWitness<Node, 32> =
-        read_incremental_witness(&mut reader).map_err(|e| {
-            CryptoError::WitnessError(format!("Witness deserialization failed: {e:?}"))
-        })?;
+    let witness: IncrementalWitness<Node, 32> = read_incremental_witness(&mut reader)
+        .map_err(|e| CryptoError::WitnessError(format!("Witness deserialization failed: {e:?}")))?;
 
     // Verify the witness has a valid path (same check as TX builder)
     if witness.path().is_none() {

@@ -110,7 +110,11 @@ fn show_mode_selection(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                     "[ P2P LIGHT ]"
                 })
                 .font(theme::mono(12.0))
-                .color(if p2p_selected { theme::GREEN } else { theme::MUTED }),
+                .color(if p2p_selected {
+                    theme::GREEN
+                } else {
+                    theme::MUTED
+                }),
             ))
             .clicked()
         {
@@ -127,7 +131,11 @@ fn show_mode_selection(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                     "[ FULL NODE ]"
                 })
                 .font(theme::mono(12.0))
-                .color(if node_selected { theme::GREEN } else { theme::MUTED }),
+                .color(if node_selected {
+                    theme::GREEN
+                } else {
+                    theme::MUTED
+                }),
             ))
             .clicked()
         {
@@ -160,16 +168,27 @@ fn show_prerequisites(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     // Check for Sapling params — search all known locations
     let has_params = {
         let check_dir = |dir: &std::path::Path| -> bool {
-            dir.join("sapling-spend.params").exists()
-                && dir.join("sapling-output.params").exists()
+            dir.join("sapling-spend.params").exists() && dir.join("sapling-output.params").exists()
         };
         let home = dirs::home_dir();
         let data = dirs::data_dir(); // ~/Library/Application Support on macOS
         check_dir(&app.data_dir)
-            || home.as_ref().map(|h| check_dir(&h.join(".zcash-params"))).unwrap_or(false)
-            || data.as_ref().map(|d| check_dir(&d.join("ZipherX").join("sapling-params"))).unwrap_or(false)
-            || data.as_ref().map(|d| check_dir(&d.join("ZipherX"))).unwrap_or(false)
-            || data.as_ref().map(|d| check_dir(&d.join("ZcashParams"))).unwrap_or(false)
+            || home
+                .as_ref()
+                .map(|h| check_dir(&h.join(".zcash-params")))
+                .unwrap_or(false)
+            || data
+                .as_ref()
+                .map(|d| check_dir(&d.join("ZipherX").join("sapling-params")))
+                .unwrap_or(false)
+            || data
+                .as_ref()
+                .map(|d| check_dir(&d.join("ZipherX")))
+                .unwrap_or(false)
+            || data
+                .as_ref()
+                .map(|d| check_dir(&d.join("ZcashParams")))
+                .unwrap_or(false)
     };
 
     // Check for zstd (use `where` on Windows, `which` on Unix)
@@ -284,9 +303,8 @@ fn show_daemon_status(app: &mut ZipherXApp, ui: &mut egui::Ui) {
 
 fn show_daemon_controls(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        let can_start =
-            app.node_daemon_status == DaemonStatus::Stopped
-                || matches!(app.node_daemon_status, DaemonStatus::Error(_));
+        let can_start = app.node_daemon_status == DaemonStatus::Stopped
+            || matches!(app.node_daemon_status, DaemonStatus::Error(_));
         let can_stop = app.node_daemon_status == DaemonStatus::Running;
 
         if can_start {
@@ -361,8 +379,7 @@ fn show_blockchain_info(app: &mut ZipherXApp, ui: &mut egui::Ui) {
         } else {
             0.0
         };
-        let bar = egui::ProgressBar::new(progress)
-            .text(format!("{:.1}%", progress * 100.0));
+        let bar = egui::ProgressBar::new(progress).text(format!("{:.1}%", progress * 100.0));
         ui.add(bar);
 
         // Size on disk
@@ -392,12 +409,9 @@ fn show_blockchain_info(app: &mut ZipherXApp, ui: &mut egui::Ui) {
 fn show_network_info(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     if let Some(ref info) = app.node_network_info {
         ui.label(
-            egui::RichText::new(format!(
-                "Version: {} {}",
-                info.version, info.subversion
-            ))
-            .font(theme::mono(10.0))
-            .color(theme::MUTED),
+            egui::RichText::new(format!("Version: {} {}", info.version, info.subversion))
+                .font(theme::mono(10.0))
+                .color(theme::MUTED),
         );
         ui.label(
             egui::RichText::new(format!(
@@ -616,12 +630,9 @@ fn show_daemon_path(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     // Data directory
     ui.add_space(5.0);
     ui.label(
-        egui::RichText::new(format!(
-            "Data dir: {}",
-            app.node_data_dir.display()
-        ))
-        .font(theme::mono(10.0))
-        .color(theme::MUTED),
+        egui::RichText::new(format!("Data dir: {}", app.node_data_dir.display()))
+            .font(theme::mono(10.0))
+            .color(theme::MUTED),
     );
 
     // Build instructions
@@ -702,9 +713,7 @@ fn start_daemon(app: &mut ZipherXApp) {
     config.data_dir = Some(app.node_data_dir.clone());
 
     // Read existing credentials if available
-    if let Some((user, pass, port)) =
-        FullNodeManager::read_conf_credentials(&app.node_data_dir)
-    {
+    if let Some((user, pass, port)) = FullNodeManager::read_conf_credentials(&app.node_data_dir) {
         config.rpc_user = user;
         config.rpc_password = pass;
         config.rpc_port = port;
@@ -761,11 +770,7 @@ fn detect_external_daemon(app: &mut ZipherXApp) {
     if let Some((user, pass, port)) =
         crate::fullnode::manager::FullNodeManager::read_conf_credentials(&app.node_data_dir)
     {
-        let rpc = RpcClient::new(
-            &format!("http://127.0.0.1:{}", port),
-            &user,
-            &pass,
-        );
+        let rpc = RpcClient::new(&format!("http://127.0.0.1:{}", port), &user, &pass);
         if rpc.is_alive() {
             app.node_daemon_status = DaemonStatus::Running;
             app.node_rpc_port = port;
@@ -797,11 +802,7 @@ fn detect_external_daemon(app: &mut ZipherXApp) {
     }
 
     // Try default credentials
-    let rpc = RpcClient::new(
-        "http://127.0.0.1:8023",
-        "zipherx",
-        "",
-    );
+    let rpc = RpcClient::new("http://127.0.0.1:8023", "zipherx", "");
     if rpc.is_alive() {
         app.node_daemon_status = DaemonStatus::Running;
         app.node_log_lines
@@ -889,11 +890,7 @@ fn auto_detect_daemon(app: &mut ZipherXApp) {
     if let Some((user, pass, port)) =
         crate::fullnode::manager::FullNodeManager::read_conf_credentials(&app.node_data_dir)
     {
-        let rpc = RpcClient::new(
-            &format!("http://127.0.0.1:{}", port),
-            &user,
-            &pass,
-        );
+        let rpc = RpcClient::new(&format!("http://127.0.0.1:{}", port), &user, &pass);
         if rpc.is_alive() {
             app.node_daemon_status = DaemonStatus::Running;
             app.node_rpc_port = port;

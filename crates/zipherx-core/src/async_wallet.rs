@@ -169,7 +169,12 @@ impl AsyncWallet {
         // Update peer count before sync (so UI sees it while mutex is held)
         peer_count_ref.store(pm.connected_count() as u32, Ordering::Relaxed);
 
-        let boost_cache = self.core.config.boost_cache_dir.as_ref().map(std::path::PathBuf::from);
+        let boost_cache = self
+            .core
+            .config
+            .boost_cache_dir
+            .as_ref()
+            .map(std::path::PathBuf::from);
         let result = async_sync::sync_to_tip(
             &mut pm,
             &self.header_store,

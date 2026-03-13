@@ -94,10 +94,7 @@ impl RpcClient {
         let result = self.call("getblockchaininfo", &[])?;
         Ok(super::manager::ChainInfo {
             blocks: result.get("blocks").and_then(|v| v.as_u64()).unwrap_or(0),
-            headers: result
-                .get("headers")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+            headers: result.get("headers").and_then(|v| v.as_u64()).unwrap_or(0),
             verification_progress: result
                 .get("verificationprogress")
                 .and_then(|v| v.as_f64())
@@ -122,10 +119,7 @@ impl RpcClient {
     pub fn get_network_info(&self) -> Result<super::manager::NetworkInfo, String> {
         let result = self.call("getnetworkinfo", &[])?;
         Ok(super::manager::NetworkInfo {
-            version: result
-                .get("version")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0),
+            version: result.get("version").and_then(|v| v.as_u64()).unwrap_or(0),
             subversion: result
                 .get("subversion")
                 .and_then(|v| v.as_str())

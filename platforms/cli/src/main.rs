@@ -940,9 +940,16 @@ fn cmd_send(args: &[&str], state: &WalletState) {
                 format!("Building proof {}/{}...", spend_index, total_spends)
             }
             SendPhase::Broadcasting => "Broadcasting to network...".to_string(),
-            SendPhase::PeerResponse { accepted, rejected, total } => {
+            SendPhase::PeerResponse {
+                accepted,
+                rejected,
+                total,
+            } => {
                 if rejected > 0 {
-                    format!("Peers: {}/{} accepted, {} REJECTED", accepted, total, rejected)
+                    format!(
+                        "Peers: {}/{} accepted, {} REJECTED",
+                        accepted, total, rejected
+                    )
                 } else {
                     format!("Peers: {}/{} accepted", accepted, total)
                 }
@@ -1097,7 +1104,10 @@ fn cmd_sync(state: &WalletState) {
                 SyncStatus::Complete { height } => {
                     format!("Sync complete at height {}", height)
                 }
-                SyncStatus::BoostFailed { ref reason, attempts } => {
+                SyncStatus::BoostFailed {
+                    ref reason,
+                    attempts,
+                } => {
                     eprintln!(
                         "\n{}[sync]{} Boost download failed after {} attempts: {}",
                         RED, RESET, attempts, reason,
@@ -1399,8 +1409,14 @@ fn prompt_password(prompt: &str) -> String {
     match rpassword::prompt_password(format!("{}{}{}", GREEN, prompt, RESET)) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("{}ERROR: Cannot read password securely: {}{}", RED, e, RESET);
-            eprintln!("{}Please use an interactive terminal (SSH with -t flag).{}", RED, RESET);
+            eprintln!(
+                "{}ERROR: Cannot read password securely: {}{}",
+                RED, e, RESET
+            );
+            eprintln!(
+                "{}Please use an interactive terminal (SSH with -t flag).{}",
+                RED, RESET
+            );
             std::process::exit(1);
         }
     }

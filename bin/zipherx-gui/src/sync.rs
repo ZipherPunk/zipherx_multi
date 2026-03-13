@@ -7,10 +7,10 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use rand::RngCore;
 use zipherx_core::async_wallet::AsyncWallet;
 use zipherx_core::wallet::WalletConfig;
 use zipherx_platform::SecureStorage;
-use rand::RngCore;
 
 use crate::platform::GuiSecureStorage;
 
@@ -93,7 +93,9 @@ pub struct SendResultInfo {
 
 /// Commands the UI can send to the sync thread.
 pub enum SyncCommand {
-    StartSync { sk_bytes: Vec<u8> },
+    StartSync {
+        sk_bytes: Vec<u8>,
+    },
     Send {
         to_address: String,
         amount: u64,
@@ -210,8 +212,14 @@ fn wallet_thread_main(
         db_path: data_dir.join("wallet.db").to_string_lossy().into(),
         header_store_path: data_dir.join("headers.db").to_string_lossy().into(),
         delta_store_dir: data_dir.join("delta").to_string_lossy().into(),
-        spend_params_path: data_dir.join("sapling-spend.params").to_string_lossy().into(),
-        output_params_path: data_dir.join("sapling-output.params").to_string_lossy().into(),
+        spend_params_path: data_dir
+            .join("sapling-spend.params")
+            .to_string_lossy()
+            .into(),
+        output_params_path: data_dir
+            .join("sapling-output.params")
+            .to_string_lossy()
+            .into(),
         account_index: 0,
         db_encryption_key,
         boost_cache_dir: None,
@@ -236,13 +244,11 @@ fn wallet_thread_main(
     // so this poller ensures the UI always shows the current peer count.
     let peer_poller_state = state.clone();
     let peer_poller_atomic = wallet.connected_peer_count.clone();
-    std::thread::spawn(move || {
-        loop {
-            if let Ok(mut s) = peer_poller_state.lock() {
-                s.peer_count = peer_poller_atomic.load(std::sync::atomic::Ordering::Relaxed);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::spawn(move || loop {
+        if let Ok(mut s) = peer_poller_state.lock() {
+            s.peer_count = peer_poller_atomic.load(std::sync::atomic::Ordering::Relaxed);
         }
+        std::thread::sleep(std::time::Duration::from_millis(500));
     });
 
     let mut mempool_detector_set = false;
@@ -302,7 +308,9 @@ fn wallet_thread_main(
                         false
                     };
                     if needs_witness_retry {
-                        eprintln!("[ZipherX] Auto-retry: total > spendable — notes need witness rebuild");
+                        eprintln!(
+                            "[ZipherX] Auto-retry: total > spendable — notes need witness rebuild"
+                        );
                         handle_sync(&runtime, &wallet, &sk_bytes, &state);
                         refresh_balance_and_history(&runtime, &wallet, &state);
                     }
@@ -317,8 +325,23 @@ fn wallet_thread_main(
 
                 last_bg_sync = std::time::Instant::now();
             }
-            Some(SyncCommand::Send { to_address, amount, fee, memo, mut sk_bytes }) => {
-                handle_send(&runtime, &wallet, &to_address, amount, fee, memo.as_deref(), &sk_bytes, &state);
+            Some(SyncCommand::Send {
+                to_address,
+                amount,
+                fee,
+                memo,
+                mut sk_bytes,
+            }) => {
+                handle_send(
+                    &runtime,
+                    &wallet,
+                    &to_address,
+                    amount,
+                    fee,
+                    memo.as_deref(),
+                    &sk_bytes,
+                    &state,
+                );
                 // GUI-C5: Zeroize the cloned key material after use
                 for b in sk_bytes.iter_mut() {
                     unsafe { std::ptr::write_volatile(b, 0) };
@@ -327,7 +350,10 @@ fn wallet_thread_main(
             }
             Some(SyncCommand::SetTorEnabled(enabled)) => {
                 // GUI-L1: Tor toggle not yet implemented
-                eprintln!("[ZipherX] Tor toggle requested (enabled={}), not yet implemented", enabled);
+                eprintln!(
+                    "[ZipherX] Tor toggle requested (enabled={}), not yet implemented",
+                    enabled
+                );
             }
             Some(SyncCommand::RepairDatabase) => {
                 handle_repair(&runtime, &wallet, &state);
@@ -379,7 +405,9 @@ fn wallet_thread_main(
                 if let Some(ref sk) = cached_sk {
                     let new_block = if let Ok(mut s) = state.lock() {
                         let pending = s.new_block_pending;
-                        if pending { s.new_block_pending = false; }
+                        if pending {
+                            s.new_block_pending = false;
+                        }
                         pending
                     } else {
                         false
@@ -392,7 +420,9 @@ fn wallet_thread_main(
                         if new_block {
                             eprintln!("[ZipherX] Wallet thread: new block — autonomous sync");
                         } else if !initial_sync_done {
-                            eprintln!("[ZipherX] Wallet thread: retrying initial sync (network recovery)");
+                            eprintln!(
+                                "[ZipherX] Wallet thread: retrying initial sync (network recovery)"
+                            );
                         }
                         handle_sync(&runtime, &wallet, sk, &state);
                         refresh_balance_and_history(&runtime, &wallet, &state);
@@ -438,7 +468,10 @@ fn handle_sync(
             // Update peer count on every progress tick so UI shows live count
             s.peer_count = peer_count_atomic.load(std::sync::atomic::Ordering::Relaxed);
             match &status {
-                SyncStatus::BoostDownload { downloaded_bytes, total_bytes } => {
+                SyncStatus::BoostDownload {
+                    downloaded_bytes,
+                    total_bytes,
+                } => {
                     s.sync_phase = "boost_download".to_string();
                     s.sync_current = *downloaded_bytes;
                     s.sync_target = *total_bytes;
@@ -448,12 +481,18 @@ fn handle_sync(
                     s.sync_current = *loaded;
                     s.sync_target = *total;
                 }
-                SyncStatus::HeaderSync { current_height, target_height } => {
+                SyncStatus::HeaderSync {
+                    current_height,
+                    target_height,
+                } => {
                     s.sync_phase = "header_sync".to_string();
                     s.sync_current = *current_height;
                     s.sync_target = *target_height;
                 }
-                SyncStatus::DeltaSync { current_height, target_height } => {
+                SyncStatus::DeltaSync {
+                    current_height,
+                    target_height,
+                } => {
                     s.sync_phase = "delta_sync".to_string();
                     s.sync_current = *current_height;
                     s.sync_target = *target_height;
@@ -463,12 +502,19 @@ fn handle_sync(
                     s.sync_current = 0;
                     s.sync_target = *outputs_total;
                 }
-                SyncStatus::BlockScan { current_height, target_height, .. } => {
+                SyncStatus::BlockScan {
+                    current_height,
+                    target_height,
+                    ..
+                } => {
                     s.sync_phase = "block_scan".to_string();
                     s.sync_current = *current_height;
                     s.sync_target = *target_height;
                 }
-                SyncStatus::WitnessUpdate { notes_updated, total_notes } => {
+                SyncStatus::WitnessUpdate {
+                    notes_updated,
+                    total_notes,
+                } => {
                     s.sync_phase = "witness_update".to_string();
                     s.sync_current = *notes_updated as u64;
                     s.sync_target = *total_notes as u64;
@@ -500,10 +546,7 @@ fn handle_sync(
         }
     });
 
-    let result = runtime.block_on(wallet.sync(
-        sk_bytes,
-        Some(progress_fn),
-    ));
+    let result = runtime.block_on(wallet.sync(sk_bytes, Some(progress_fn)));
 
     match result {
         Ok(height) => {
@@ -518,9 +561,7 @@ fn handle_sync(
             // Auto-repair: if notes are missing witnesses after sync,
             // clear tree state + witnesses then re-sync to force full rebuild.
             if let Ok(balance) = runtime.block_on(wallet.get_balance()) {
-                if balance.note_count > 0
-                    && balance.note_count > balance.spendable_note_count
-                {
+                if balance.note_count > 0 && balance.note_count > balance.spendable_note_count {
                     let missing = balance.note_count - balance.spendable_note_count;
                     eprintln!(
                         "[ZipherX] {}/{} notes spendable — repairing {} witnesses",
@@ -534,51 +575,70 @@ fn handle_sync(
                         eprintln!("[ZipherX] tree state cleared, re-syncing for witness rebuild");
                         // Progress callback for repair sync
                         let state_repair = state.clone();
-                        let repair_progress_fn: std::sync::Arc<dyn Fn(zipherx_core::sync::SyncStatus) + Send + Sync> =
-                            std::sync::Arc::new(move |status: zipherx_core::sync::SyncStatus| {
-                                if let Ok(mut s) = state_repair.lock() {
-                                    use zipherx_core::sync::SyncStatus;
-                                    match &status {
-                                        SyncStatus::BoostDownload { downloaded_bytes, total_bytes } => {
-                                            s.sync_phase = "Repairing: downloading boost".to_string();
-                                            s.sync_current = *downloaded_bytes;
-                                            s.sync_target = *total_bytes;
-                                        }
-                                        SyncStatus::HeaderSync { current_height, target_height } => {
-                                            s.sync_phase = "Repairing: syncing headers".to_string();
-                                            s.sync_current = *current_height;
-                                            s.sync_target = *target_height;
-                                        }
-                                        SyncStatus::DeltaSync { current_height, target_height } => {
-                                            s.sync_phase = "Repairing: syncing blocks".to_string();
-                                            s.sync_current = *current_height;
-                                            s.sync_target = *target_height;
-                                        }
-                                        SyncStatus::BlockScan { current_height, target_height, .. } => {
-                                            s.sync_phase = "Repairing: scanning blocks".to_string();
-                                            s.sync_current = *current_height;
-                                            s.sync_target = *target_height;
-                                        }
-                                        SyncStatus::WitnessUpdate { notes_updated, total_notes } => {
-                                            s.sync_phase = "Repairing: updating witnesses".to_string();
-                                            s.sync_current = *notes_updated as u64;
-                                            s.sync_target = *total_notes as u64;
-                                        }
-                                        SyncStatus::Complete { height } => {
-                                            s.sync_phase = format!("Repair complete at {}", height);
-                                            s.sync_current = *height;
-                                            s.sync_target = *height;
-                                        }
-                                        _ => {}
+                        let repair_progress_fn: std::sync::Arc<
+                            dyn Fn(zipherx_core::sync::SyncStatus) + Send + Sync,
+                        > = std::sync::Arc::new(move |status: zipherx_core::sync::SyncStatus| {
+                            if let Ok(mut s) = state_repair.lock() {
+                                use zipherx_core::sync::SyncStatus;
+                                match &status {
+                                    SyncStatus::BoostDownload {
+                                        downloaded_bytes,
+                                        total_bytes,
+                                    } => {
+                                        s.sync_phase = "Repairing: downloading boost".to_string();
+                                        s.sync_current = *downloaded_bytes;
+                                        s.sync_target = *total_bytes;
                                     }
-                                    s.sync_progress = if s.sync_target > 0 {
-                                        s.sync_current as f32 / s.sync_target as f32
-                                    } else {
-                                        0.0
-                                    };
+                                    SyncStatus::HeaderSync {
+                                        current_height,
+                                        target_height,
+                                    } => {
+                                        s.sync_phase = "Repairing: syncing headers".to_string();
+                                        s.sync_current = *current_height;
+                                        s.sync_target = *target_height;
+                                    }
+                                    SyncStatus::DeltaSync {
+                                        current_height,
+                                        target_height,
+                                    } => {
+                                        s.sync_phase = "Repairing: syncing blocks".to_string();
+                                        s.sync_current = *current_height;
+                                        s.sync_target = *target_height;
+                                    }
+                                    SyncStatus::BlockScan {
+                                        current_height,
+                                        target_height,
+                                        ..
+                                    } => {
+                                        s.sync_phase = "Repairing: scanning blocks".to_string();
+                                        s.sync_current = *current_height;
+                                        s.sync_target = *target_height;
+                                    }
+                                    SyncStatus::WitnessUpdate {
+                                        notes_updated,
+                                        total_notes,
+                                    } => {
+                                        s.sync_phase = "Repairing: updating witnesses".to_string();
+                                        s.sync_current = *notes_updated as u64;
+                                        s.sync_target = *total_notes as u64;
+                                    }
+                                    SyncStatus::Complete { height } => {
+                                        s.sync_phase = format!("Repair complete at {}", height);
+                                        s.sync_current = *height;
+                                        s.sync_target = *height;
+                                    }
+                                    _ => {}
                                 }
-                            });
-                        if let Ok(h) = runtime.block_on(wallet.sync(sk_bytes, Some(repair_progress_fn))) {
+                                s.sync_progress = if s.sync_target > 0 {
+                                    s.sync_current as f32 / s.sync_target as f32
+                                } else {
+                                    0.0
+                                };
+                            }
+                        });
+                        if let Ok(h) =
+                            runtime.block_on(wallet.sync(sk_bytes, Some(repair_progress_fn)))
+                        {
                             eprintln!("[ZipherX] witness repair complete at height {}", h);
                         }
                     }
@@ -681,7 +741,10 @@ fn handle_send(
                     s.send_current = *note_index as u32;
                     s.send_total = *total as u32;
                 }
-                SendPhase::Building { spend_index, total_spends } => {
+                SendPhase::Building {
+                    spend_index,
+                    total_spends,
+                } => {
                     s.send_phase = format!("Building proof {}/{}", spend_index + 1, total_spends);
                     s.send_current = *spend_index;
                     s.send_total = *total_spends;
@@ -689,7 +752,11 @@ fn handle_send(
                 SendPhase::Broadcasting => {
                     s.send_phase = "Broadcasting...".to_string();
                 }
-                SendPhase::PeerResponse { accepted, rejected, total } => {
+                SendPhase::PeerResponse {
+                    accepted,
+                    rejected,
+                    total,
+                } => {
                     if *rejected > 0 {
                         s.send_phase = format!("REJECTED by {} peer(s)!", rejected);
                     } else {
@@ -716,11 +783,8 @@ fn handle_send(
     });
 
     // First attempt — send with existing peers
-    let result = runtime.block_on(wallet.send(
-        request.clone(),
-        sk_bytes,
-        Some(progress_fn.clone()),
-    ));
+    let result =
+        runtime.block_on(wallet.send(request.clone(), sk_bytes, Some(progress_fn.clone())));
 
     // If broadcast failed (broken pipe / stale peers), reconnect and retry once
     let result = match &result {
@@ -732,12 +796,11 @@ fn handle_send(
             let _ = runtime.block_on(wallet.connect_network());
             let peer_count = wallet.get_connected_peer_count();
             if peer_count > 0 {
-                eprintln!("[ZipherX] Reconnected {} peers, retrying broadcast...", peer_count);
-                runtime.block_on(wallet.send(
-                    request,
-                    sk_bytes,
-                    Some(progress_fn),
-                ))
+                eprintln!(
+                    "[ZipherX] Reconnected {} peers, retrying broadcast...",
+                    peer_count
+                );
+                runtime.block_on(wallet.send(request, sk_bytes, Some(progress_fn)))
             } else {
                 eprintln!("[ZipherX] Reconnect failed — no peers available");
                 result
@@ -789,8 +852,10 @@ fn refresh_balance_and_history(
             let mut processed = std::collections::HashSet::new();
 
             // Group by txid
-            let mut grouped: std::collections::HashMap<String, Vec<&zipherx_core::wallet::TransactionDisplay>> =
-                std::collections::HashMap::new();
+            let mut grouped: std::collections::HashMap<
+                String,
+                Vec<&zipherx_core::wallet::TransactionDisplay>,
+            > = std::collections::HashMap::new();
             for r in &records {
                 grouped.entry(r.txid.clone()).or_default().push(r);
             }
@@ -848,7 +913,8 @@ fn handle_repair(
     if let Ok(mut s) = state.lock() {
         match result {
             Ok(()) => {
-                s.maintenance_result = Some(Ok("Database repaired. Run sync to rebuild.".to_string()));
+                s.maintenance_result =
+                    Some(Ok("Database repaired. Run sync to rebuild.".to_string()));
                 eprintln!("[ZipherX] Repair complete.");
             }
             Err(e) => {
@@ -871,7 +937,9 @@ fn handle_full_rescan(
     if let Ok(mut s) = state.lock() {
         match result {
             Ok(()) => {
-                s.maintenance_result = Some(Ok("All data cleared. Next sync will re-scan from scratch.".to_string()));
+                s.maintenance_result = Some(Ok(
+                    "All data cleared. Next sync will re-scan from scratch.".to_string(),
+                ));
                 eprintln!("[ZipherX] Full rescan state cleared.");
             }
             Err(e) => {

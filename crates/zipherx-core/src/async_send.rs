@@ -43,7 +43,11 @@ pub enum SendPhase {
     /// Broadcasting to P2P peers
     Broadcasting,
     /// Peer response (with reject-based verification)
-    PeerResponse { accepted: u32, rejected: u32, total: u32 },
+    PeerResponse {
+        accepted: u32,
+        rejected: u32,
+        total: u32,
+    },
     /// Recording in database
     Recording,
     /// Complete
@@ -127,8 +131,7 @@ pub async fn send_transaction(
 
     // Step 4: Load unspent notes, select, verify witness consistency (FIX #827)
     let (selected, total_value) =
-        select_notes_with_witness_check(db.clone(), request, &progress)
-            .await?;
+        select_notes_with_witness_check(db.clone(), request, &progress).await?;
 
     // Step 5: FIX #1300 — Validate anchors against header store BEFORE building TX.
     // HARD ERROR: Zclassic nodes accept TXs into mempool WITHOUT checking Sapling
@@ -140,7 +143,8 @@ pub async fn send_transaction(
         let anchor = zipherx_crypto::tree::verify_witness_and_get_root(&note.witness)
             .map_err(|e| CoreError::Crypto(format!("Witness {} root extraction failed: {e}", i)))?;
 
-        let found = _header_store.contains_sapling_root(&anchor)
+        let found = _header_store
+            .contains_sapling_root(&anchor)
             .map_err(CoreError::Network)?;
 
         if found {
@@ -217,7 +221,10 @@ pub async fn send_transaction(
     // Step 8: Broadcast with reject detection (FIX #1184, FIX #1300)
     report_progress(&progress, SendPhase::Broadcasting);
 
-    eprintln!("[ZipherX] Broadcasting TX {}...", &txid[..16.min(txid.len())]);
+    eprintln!(
+        "[ZipherX] Broadcasting TX {}...",
+        &txid[..16.min(txid.len())]
+    );
 
     let broadcast_result = peer_manager
         .broadcast_transaction(&tx_result.tx_bytes, &txid)
@@ -231,7 +238,14 @@ pub async fn send_transaction(
     let rejected = broadcast_result.rejected_by.len() as u32;
     let total = broadcast_result.total_attempted() as u32;
 
-    report_progress(&progress, SendPhase::PeerResponse { accepted, rejected, total });
+    report_progress(
+        &progress,
+        SendPhase::PeerResponse {
+            accepted,
+            rejected,
+            total,
+        },
+    );
 
     // FIX #1300: If ANY peer explicitly rejected, treat as failure —
     // even if some peers "accepted" (silence), a reject means the TX is invalid.
@@ -307,7 +321,10 @@ pub async fn send_transaction(
     .map_err(|e| CoreError::RuntimeError(e.to_string()))?
     .map_err(|e| CoreError::Storage(e.to_string()))?;
 
-    eprintln!("[ZipherX] TX {} recorded successfully", &txid[..16.min(txid.len())]);
+    eprintln!(
+        "[ZipherX] TX {} recorded successfully",
+        &txid[..16.min(txid.len())]
+    );
 
     let result = SendResult {
         txid: txid.clone(),
@@ -441,7 +458,8 @@ mod tests {
             memo: None,
         };
 
-        let result = send_transaction(db, &pm, &hs, &ds, &[], &bad_request, &guards, None, 100).await;
+        let result =
+            send_transaction(db, &pm, &hs, &ds, &[], &bad_request, &guards, None, 100).await;
 
         assert!(result.is_err());
     }
@@ -456,8 +474,18 @@ mod tests {
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let pm = PeerManager::new(pm_config);
 
-        let result =
-            send_transaction(db, &pm, &hs, &ds, &[], &make_test_request(), &guards, None, 100).await;
+        let result = send_transaction(
+            db,
+            &pm,
+            &hs,
+            &ds,
+            &[],
+            &make_test_request(),
+            &guards,
+            None,
+            100,
+        )
+        .await;
 
         assert!(matches!(result, Err(CoreError::SyncInProgress)));
     }
@@ -472,8 +500,18 @@ mod tests {
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let pm = PeerManager::new(pm_config);
 
-        let result =
-            send_transaction(db, &pm, &hs, &ds, &[], &make_test_request(), &guards, None, 100).await;
+        let result = send_transaction(
+            db,
+            &pm,
+            &hs,
+            &ds,
+            &[],
+            &make_test_request(),
+            &guards,
+            None,
+            100,
+        )
+        .await;
 
         assert!(matches!(result, Err(CoreError::GapFillInProgress)));
     }
@@ -510,8 +548,18 @@ mod tests {
         let pm = PeerManager::new(pm_config);
 
         // No notes in DB → insufficient balance
-        let result =
-            send_transaction(db, &pm, &hs, &ds, &[], &make_test_request(), &guards, None, 100).await;
+        let result = send_transaction(
+            db,
+            &pm,
+            &hs,
+            &ds,
+            &[],
+            &make_test_request(),
+            &guards,
+            None,
+            100,
+        )
+        .await;
 
         assert!(matches!(result, Err(CoreError::InsufficientBalance { .. })));
     }

@@ -149,21 +149,15 @@ impl FullNodeManager {
         }
         #[cfg(target_os = "linux")]
         {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".zclassic")
+            dirs::home_dir().unwrap_or_default().join(".zclassic")
         }
         #[cfg(target_os = "windows")]
         {
-            dirs::data_dir()
-                .unwrap_or_default()
-                .join("Zclassic")
+            dirs::data_dir().unwrap_or_default().join("Zclassic")
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".zclassic")
+            dirs::home_dir().unwrap_or_default().join(".zclassic")
         }
     }
 
@@ -298,15 +292,18 @@ impl FullNodeManager {
     /// Request graceful shutdown via RPC `stop` command.
     pub fn request_stop(&mut self, rpc: &super::rpc::RpcClient) {
         self.status = DaemonStatus::Stopping;
-        self.log_lines.push("[ZipherX] Requesting daemon shutdown...".to_string());
+        self.log_lines
+            .push("[ZipherX] Requesting daemon shutdown...".to_string());
         match rpc.call("stop", &[]) {
             Ok(_) => {
                 self.log_lines
                     .push("[ZipherX] Daemon stop command sent.".to_string());
             }
             Err(e) => {
-                self.log_lines
-                    .push(format!("[ZipherX] Stop failed: {} — daemon may need manual shutdown", e));
+                self.log_lines.push(format!(
+                    "[ZipherX] Stop failed: {} — daemon may need manual shutdown",
+                    e
+                ));
             }
         }
     }
@@ -317,10 +314,8 @@ impl FullNodeManager {
             match child.try_wait() {
                 Ok(Some(status)) => {
                     // Process exited
-                    self.log_lines.push(format!(
-                        "[ZipherX] Daemon exited with status: {}",
-                        status
-                    ));
+                    self.log_lines
+                        .push(format!("[ZipherX] Daemon exited with status: {}", status));
                     self.child = None;
                     self.status = DaemonStatus::Stopped;
                     false
@@ -383,7 +378,9 @@ fn daemon_search_paths() -> Vec<PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        paths.push(PathBuf::from("/Applications/Zclassic.app/Contents/MacOS/zclassicd"));
+        paths.push(PathBuf::from(
+            "/Applications/Zclassic.app/Contents/MacOS/zclassicd",
+        ));
         paths.push(PathBuf::from("/usr/local/bin/zclassicd"));
         paths.push(home.join("bin/zclassicd"));
     }
@@ -399,7 +396,9 @@ fn daemon_search_paths() -> Vec<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         paths.push(PathBuf::from("C:\\Program Files\\Zclassic\\zclassicd.exe"));
-        paths.push(PathBuf::from("C:\\Program Files (x86)\\Zclassic\\zclassicd.exe"));
+        paths.push(PathBuf::from(
+            "C:\\Program Files (x86)\\Zclassic\\zclassicd.exe",
+        ));
         paths.push(home.join("AppData\\Local\\Programs\\Zclassic\\zclassicd.exe"));
     }
 

@@ -383,10 +383,7 @@ fn handle_unlock(app: &mut ZipherXApp) {
                 app.sync_start_time = Some(std::time::Instant::now());
 
                 // Start background wallet thread
-                let state = sync::start_wallet_thread(
-                    app.data_dir.clone(),
-                    app.storage.clone(),
-                );
+                let state = sync::start_wallet_thread(app.data_dir.clone(), app.storage.clone());
                 app.shared_state = Some(state.clone());
 
                 // Trigger initial sync
@@ -423,8 +420,8 @@ fn handle_unlock(app: &mut ZipherXApp) {
                 app.phase = Phase::Locked;
                 // Show setup options
                 app.setup_mode = None; // Will show create/restore/import buttons
-                // Actually transition: since has_wallet is false, show_password_create
-                // is shown. Once user clicks a button, handle_password_then_setup runs.
+                                       // Actually transition: since has_wallet is false, show_password_create
+                                       // is shown. Once user clicks a button, handle_password_then_setup runs.
             } else {
                 app.password_error = Some(format!("Unlock failed: {}", msg));
             }
@@ -461,11 +458,13 @@ fn handle_password_then_setup(app: &mut ZipherXApp, mode: SetupMode) {
                                 Ok(sk) => {
                                     // Store spending key
                                     if let Err(e) = app.storage.store_key("spending_key", &sk) {
-                                        app.setup_error = Some(format!("Failed to store key: {}", e));
+                                        app.setup_error =
+                                            Some(format!("Failed to store key: {}", e));
                                         return;
                                     }
                                     app.sk_bytes = Some(sk.to_vec());
-                                    app.mnemonic_words = phrase.split_whitespace().map(|w| w.to_string()).collect();
+                                    app.mnemonic_words =
+                                        phrase.split_whitespace().map(|w| w.to_string()).collect();
                                     app.setup_mode = Some(SetupMode::Create);
                                 }
                                 Err(e) => {
@@ -506,22 +505,20 @@ fn handle_restore(app: &mut ZipherXApp) {
 
     let phrase = words.join(" ");
     match zipherx_crypto::mnemonic::to_seed(&phrase) {
-        Ok(seed) => {
-            match zipherx_crypto::keys::derive_spending_key(&seed, 0) {
-                Ok(sk) => {
-                    if let Err(e) = app.storage.store_key("spending_key", &sk) {
-                        app.setup_error = Some(format!("Failed to store key: {}", e));
-                        return;
-                    }
-                    app.sk_bytes = Some(sk.to_vec());
-                    app.mnemonic_input.zeroize();
-                    finalize_wallet(app);
+        Ok(seed) => match zipherx_crypto::keys::derive_spending_key(&seed, 0) {
+            Ok(sk) => {
+                if let Err(e) = app.storage.store_key("spending_key", &sk) {
+                    app.setup_error = Some(format!("Failed to store key: {}", e));
+                    return;
                 }
-                Err(e) => {
-                    app.setup_error = Some(format!("Key derivation failed: {}", e));
-                }
+                app.sk_bytes = Some(sk.to_vec());
+                app.mnemonic_input.zeroize();
+                finalize_wallet(app);
             }
-        }
+            Err(e) => {
+                app.setup_error = Some(format!("Key derivation failed: {}", e));
+            }
+        },
         Err(e) => {
             app.setup_error = Some(format!("Invalid mnemonic: {}", e));
         }
@@ -536,11 +533,9 @@ fn handle_import(app: &mut ZipherXApp) {
     }
 
     let sk_result: Result<Vec<u8>, String> = if key_str.starts_with("secret-extended-key") {
-        zipherx_crypto::keys::decode_spending_key(&key_str)
-            .map_err(|e| format!("{}", e))
+        zipherx_crypto::keys::decode_spending_key(&key_str).map_err(|e| format!("{}", e))
     } else {
-        hex::decode(&key_str)
-            .map_err(|e| format!("Invalid hex: {}", e))
+        hex::decode(&key_str).map_err(|e| format!("Invalid hex: {}", e))
     };
 
     match sk_result {
@@ -586,10 +581,7 @@ fn finalize_wallet(app: &mut ZipherXApp) {
     app.sync_start_time = Some(std::time::Instant::now());
 
     // Start background wallet thread
-    let state = sync::start_wallet_thread(
-        app.data_dir.clone(),
-        app.storage.clone(),
-    );
+    let state = sync::start_wallet_thread(app.data_dir.clone(), app.storage.clone());
     app.shared_state = Some(state.clone());
 
     // Trigger initial sync

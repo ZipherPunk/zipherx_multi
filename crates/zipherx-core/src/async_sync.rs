@@ -251,11 +251,14 @@ pub async fn sync_to_tip(
                 if attempt > 1 {
                     eprintln!(
                         "[ZipherX] Retrying boost download (attempt {}/{}), waiting {}s...",
-                        attempt, BOOST_MAX_RETRIES, attempt * 5,
+                        attempt,
+                        BOOST_MAX_RETRIES,
+                        attempt * 5,
                     );
                     // Keep partial .tmp files for HTTP resume support —
                     // download_boost_file_if_needed will resume from where they stopped.
-                    tokio::time::sleep(tokio::time::Duration::from_secs((attempt * 5) as u64)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs((attempt * 5) as u64))
+                        .await;
 
                     if let Some(ref p) = progress {
                         p(SyncStatus::BoostDownload {
@@ -396,7 +399,9 @@ pub async fn sync_to_tip(
                     // CREATE INDEX. Checkpointing first merges WAL back into the main
                     // DB file and truncates the WAL.
                     if let Err(e) = header_store.checkpoint_wal() {
-                        eprintln!("[ZipherX] WAL checkpoint before index rebuild failed (non-fatal): {e}");
+                        eprintln!(
+                            "[ZipherX] WAL checkpoint before index rebuild failed (non-fatal): {e}"
+                        );
                     }
 
                     // Always restore safe pragmas, even on error
@@ -433,7 +438,10 @@ pub async fn sync_to_tip(
         for attempt in 1..=3 {
             tracing::info!("Peer connection attempt {}/3...", attempt);
 
-            match peer_manager.connect_with_counter(peer_count_ref.as_ref()).await {
+            match peer_manager
+                .connect_with_counter(peer_count_ref.as_ref())
+                .await
+            {
                 Ok(()) => {
                     last_err = None;
                     break;
@@ -1014,25 +1022,27 @@ pub async fn sync_to_tip(
                             // The delta-based HeaderStore is INCOMPLETE — valid anchors may not
                             // be present in it. Checking anchors against HeaderStore caused false
                             // positives → full tree rebuild from boost on every sync.
-                            let has_missing_witnesses = tokio::task::spawn_blocking(move || -> bool {
-                                let notes = match db_c.get_all_unspent_notes(0) {
-                                    Ok(n) => n,
-                                    Err(_) => return false,
-                                };
-                                for note in &notes {
-                                    if note.witness.is_none()
-                                        || note.witness.as_ref().map(|w| w.len()).unwrap_or(0) < 100
-                                    {
-                                        return true; // Missing witness
+                            let has_missing_witnesses =
+                                tokio::task::spawn_blocking(move || -> bool {
+                                    let notes = match db_c.get_all_unspent_notes(0) {
+                                        Ok(n) => n,
+                                        Err(_) => return false,
+                                    };
+                                    for note in &notes {
+                                        if note.witness.is_none()
+                                            || note.witness.as_ref().map(|w| w.len()).unwrap_or(0)
+                                                < 100
+                                        {
+                                            return true; // Missing witness
+                                        }
+                                        if note.anchor.is_none() {
+                                            return true; // No anchor
+                                        }
                                     }
-                                    if note.anchor.is_none() {
-                                        return true; // No anchor
-                                    }
-                                }
-                                false
-                            })
-                            .await
-                            .unwrap_or(false);
+                                    false
+                                })
+                                .await
+                                .unwrap_or(false);
 
                             if has_missing_witnesses {
                                 eprintln!(
@@ -1053,7 +1063,9 @@ pub async fn sync_to_tip(
                                         .parent()
                                         .map(|p| p.join("BoostCache"))
                                         .ok_or_else(|| {
-                                            CoreError::Storage("Cannot determine BoostCache path".into())
+                                            CoreError::Storage(
+                                                "Cannot determine BoostCache path".into(),
+                                            )
                                         })?
                                 };
                                 let manifest_path = boost_cache.join("zipherx_boost_manifest.json");
@@ -1087,8 +1099,9 @@ pub async fn sync_to_tip(
                                     commitment_tree::deserialize(tree_bytes).map_err(|e| {
                                         CoreError::Crypto(format!("Boost tree deserialize: {e}"))
                                     })?;
-                                    commitment_tree::set_position(boost_output_count)
-                                        .map_err(|e| CoreError::Crypto(format!("Set position: {e}")))?;
+                                    commitment_tree::set_position(boost_output_count).map_err(
+                                        |e| CoreError::Crypto(format!("Set position: {e}")),
+                                    )?;
 
                                     eprintln!(
                                         "[ZipherX] Boost tree reloaded for witness rebuild (size={}), appending ALL {} delta CMUs...",
@@ -1123,7 +1136,9 @@ pub async fn sync_to_tip(
                                     .parent()
                                     .map(|p| p.join("BoostCache"))
                                     .ok_or_else(|| {
-                                        CoreError::Storage("Cannot determine BoostCache path".into())
+                                        CoreError::Storage(
+                                            "Cannot determine BoostCache path".into(),
+                                        )
                                     })?
                             };
                             let manifest_path = boost_cache.join("zipherx_boost_manifest.json");
@@ -1278,7 +1293,9 @@ pub async fn sync_to_tip(
 
                                     if global_cmu_idx < skip_count {
                                         global_cmu_idx += 1;
-                                        if !is_new { dedup_skipped += 1; }
+                                        if !is_new {
+                                            dedup_skipped += 1;
+                                        }
                                         continue;
                                     }
                                     global_cmu_idx += 1;
@@ -1324,7 +1341,9 @@ pub async fn sync_to_tip(
 
                                     if global_cmu_idx < skip_count {
                                         global_cmu_idx += 1;
-                                        if !is_new { dedup_skipped += 1; }
+                                        if !is_new {
+                                            dedup_skipped += 1;
+                                        }
                                         continue;
                                     }
                                     global_cmu_idx += 1;
@@ -1369,10 +1388,7 @@ pub async fn sync_to_tip(
                         .map_err(|e| CoreError::RuntimeError(e.to_string()))?
                         .map_err(|e| CoreError::Storage(e.to_string()))?;
 
-                        eprintln!(
-                            "[ZipherX] Delta CMUs loaded: tree_size={}",
-                            new_size,
-                        );
+                        eprintln!("[ZipherX] Delta CMUs loaded: tree_size={}", new_size,);
 
                         // FIX #1300: Validate tree root BEFORE storing witnesses.
                         // If the combined (boost + delta) tree root doesn't match any
@@ -1386,9 +1402,7 @@ pub async fn sync_to_tip(
                             .unwrap_or(false);
 
                         if root_valid {
-                            eprintln!(
-                                "[ZipherX] Tree root validated OK — storing witnesses",
-                            );
+                            eprintln!("[ZipherX] Tree root validated OK — storing witnesses",);
 
                             // Serialize and store witnesses in DB (only if root is valid)
                             if !witness_map.is_empty() {
@@ -1396,10 +1410,12 @@ pub async fn sync_to_tip(
                                 for &(cmu_arr, witness_idx) in &witness_map {
                                     let wb = commitment_tree::get_witness_serialized(witness_idx)
                                         .map_err(|e| {
-                                            CoreError::Crypto(format!("Witness serialize: {e}"))
-                                        })?;
+                                        CoreError::Crypto(format!("Witness serialize: {e}"))
+                                    })?;
                                     let anchor = commitment_tree::get_witness_root(witness_idx)
-                                        .map_err(|e| CoreError::Crypto(format!("Witness root: {e}")))?;
+                                        .map_err(|e| {
+                                            CoreError::Crypto(format!("Witness root: {e}"))
+                                        })?;
 
                                     if let Some(&(note_id, _value)) = note_cmu_to_id.get(&cmu_arr) {
                                         match commitment_tree::verify_witness_consistency(&wb) {
@@ -1423,15 +1439,20 @@ pub async fn sync_to_tip(
                                 if !witness_updates.is_empty() {
                                     let update_count = witness_updates.len();
                                     let db_c = db.clone();
-                                    tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
-                                        for (note_id, witness, anchor) in &witness_updates {
-                                            db_c.update_note_witness(*note_id, witness)
-                                                .map_err(|e| CoreError::Storage(e.to_string()))?;
-                                            db_c.update_note_anchor(*note_id, anchor)
-                                                .map_err(|e| CoreError::Storage(e.to_string()))?;
-                                        }
-                                        Ok(())
-                                    })
+                                    tokio::task::spawn_blocking(
+                                        move || -> Result<(), CoreError> {
+                                            for (note_id, witness, anchor) in &witness_updates {
+                                                db_c.update_note_witness(*note_id, witness)
+                                                    .map_err(|e| {
+                                                        CoreError::Storage(e.to_string())
+                                                    })?;
+                                                db_c.update_note_anchor(*note_id, anchor).map_err(
+                                                    |e| CoreError::Storage(e.to_string()),
+                                                )?;
+                                            }
+                                            Ok(())
+                                        },
+                                    )
                                     .await
                                     .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
 
@@ -1459,19 +1480,25 @@ pub async fn sync_to_tip(
                             // Clear any existing witnesses for these notes (safety: prevent
                             // stale anchors from previous syncs from persisting)
                             if !witness_map.is_empty() {
-                                let note_ids: Vec<i64> = witness_map.iter()
-                                    .filter_map(|(cmu_arr, _)| note_cmu_to_id.get(cmu_arr).map(|(id, _)| *id))
+                                let note_ids: Vec<i64> = witness_map
+                                    .iter()
+                                    .filter_map(|(cmu_arr, _)| {
+                                        note_cmu_to_id.get(cmu_arr).map(|(id, _)| *id)
+                                    })
                                     .collect();
                                 if !note_ids.is_empty() {
                                     let cleared_count = note_ids.len();
                                     let db_c = db.clone();
-                                    tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
-                                        for note_id in &note_ids {
-                                            db_c.clear_witness_for_note(*note_id)
-                                                .map_err(|e| CoreError::Storage(e.to_string()))?;
-                                        }
-                                        Ok(())
-                                    })
+                                    tokio::task::spawn_blocking(
+                                        move || -> Result<(), CoreError> {
+                                            for note_id in &note_ids {
+                                                db_c.clear_witness_for_note(*note_id).map_err(
+                                                    |e| CoreError::Storage(e.to_string()),
+                                                )?;
+                                            }
+                                            Ok(())
+                                        },
+                                    )
                                     .await
                                     .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
 
@@ -2026,10 +2053,7 @@ pub async fn sync_to_tip(
         );
         let db_c = db.clone();
         let bch = boost_height_for_reset;
-        let _ = tokio::task::spawn_blocking(move || {
-            db_c.update_last_scanned_height(bch)
-        })
-        .await;
+        let _ = tokio::task::spawn_blocking(move || db_c.update_last_scanned_height(bch)).await;
 
         // Reload tree from boost file to discard partial/wrong CMUs
         let boost_cache = delta_store
@@ -2047,7 +2071,10 @@ pub async fn sync_to_tip(
                         let ts_clone = ts.clone();
                         if let Ok(td) = tokio::task::spawn_blocking(move || {
                             boost_download::read_section(&bf_str, &ts_clone)
-                        }).await.unwrap_or(Err(CoreError::Storage("spawn failed".into()))) {
+                        })
+                        .await
+                        .unwrap_or(Err(CoreError::Storage("spawn failed".into())))
+                        {
                             let tree_bytes = if td.len() > 8 { &td[8..] } else { &td[..] };
                             if commitment_tree::deserialize(tree_bytes).is_ok() {
                                 let _ = commitment_tree::set_position(boost_output_count_for_reset);
@@ -2056,7 +2083,8 @@ pub async fn sync_to_tip(
                                     let boc = boost_output_count_for_reset;
                                     let _ = tokio::task::spawn_blocking(move || {
                                         db_c2.save_tree_state(&tree_data, boc)
-                                    }).await;
+                                    })
+                                    .await;
                                 }
                                 eprintln!(
                                     "[ZipherX] Tree reset to boost state (size={}). Next sync will rescan all post-boost blocks.",
@@ -2221,19 +2249,26 @@ pub async fn sync_to_tip(
         );
     }
     if !tree_needs_reset {
-    match rebuild_witnesses_if_needed(delta_store, db.clone(), header_store, boost_cache_dir.as_deref()).await {
-        Ok(rebuilt) => {
-            if rebuilt > 0 {
-                eprintln!(
-                    "[ZipherX] Witness rebuild: {} notes now have witnesses (spendable!)",
-                    rebuilt,
-                );
+        match rebuild_witnesses_if_needed(
+            delta_store,
+            db.clone(),
+            header_store,
+            boost_cache_dir.as_deref(),
+        )
+        .await
+        {
+            Ok(rebuilt) => {
+                if rebuilt > 0 {
+                    eprintln!(
+                        "[ZipherX] Witness rebuild: {} notes now have witnesses (spendable!)",
+                        rebuilt,
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("[ZipherX] Witness rebuild error (non-fatal): {e}");
             }
         }
-        Err(e) => {
-            eprintln!("[ZipherX] Witness rebuild error (non-fatal): {e}");
-        }
-    }
     } // end if !tree_needs_reset
 
     // ============================================================
@@ -2483,10 +2518,7 @@ pub async fn sync_to_tip(
                 let db_bal = db.clone();
                 if let Ok(bal) = tokio::task::spawn_blocking(move || db_bal.get_balance(0)).await {
                     if let Ok(spendable) = bal {
-                        eprintln!(
-                            "[ZipherX] Post-recovery spendable balance: {}",
-                            spendable
-                        );
+                        eprintln!("[ZipherX] Post-recovery spendable balance: {}", spendable);
                     }
                 }
             }
@@ -2906,10 +2938,10 @@ pub async fn rebuild_witnesses_if_needed(
 
     // DIAGNOSTIC: Log tree root after rebuild and compare with blockchain
     {
-        let rebuilt_root = commitment_tree::root()
-            .map_err(|e| CoreError::Crypto(format!("Tree root: {e}")))?;
-        let rebuilt_size = commitment_tree::size()
-            .map_err(|e| CoreError::Crypto(format!("Tree size: {e}")))?;
+        let rebuilt_root =
+            commitment_tree::root().map_err(|e| CoreError::Crypto(format!("Tree root: {e}")))?;
+        let rebuilt_size =
+            commitment_tree::size().map_err(|e| CoreError::Crypto(format!("Tree size: {e}")))?;
         let root_hex = hex::encode(&rebuilt_root);
         let root_rev_hex = hex::encode(rebuilt_root.iter().rev().copied().collect::<Vec<u8>>());
         eprintln!(
@@ -2935,7 +2967,8 @@ pub async fn rebuild_witnesses_if_needed(
             if let Some(tip_height) = tip {
                 if let Ok(Some(blockchain_root)) = _header_store.get_sapling_root(tip_height) {
                     let blockchain_hex = hex::encode(&blockchain_root);
-                    let blockchain_rev_hex = hex::encode(blockchain_root.iter().rev().copied().collect::<Vec<u8>>());
+                    let blockchain_rev_hex =
+                        hex::encode(blockchain_root.iter().rev().copied().collect::<Vec<u8>>());
                     eprintln!(
                         "[ZipherX] DIAG: blockchain root at tip {}: {}",
                         tip_height, blockchain_hex,
@@ -2944,8 +2977,10 @@ pub async fn rebuild_witnesses_if_needed(
                         "[ZipherX] DIAG: blockchain root reversed: {}",
                         blockchain_rev_hex,
                     );
-                    if root_hex == blockchain_hex || root_hex == blockchain_rev_hex
-                        || root_rev_hex == blockchain_hex || root_rev_hex == blockchain_rev_hex
+                    if root_hex == blockchain_hex
+                        || root_hex == blockchain_rev_hex
+                        || root_rev_hex == blockchain_hex
+                        || root_rev_hex == blockchain_rev_hex
                     {
                         eprintln!("[ZipherX] DIAG: *** ROOT MATCHES (byte order issue in contains_sapling_root) ***");
                     } else {
@@ -2954,7 +2989,10 @@ pub async fn rebuild_witnesses_if_needed(
                         );
                     }
                 } else {
-                    eprintln!("[ZipherX] DIAG: no sapling root in header store at tip {}", tip_height);
+                    eprintln!(
+                        "[ZipherX] DIAG: no sapling root in header store at tip {}",
+                        tip_height
+                    );
                 }
             }
         }
@@ -3143,10 +3181,7 @@ async fn boost_scan_if_needed(
         let boost_file = boost_cache_dir.join("zipherx_boost_v1.bin");
         let manifest_file = boost_cache_dir.join("zipherx_boost_manifest.json");
 
-        eprintln!(
-            "[ZipherX] Boost scan: checking {}",
-            boost_file.display(),
-        );
+        eprintln!("[ZipherX] Boost scan: checking {}", boost_file.display(),);
 
         if boost_file.exists() && manifest_file.exists() {
             let size = std::fs::metadata(&boost_file).map(|m| m.len()).unwrap_or(0);
@@ -3627,8 +3662,11 @@ async fn post_boost_delta_scan(
 ) -> Result<(u32, usize), CoreError> {
     // Dedup delta store on disk (removes duplicates accumulated from no_dedup appends)
     match delta_store.dedup_outputs() {
-        Ok(0) => {},
-        Ok(n) => eprintln!("[ZipherX] Post-boost scan: deduped delta store, removed {} duplicates", n),
+        Ok(0) => {}
+        Ok(n) => eprintln!(
+            "[ZipherX] Post-boost scan: deduped delta store, removed {} duplicates",
+            n
+        ),
         Err(e) => eprintln!("[ZipherX] Post-boost scan: dedup warning: {}", e),
     }
 
@@ -5159,9 +5197,7 @@ async fn scan_blocks_for_pending_txs(
         .map_err(|e| CoreError::RuntimeError(e.to_string()))?
         .map_err(|e| CoreError::Storage(e.to_string()))?;
 
-    let has_pending_sends = pending_txs
-        .iter()
-        .any(|tx| tx.tx_type == TxType::Sent);
+    let has_pending_sends = pending_txs.iter().any(|tx| tx.tx_type == TxType::Sent);
 
     if !has_pending_sends {
         return Ok((0, 0));
@@ -5174,12 +5210,11 @@ async fn scan_blocks_for_pending_txs(
 
     // Get last scanned height
     let db_c = db.clone();
-    let last_scanned = tokio::task::spawn_blocking(move || {
-        db_c.get_sync_state().map(|s| s.last_scanned_height)
-    })
-    .await
-    .map_err(|e| CoreError::RuntimeError(e.to_string()))?
-    .map_err(|e| CoreError::Storage(e.to_string()))?;
+    let last_scanned =
+        tokio::task::spawn_blocking(move || db_c.get_sync_state().map(|s| s.last_scanned_height))
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
 
     let scan_start = if last_scanned > 0 {
         last_scanned + 1
@@ -5274,8 +5309,16 @@ async fn scan_blocks_for_pending_txs(
 
         // Persist to delta store
         if !chunk_delta_outputs.is_empty() {
-            let min_h = chunk_delta_outputs.iter().map(|o| o.height as u64).min().expect("chunk_delta_outputs confirmed non-empty");
-            let max_h = chunk_delta_outputs.iter().map(|o| o.height as u64).max().expect("chunk_delta_outputs confirmed non-empty");
+            let min_h = chunk_delta_outputs
+                .iter()
+                .map(|o| o.height as u64)
+                .min()
+                .expect("chunk_delta_outputs confirmed non-empty");
+            let max_h = chunk_delta_outputs
+                .iter()
+                .map(|o| o.height as u64)
+                .max()
+                .expect("chunk_delta_outputs confirmed non-empty");
             delta_store
                 .append_outputs(&chunk_delta_outputs, min_h, max_h, None)
                 .map_err(|e| CoreError::Storage(e.to_string()))?;
@@ -5311,7 +5354,9 @@ async fn scan_blocks_for_pending_txs(
                 txid_display.reverse();
                 eprintln!(
                     "[ZipherX]   Pending TX scan note: height={}, value={} zatoshis, txid={}...",
-                    note.height, note.note.value, &hex::encode(txid_display)[..16],
+                    note.height,
+                    note.note.value,
+                    &hex::encode(txid_display)[..16],
                 );
             }
             total_notes_found += chunk_notes.len() as u32;
@@ -5322,7 +5367,13 @@ async fn scan_blocks_for_pending_txs(
                     let memo_str = if note.note.memo.iter().all(|&b| b == 0) {
                         None
                     } else {
-                        let trimmed: Vec<u8> = note.note.memo.iter().copied().take_while(|&b| b != 0).collect();
+                        let trimmed: Vec<u8> = note
+                            .note
+                            .memo
+                            .iter()
+                            .copied()
+                            .take_while(|&b| b != 0)
+                            .collect();
                         String::from_utf8(trimmed).ok()
                     };
 

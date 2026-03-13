@@ -17,7 +17,9 @@ use crate::types::*;
 /// This pattern is used instead of unwrap() to prevent app crashes when
 /// a thread panics while holding the database lock. The recovered state
 /// may be inconsistent if the panic occurred mid-transaction.
-fn recover_lock(result: std::sync::LockResult<MutexGuard<'_, rusqlite::Connection>>) -> MutexGuard<'_, rusqlite::Connection> {
+fn recover_lock(
+    result: std::sync::LockResult<MutexGuard<'_, rusqlite::Connection>>,
+) -> MutexGuard<'_, rusqlite::Connection> {
     match result {
         Ok(guard) => guard,
         Err(e) => {
@@ -478,12 +480,14 @@ impl WalletDatabase {
 
         for txid in &unconfirmed_txids {
             // Check if this TX was confirmed in any block
-            let confirmed: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM transaction_history
+            let confirmed: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM transaction_history
                  WHERE txid = ?1 AND height > 0",
-                params![txid],
-                |row| row.get(0),
-            ).unwrap_or(0);
+                    params![txid],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
 
             if confirmed > 0 {
                 continue; // TX was mined — don't recover
@@ -493,11 +497,14 @@ impl WalletDatabase {
             // The note height is when the note was RECEIVED, which could be thousands
             // of blocks ago. The broadcast time is when the TX was actually sent.
             // Without a valid timestamp, we cannot determine expiry — skip recovery.
-            let tx_timestamp: Option<i64> = conn.query_row(
-                "SELECT timestamp FROM transaction_history WHERE txid = ?1",
-                params![txid],
-                |row| row.get(0),
-            ).ok().flatten();
+            let tx_timestamp: Option<i64> = conn
+                .query_row(
+                    "SELECT timestamp FROM transaction_history WHERE txid = ?1",
+                    params![txid],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
 
             let expired = match tx_timestamp {
                 Some(ts) if ts > 0 => {
@@ -523,12 +530,14 @@ impl WalletDatabase {
 
             if expired {
                 // Restore notes
-                let value: i64 = conn.query_row(
-                    "SELECT COALESCE(SUM(value), 0) FROM notes
+                let value: i64 = conn
+                    .query_row(
+                        "SELECT COALESCE(SUM(value), 0) FROM notes
                      WHERE spent_in_tx = ?1 AND is_spent = 1",
-                    params![txid],
-                    |row| row.get(0),
-                ).unwrap_or(0);
+                        params![txid],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(0);
 
                 let restored = conn.execute(
                     "UPDATE notes SET is_spent = 0, spent_in_tx = NULL, spent_height = NULL

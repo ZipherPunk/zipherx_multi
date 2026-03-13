@@ -706,9 +706,7 @@ pub async fn download_boost_file_if_needed(
                 let part_path_str = part_path.to_string_lossy().to_string();
 
                 // Check if partial file exists for resume
-                let existing_size = std::fs::metadata(&part_path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                let existing_size = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
 
                 if existing_size > 0 {
                     eprintln!(
@@ -795,7 +793,9 @@ pub async fn download_boost_file_if_needed(
                         std::fs::OpenOptions::new()
                             .append(true)
                             .open(&pp)
-                            .map_err(|e| CoreError::Storage(format!("Open part file for append: {e}")))?
+                            .map_err(|e| {
+                                CoreError::Storage(format!("Open part file for append: {e}"))
+                            })?
                     } else {
                         std::fs::File::create(&pp)
                             .map_err(|e| CoreError::Storage(format!("Create part file: {e}")))?
@@ -829,9 +829,11 @@ pub async fn download_boost_file_if_needed(
                         Ok(Ok(Some(c))) => c,
                         Ok(Ok(None)) => break, // stream finished
                         Ok(Err(e)) => return Err(CoreError::Storage(format!("Read chunk: {e}"))),
-                        Err(_) => return Err(CoreError::Storage(
-                            "Read chunk: no data received for 120s (stalled connection)".into(),
-                        )),
+                        Err(_) => {
+                            return Err(CoreError::Storage(
+                                "Read chunk: no data received for 120s (stalled connection)".into(),
+                            ))
+                        }
                     };
                     let chunk_len = chunk.len() as u64;
                     local_buf.extend_from_slice(&chunk);
@@ -842,9 +844,8 @@ pub async fn download_boost_file_if_needed(
                     if local_buf.len() >= 16 * 1024 * 1024 {
                         let buf_data =
                             std::mem::replace(&mut local_buf, Vec::with_capacity(16 * 1024 * 1024));
-                        tx.send(buf_data).map_err(|_| {
-                            CoreError::Storage("Writer thread died".into())
-                        })?;
+                        tx.send(buf_data)
+                            .map_err(|_| CoreError::Storage("Writer thread died".into()))?;
                     }
 
                     // Report progress every ~256KB for responsive UI
@@ -866,9 +867,8 @@ pub async fn download_boost_file_if_needed(
 
                 // Send remaining buffer
                 if !local_buf.is_empty() {
-                    tx.send(local_buf).map_err(|_| {
-                        CoreError::Storage("Writer thread died".into())
-                    })?;
+                    tx.send(local_buf)
+                        .map_err(|_| CoreError::Storage("Writer thread died".into()))?;
                 }
 
                 // Drop sender to signal writer thread to finish

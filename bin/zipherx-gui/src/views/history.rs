@@ -107,13 +107,9 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             );
                             ui.add_space(4.0);
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "{}{} ZCL",
-                                    sign,
-                                    fmt_zcl(tx.amount)
-                                ))
-                                .font(theme::mono(13.0))
-                                .color(color),
+                                egui::RichText::new(format!("{}{} ZCL", sign, fmt_zcl(tx.amount)))
+                                    .font(theme::mono(13.0))
+                                    .color(color),
                             );
 
                             ui.with_layout(
@@ -136,12 +132,9 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     // Height
                                     if tx.height > 0 {
                                         ui.label(
-                                            egui::RichText::new(format!(
-                                                "block {}",
-                                                tx.height
-                                            ))
-                                            .font(theme::mono(10.0))
-                                            .color(theme::MUTED),
+                                            egui::RichText::new(format!("block {}", tx.height))
+                                                .font(theme::mono(10.0))
+                                                .color(theme::MUTED),
                                         );
                                         ui.add_space(6.0);
                                     }
@@ -193,17 +186,17 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             if tx.height > 0 {
                                 detail_row(ui, "Height", &tx.height.to_string());
                             }
-                            detail_row(
-                                ui,
-                                "Confirmations",
-                                &tx.confirmations.to_string(),
-                            );
+                            detail_row(ui, "Confirmations", &tx.confirmations.to_string());
                         }
                     });
 
                 // Click on FULL frame rect (including margins) to expand/collapse
                 let click_rect = frame_resp.response.rect;
-                let click_resp = ui.interact(click_rect, egui::Id::new(("tx_row", i)), egui::Sense::click());
+                let click_resp = ui.interact(
+                    click_rect,
+                    egui::Id::new(("tx_row", i)),
+                    egui::Sense::click(),
+                );
                 if click_resp.clicked() {
                     app.history_expanded = if app.history_expanded == Some(i) {
                         None
@@ -213,7 +206,8 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 }
                 // Hover effect
                 if click_resp.hovered() {
-                    ui.painter().rect_filled(click_rect, 0.0, egui::Color32::from_white_alpha(5));
+                    ui.painter()
+                        .rect_filled(click_rect, 0.0, egui::Color32::from_white_alpha(5));
                 }
             }
         });
