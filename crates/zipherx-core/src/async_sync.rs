@@ -5536,6 +5536,8 @@ fn reconstruct_compact_blocks(
                 final_sapling_root: [0u8; 32],
                 outputs: block_outputs,
                 spends,
+                transparent_outputs: vec![],
+                transparent_inputs: vec![],
             }
         })
         .collect()

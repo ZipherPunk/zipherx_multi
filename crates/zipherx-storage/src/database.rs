@@ -2421,6 +2421,115 @@ impl WalletDatabase {
         Ok(())
     }
 
+    // ====================================================================
+    // Transparent UTXO operations
+    // ====================================================================
+
+    /// Insert a transparent UTXO discovered during block scanning.
+    pub fn insert_transparent_utxo(
+        &self,
+        height: u64,
+        txid: &str,
+        output_index: u32,
+        script_pubkey: &[u8],
+        address: &str,
+        value: u64,
+        is_change: bool,
+        child_index: u32,
+    ) -> Result<i64, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        conn.execute(
+            "INSERT OR IGNORE INTO transparent_utxos
+                (account_id, height, txid, output_index, script_pubkey, address, value, is_change, child_index)
+             VALUES (0, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                height as i64,
+                txid,
+                output_index,
+                script_pubkey,
+                address,
+                value as i64,
+                is_change as i32,
+                child_index,
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Get all unspent transparent UTXOs.
+    pub fn get_unspent_transparent_utxos(&self) -> Result<Vec<TransparentUtxo>, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let mut stmt = conn.prepare(
+            "SELECT id, height, txid, output_index, script_pubkey, address, value, is_change, child_index
+             FROM transparent_utxos WHERE is_spent = 0 ORDER BY height",
+        )?;
+        let utxos = stmt
+            .query_map([], |row| {
+                Ok(TransparentUtxo {
+                    id: row.get(0)?,
+                    height: row.get::<_, i64>(1)? as u64,
+                    txid: row.get(2)?,
+                    output_index: row.get::<_, i64>(3)? as u32,
+                    script_pubkey: row.get(4)?,
+                    address: row.get(5)?,
+                    value: row.get::<_, i64>(6)? as u64,
+                    is_change: row.get::<_, i32>(7)? != 0,
+                    child_index: row.get::<_, i64>(8)? as u32,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(utxos)
+    }
+
+    /// Get the total transparent balance (sum of unspent UTXOs).
+    pub fn get_transparent_balance(&self) -> Result<u64, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let balance: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(value), 0) FROM transparent_utxos WHERE is_spent = 0",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(balance as u64)
+    }
+
+    /// Mark a transparent UTXO as spent.
+    pub fn mark_transparent_utxo_spent(
+        &self,
+        txid: &str,
+        output_index: u32,
+        spent_in_tx: &str,
+        spent_height: u64,
+    ) -> Result<bool, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let updated = conn.execute(
+            "UPDATE transparent_utxos SET is_spent = 1, spent_in_tx = ?1, spent_height = ?2
+             WHERE txid = ?3 AND output_index = ?4 AND is_spent = 0",
+            params![spent_in_tx, spent_height as i64, txid, output_index],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Mark a transparent UTXO as spent by matching prevout (txid + index).
+    /// Used during block scanning when we see a vin referencing our UTXO.
+    pub fn mark_transparent_spent_by_prevout(
+        &self,
+        prevout_txid: &str,
+        prevout_index: u32,
+        spending_txid: &str,
+        height: u64,
+    ) -> Result<bool, StorageError> {
+        self.mark_transparent_utxo_spent(prevout_txid, prevout_index, spending_txid, height)
+    }
+
+    /// Delete all transparent UTXOs (for rescan).
+    pub fn delete_all_transparent_utxos(&self) -> Result<(), StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        conn.execute("DELETE FROM transparent_utxos", [])?;
+        Ok(())
+    }
+
     /// Check if the delta store should be cleared (set by migration v4).
     /// Returns true if the flag is set, then clears it.
     pub fn check_and_clear_redownload_flag(&self) -> Result<bool, StorageError> {

@@ -4,7 +4,7 @@
 //! Uses SQLCipher (AES-256 encrypted SQLite) for at-rest encryption.
 
 /// Schema version — increment when tables change.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Create the notes table (shielded notes / received ZCL).
 pub const CREATE_NOTES_TABLE: &str = "
@@ -85,6 +85,25 @@ CREATE TABLE IF NOT EXISTS delta_manifest (
     last_updated INTEGER NOT NULL DEFAULT 0
 )";
 
+/// Create the transparent UTXOs table.
+pub const CREATE_TRANSPARENT_UTXOS_TABLE: &str = "
+CREATE TABLE IF NOT EXISTS transparent_utxos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL DEFAULT 0,
+    height INTEGER NOT NULL,
+    txid TEXT NOT NULL,
+    output_index INTEGER NOT NULL,
+    script_pubkey BLOB NOT NULL,
+    address TEXT NOT NULL,
+    value INTEGER NOT NULL,
+    is_change INTEGER NOT NULL DEFAULT 0,
+    child_index INTEGER NOT NULL DEFAULT 0,
+    is_spent INTEGER NOT NULL DEFAULT 0,
+    spent_in_tx TEXT,
+    spent_height INTEGER,
+    UNIQUE(txid, output_index)
+)";
+
 /// Create the sapling roots lookup table.
 pub const CREATE_SAPLING_ROOTS_TABLE: &str = "
 CREATE TABLE IF NOT EXISTS sapling_roots (
@@ -105,6 +124,9 @@ pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_headers_hash ON block_headers(hash)",
     "CREATE INDEX IF NOT EXISTS idx_sapling_roots_root ON sapling_roots(root)",
     "CREATE INDEX IF NOT EXISTS idx_sapling_roots_reversed ON sapling_roots(root_reversed)",
+    "CREATE INDEX IF NOT EXISTS idx_transparent_utxos_address ON transparent_utxos(address)",
+    "CREATE INDEX IF NOT EXISTS idx_transparent_utxos_spent ON transparent_utxos(is_spent)",
+    "CREATE INDEX IF NOT EXISTS idx_transparent_utxos_height ON transparent_utxos(height)",
 ];
 
 /// All schema creation statements in order.
@@ -116,6 +138,7 @@ pub fn all_create_statements() -> Vec<&'static str> {
         CREATE_HEADERS_TABLE,
         CREATE_DELTA_MANIFEST_TABLE,
         CREATE_SAPLING_ROOTS_TABLE,
+        CREATE_TRANSPARENT_UTXOS_TABLE,
     ];
     stmts.extend_from_slice(CREATE_INDEXES);
     stmts

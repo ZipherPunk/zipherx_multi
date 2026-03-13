@@ -40,7 +40,31 @@ pub struct ShieldedSpend {
     pub nullifier: [u8; 32],
 }
 
-/// A parsed block with extracted Sapling data.
+/// A transparent output extracted from a raw block.
+#[derive(Debug, Clone)]
+pub struct TransparentOutput {
+    /// Transaction ID (32 bytes, internal byte order).
+    pub txid: [u8; 32],
+    /// Output index within the transaction.
+    pub output_index: u32,
+    /// Value in zatoshis.
+    pub value: u64,
+    /// Raw scriptPubKey bytes.
+    pub script_pubkey: Vec<u8>,
+}
+
+/// A transparent input (spend) extracted from a raw block.
+#[derive(Debug, Clone)]
+pub struct TransparentInput {
+    /// Transaction ID of the spending transaction.
+    pub spending_txid: [u8; 32],
+    /// Previous output transaction ID being spent.
+    pub prevout_txid: [u8; 32],
+    /// Previous output index being spent.
+    pub prevout_index: u32,
+}
+
+/// A parsed block with extracted Sapling and transparent data.
 #[derive(Debug, Clone)]
 pub struct CompactBlock {
     /// Block height.
@@ -55,6 +79,10 @@ pub struct CompactBlock {
     pub outputs: Vec<ShieldedOutput>,
     /// Shielded spends in this block.
     pub spends: Vec<ShieldedSpend>,
+    /// Transparent outputs in this block.
+    pub transparent_outputs: Vec<TransparentOutput>,
+    /// Transparent inputs (spends) in this block.
+    pub transparent_inputs: Vec<TransparentInput>,
 }
 
 /// Configuration for adaptive TCP pacing (FIX #1197).
@@ -144,6 +172,8 @@ pub fn parse_raw_block(
 
     let mut outputs = Vec::new();
     let mut spends = Vec::new();
+    let mut transparent_outputs = Vec::new();
+    let mut transparent_inputs = Vec::new();
 
     // Parse each transaction
     for _tx_idx in 0..tx_count {
@@ -151,12 +181,14 @@ pub fn parse_raw_block(
             break;
         }
 
-        // Parse transaction and extract Sapling data
+        // Parse transaction and extract Sapling + transparent data
         match parse_transaction(&data[offset..]) {
-            Some((tx_size, _txid, tx_outputs, tx_spends)) => {
+            Some((tx_size, _txid, tx_outputs, tx_spends, tx_t_outputs, tx_t_inputs)) => {
                 offset += tx_size;
                 outputs.extend(tx_outputs);
                 spends.extend(tx_spends);
+                transparent_outputs.extend(tx_t_outputs);
+                transparent_inputs.extend(tx_t_inputs);
             }
             None => {
                 // Skip rest of block if a TX fails to parse
@@ -172,6 +204,8 @@ pub fn parse_raw_block(
         final_sapling_root: header.final_sapling_root,
         outputs,
         spends,
+        transparent_outputs,
+        transparent_inputs,
     })
 }
 
@@ -190,7 +224,14 @@ pub fn parse_raw_block(
 /// - binding_sig (64) — only if shielded data present
 pub fn parse_transaction(
     data: &[u8],
-) -> Option<(usize, [u8; 32], Vec<ShieldedOutput>, Vec<ShieldedSpend>)> {
+) -> Option<(
+    usize,
+    [u8; 32],
+    Vec<ShieldedOutput>,
+    Vec<ShieldedSpend>,
+    Vec<TransparentOutput>,
+    Vec<TransparentInput>,
+)> {
     if data.len() < 12 {
         return None;
     }
@@ -208,6 +249,9 @@ pub fn parse_transaction(
     let _version_group = u32::from_le_bytes(data[offset..offset + 4].try_into().ok()?);
     offset += 4;
 
+    let mut t_inputs = Vec::new();
+    let mut t_outputs = Vec::new();
+
     // Transparent inputs (vin)
     let (vin_count, sz) = messages::read_compact_size(data, offset)?;
     // NET-002: Cap vin/vout counts to prevent memory exhaustion
@@ -219,6 +263,20 @@ pub fn parse_transaction(
         if offset + 36 > data.len() {
             return None;
         }
+        // Capture prevout hash + index for transparent spend tracking
+        let mut prevout_txid = [0u8; 32];
+        prevout_txid.copy_from_slice(&data[offset..offset + 32]);
+        let prevout_index = u32::from_le_bytes(data[offset + 32..offset + 36].try_into().ok()?);
+
+        // Skip coinbase inputs (prevout hash is all zeros)
+        if prevout_txid != [0u8; 32] {
+            t_inputs.push(TransparentInput {
+                spending_txid: [0u8; 32], // patched after txid computation
+                prevout_txid,
+                prevout_index,
+            });
+        }
+
         offset += 36; // prevout hash (32) + index (4)
         let (script_len, sz) = messages::read_compact_size(data, offset)?;
         offset += sz;
@@ -239,17 +297,28 @@ pub fn parse_transaction(
         return None;
     }
     offset += sz;
-    for _ in 0..vout_count {
+    for vout_idx in 0..vout_count {
         if offset + 8 > data.len() {
             return None;
         }
+        let value = u64::from_le_bytes(data[offset..offset + 8].try_into().ok()?);
         offset += 8; // value
         let (script_len, sz) = messages::read_compact_size(data, offset)?;
         offset += sz;
+        let script_start = offset;
         // NET-002: Checked addition to prevent overflow
         offset = offset
             .checked_add(script_len as usize)
             .filter(|&o| o <= data.len())?; // scriptPubKey
+
+        // Capture the output data
+        let script_pubkey = data[script_start..offset].to_vec();
+        t_outputs.push(TransparentOutput {
+            txid: [0u8; 32], // patched after txid computation
+            output_index: vout_idx as u32,
+            value,
+            script_pubkey,
+        });
     }
 
     // lock_time (4) + expiry_height (4)
@@ -362,8 +431,14 @@ pub fn parse_transaction(
     for s in &mut spends {
         s.txid = txid;
     }
+    for o in &mut t_outputs {
+        o.txid = txid;
+    }
+    for i in &mut t_inputs {
+        i.spending_txid = txid;
+    }
 
-    Some((offset, txid, outputs, spends))
+    Some((offset, txid, outputs, spends, t_outputs, t_inputs))
 }
 
 /// Compute txid: double-SHA256 of the full serialized transaction bytes.
@@ -414,7 +489,7 @@ pub fn meets_threshold(received: usize, expected: usize) -> bool {
 /// Parse a raw transaction from P2P `tx` message payload.
 /// Returns (txid, shielded_outputs, shielded_spends) or None.
 pub fn parse_raw_tx(data: &[u8]) -> Option<([u8; 32], Vec<ShieldedOutput>, Vec<ShieldedSpend>)> {
-    let (_size, txid, outputs, spends) = parse_transaction(data)?;
+    let (_size, txid, outputs, spends, _t_outputs, _t_inputs) = parse_transaction(data)?;
     Some((txid, outputs, spends))
 }
 
@@ -435,6 +510,8 @@ mod tests {
             final_sapling_root: [0xCD; 32],
             outputs: vec![],
             spends: vec![],
+            transparent_outputs: vec![],
+            transparent_inputs: vec![],
         };
         assert_eq!(block.height, 500_000);
         assert!(block.outputs.is_empty());
@@ -470,6 +547,8 @@ mod tests {
                 final_sapling_root: [0; 32],
                 outputs: vec![],
                 spends: vec![],
+                transparent_outputs: vec![],
+                transparent_inputs: vec![],
             },
             CompactBlock {
                 height: 100,
@@ -478,6 +557,8 @@ mod tests {
                 final_sapling_root: [0; 32],
                 outputs: vec![],
                 spends: vec![],
+                transparent_outputs: vec![],
+                transparent_inputs: vec![],
             },
             CompactBlock {
                 height: 200,
@@ -486,6 +567,8 @@ mod tests {
                 final_sapling_root: [0; 32],
                 outputs: vec![],
                 spends: vec![],
+                transparent_outputs: vec![],
+                transparent_inputs: vec![],
             },
         ];
         sort_blocks_by_height(&mut blocks);

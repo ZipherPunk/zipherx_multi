@@ -19,6 +19,7 @@ pub mod mnemonic;
 pub mod notes;
 pub mod prover;
 pub mod transaction;
+pub mod transparent;
 pub mod tree;
 pub mod types;
 pub mod util;

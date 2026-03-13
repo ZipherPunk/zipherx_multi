@@ -89,6 +89,29 @@ pub struct Note {
     pub position: Option<u64>,
 }
 
+/// A transparent UTXO (unspent transaction output).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransparentUtxo {
+    /// Database primary key.
+    pub id: i64,
+    /// Block height where this UTXO was created.
+    pub height: u64,
+    /// Transaction ID that created this output.
+    pub txid: String,
+    /// Output index within the transaction.
+    pub output_index: u32,
+    /// Raw scriptPubKey bytes.
+    pub script_pubkey: Vec<u8>,
+    /// Encoded transparent address (t1...).
+    pub address: String,
+    /// Value in zatoshis.
+    pub value: u64,
+    /// Whether this is a change output (internal chain).
+    pub is_change: bool,
+    /// BIP-44 child index used to derive the address.
+    pub child_index: u32,
+}
+
 /// Transaction type identifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxType {

@@ -195,6 +195,8 @@ fn test_scanner_flow() {
                 cv: [0; 32],
             }],
             spends: vec![],
+            transparent_outputs: vec![],
+            transparent_inputs: vec![],
         },
         CompactBlock {
             height: 2_951_901,
@@ -206,6 +208,8 @@ fn test_scanner_flow() {
                 txid: [0x03; 32],
                 nullifier: [0xDD; 32],
             }],
+            transparent_outputs: vec![],
+            transparent_inputs: vec![],
         },
     ];
 

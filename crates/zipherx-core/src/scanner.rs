@@ -277,6 +277,8 @@ mod tests {
             final_sapling_root: [0xAB; 32],
             outputs: vec![],
             spends: vec![],
+            transparent_outputs: vec![],
+            transparent_inputs: vec![],
         }
     }
 
@@ -298,6 +300,8 @@ mod tests {
             final_sapling_root: [0xAB; 32],
             outputs,
             spends: vec![],
+            transparent_outputs: vec![],
+            transparent_inputs: vec![],
         }
     }
 
@@ -358,6 +362,8 @@ mod tests {
                 txid: [0; 32],
                 nullifier: nf,
             }],
+            transparent_outputs: vec![],
+            transparent_inputs: vec![],
         };
 
         let confirmations = check_block_for_confirmation(&block, &pending);
