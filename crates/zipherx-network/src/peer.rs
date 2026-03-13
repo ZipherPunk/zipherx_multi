@@ -686,30 +686,32 @@ async fn block_listener_loop(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
+                eprintln!("[ZipherX] Block listener {}: cancelled", peer_id);
                 break;
             }
             result = receive_message_timeout(&mut reader, LISTENER_READ_TIMEOUT) => {
                 match result {
                     Ok((cmd, payload)) => {
-                        // Rate limit check: reset window every 60s, disconnect if exceeded
-                        let now = Instant::now();
-                        if now.duration_since(rl_window) >= Duration::from_secs(60) {
-                            rl_count = 0;
-                            rl_window = now;
-                        }
-                        rl_count += 1;
-                        if rl_count > MAX_MESSAGES_PER_MINUTE {
-                            eprintln!("[ZipherX] Peer {} exceeded rate limit ({} msgs/min), disconnecting", peer_id, rl_count);
-                            break;
-                        }
-
                         let dispatched = dispatcher.lock().unwrap().dispatch(&cmd, payload.clone());
                         if !dispatched {
+                            // Rate limit only UNSOLICITED messages (not responses to our requests).
+                            // During block sync we request hundreds of blocks — those responses flow
+                            // through the dispatcher and should NOT count toward the spam limit.
+                            let now = Instant::now();
+                            if now.duration_since(rl_window) >= Duration::from_secs(60) {
+                                rl_count = 0;
+                                rl_window = now;
+                            }
+                            rl_count += 1;
+                            if rl_count > MAX_MESSAGES_PER_MINUTE {
+                                eprintln!("[ZipherX] Peer {} exceeded rate limit ({} unsolicited msgs/min), disconnecting", peer_id, rl_count);
+                                break;
+                            }
                             handle_background_message(&cmd, &payload, &writer, &peer_id, &on_mempool_tx_data, &on_new_block, &on_addr).await;
                         }
                     }
-                    Err(_) => {
-                        // Read error (disconnect, TCP keepalive timeout, desync)
+                    Err(e) => {
+                        eprintln!("[ZipherX] Block listener {}: read error, exiting: {:?}", peer_id, e);
                         break;
                     }
                 }
@@ -752,9 +754,12 @@ async fn handle_background_message(
                 // MSG_BLOCK: new block mined — notify for instant sync
                 let has_block = items.iter().any(|item| item.inv_type == crate::types::InvType::Block);
                 if has_block {
+                    eprintln!("[ZipherX] {}: inv MSG_BLOCK received — new block!", _peer_id);
                     let cb = on_new_block.lock().unwrap().clone();
                     if let Some(cb) = cb {
                         cb();
+                    } else {
+                        eprintln!("[ZipherX] {}: WARNING: on_new_block callback is None!", _peer_id);
                     }
                 }
 

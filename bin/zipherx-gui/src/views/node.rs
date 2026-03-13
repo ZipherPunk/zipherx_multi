@@ -157,25 +157,29 @@ fn show_prerequisites(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     let bootstrap = crate::fullnode::bootstrap::BootstrapManager::new(data_dir.clone());
     let has_chain = bootstrap.has_chain_data();
 
-    // Check for Sapling params — check app data dir first, then ~/.zcash-params
+    // Check for Sapling params — search all known locations
     let has_params = {
-        let in_data_dir = app.data_dir.join("sapling-spend.params").exists()
-            && app.data_dir.join("sapling-output.params").exists();
-        let in_zcash = dirs::home_dir()
-            .map(|h| {
-                h.join(".zcash-params").join("sapling-spend.params").exists()
-                    && h.join(".zcash-params").join("sapling-output.params").exists()
-            })
-            .unwrap_or(false);
-        in_data_dir || in_zcash
+        let check_dir = |dir: &std::path::Path| -> bool {
+            dir.join("sapling-spend.params").exists()
+                && dir.join("sapling-output.params").exists()
+        };
+        let home = dirs::home_dir();
+        let data = dirs::data_dir(); // ~/Library/Application Support on macOS
+        check_dir(&app.data_dir)
+            || home.as_ref().map(|h| check_dir(&h.join(".zcash-params"))).unwrap_or(false)
+            || data.as_ref().map(|d| check_dir(&d.join("ZipherX").join("sapling-params"))).unwrap_or(false)
+            || data.as_ref().map(|d| check_dir(&d.join("ZipherX"))).unwrap_or(false)
+            || data.as_ref().map(|d| check_dir(&d.join("ZcashParams"))).unwrap_or(false)
     };
 
-    // Check for zstd
-    let has_zstd = std::process::Command::new("which")
-        .arg("zstd")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    // Check for zstd (use `where` on Windows, `which` on Unix)
+    let has_zstd = {
+        #[cfg(target_os = "windows")]
+        let cmd = std::process::Command::new("where").arg("zstd").output();
+        #[cfg(not(target_os = "windows"))]
+        let cmd = std::process::Command::new("which").arg("zstd").output();
+        cmd.map(|o| o.status.success()).unwrap_or(false)
+    };
 
     let all_met = daemon_found && has_chain && has_params && has_zstd;
 

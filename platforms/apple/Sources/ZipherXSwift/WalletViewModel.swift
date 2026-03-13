@@ -943,6 +943,13 @@ final class SyncCallback: SyncProgressCallback {
         #if DEBUG
         logger.debug("Mempool TX detected: \(txid) (\(amount) zatoshis)")
         #endif
+        // Skip change outputs from our own sends
+        if txid == vm.pendingConfirmationTxid {
+            #if DEBUG
+            logger.debug("Mempool TX \(txid) is our own send (change output) — skipping")
+            #endif
+            return
+        }
         DispatchQueue.main.async {
             let mempoolTx = Transaction(
                 txid: txid,
@@ -1004,6 +1011,13 @@ final class SilentSyncCallback: SyncProgressCallback {
         #if DEBUG
         vm.logger.debug("Mempool TX (silent): \(txid) (\(amount) zatoshis)")
         #endif
+        // Skip change outputs from our own sends
+        if txid == vm.pendingConfirmationTxid {
+            #if DEBUG
+            vm.logger.debug("Mempool TX \(txid) is our own send — skipping")
+            #endif
+            return
+        }
         DispatchQueue.main.async {
             let mempoolTx = Transaction(
                 txid: txid,

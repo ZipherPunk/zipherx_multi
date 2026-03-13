@@ -231,11 +231,20 @@ impl PeerManager {
         // This ensures get_consensus_height() returns a fresh value even when
         // peer_start_height is stale from the version exchange.
         let tip = self.live_chain_tip.clone();
+        // Time-based dedup: multiple peers announce the same block within ~100ms.
+        // Only bump live_chain_tip once per 5-second window to prevent inflation
+        // (4 peers × N blocks would exceed the +10 safety margin in consensus_height).
+        let last_bump = Arc::new(AtomicU64::new(0));
         let wrapped = Arc::new(move || {
-            // Bump by 1 per inv MSG_BLOCK. Multiple peers may announce the same
-            // block, causing slight overshoot. Header sync handles this gracefully
-            // (it requests headers up to chain_tip and gets back what exists).
-            tip.fetch_add(1, Ordering::Relaxed);
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let prev = last_bump.load(Ordering::Relaxed);
+            if now_secs >= prev + 5 {
+                last_bump.store(now_secs, Ordering::Relaxed);
+                tip.fetch_add(1, Ordering::Relaxed);
+            }
             cb();
         });
         self.on_new_block = Some(wrapped.clone());
@@ -662,12 +671,13 @@ impl PeerManager {
         }
 
         // If block listener inv notifications have pushed live_chain_tip beyond
-        // the stale peer_start_height median, accept it only if within 10 blocks.
-        // This prevents a single malicious peer from inflating consensus height
-        // via fabricated inv messages while still allowing live tip advancement.
+        // the stale peer_start_height median, accept it. The time-based dedup
+        // in set_on_new_block prevents inflation (only +1 per 5s window), so
+        // live_chain_tip tracks real blocks. Accept within 100 blocks of median
+        // to handle long sessions where peer_start_height becomes very stale.
         let live_tip = self.live_chain_tip.load(Ordering::Relaxed);
-        let consensus_height = if live_tip > median_height && live_tip <= median_height + 10 {
-            live_tip  // Accept live tip if within 10 blocks of median
+        let consensus_height = if live_tip > median_height && live_tip <= median_height + 100 {
+            live_tip  // Accept live tip (dedup prevents inflation)
         } else {
             median_height  // Strict median otherwise
         };

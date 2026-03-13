@@ -157,6 +157,8 @@ pub struct ZipherXApp {
     pub is_syncing: bool,
     pub sync_phase: String,
     pub sync_progress: f32,
+    pub sync_current: u64,
+    pub sync_target: u64,
     pub sync_tasks: Vec<SyncTask>,
     pub overall_progress: f32,
     pub sync_start_time: Option<Instant>,
@@ -198,7 +200,6 @@ pub struct ZipherXApp {
     pub confirmed_sent_count_at_send: usize,
     pub pending_resync_timer: Option<std::time::Instant>,
     pub pending_resync_count: u32,
-    pub last_bg_sync: Option<std::time::Instant>,
     pub initial_sync_done: bool,
 
     // -- receive --
@@ -339,6 +340,8 @@ impl Default for ZipherXApp {
             is_syncing: false,
             sync_phase: "Idle".to_string(),
             sync_progress: 0.0,
+            sync_current: 0,
+            sync_target: 0,
             sync_tasks: Vec::new(),
             overall_progress: 0.0,
             sync_start_time: None,
@@ -376,7 +379,6 @@ impl Default for ZipherXApp {
             confirmed_sent_count_at_send: 0,
             pending_resync_timer: None,
             pending_resync_count: 0,
-            last_bg_sync: None,
             initial_sync_done: false,
 
             show_receive: false,

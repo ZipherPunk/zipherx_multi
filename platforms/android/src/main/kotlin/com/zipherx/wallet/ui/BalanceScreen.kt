@@ -213,8 +213,50 @@ private fun formatZcl(zatoshis: Long): String {
  */
 private fun formatSyncPhase(phase: String): String {
     // Phase may include height info as "phase:current:target"
+    // Repair phases come as "repair:phase:current:target"
     val parts = phase.split(":")
     val base = parts[0]
+
+    // Handle repair phases: "repair:boost_download:current:target" etc.
+    if (base == "repair" && parts.size >= 2) {
+        val repairPhase = parts[1]
+        val repairLabel = when (repairPhase) {
+            "boost_download" -> "Repairing: downloading boost"
+            "boost_load" -> "Repairing: loading boost"
+            "header_sync" -> "Repairing: syncing headers"
+            "delta_sync" -> "Repairing: syncing blocks"
+            "block_scan" -> "Repairing: scanning blocks"
+            "witness_update" -> "Repairing: updating witnesses"
+            "complete" -> "Repair complete"
+            else -> "Repairing: $repairPhase"
+        }
+        return if (parts.size == 4) {
+            val current = parts[2].toLongOrNull() ?: 0L
+            val target = parts[3].toLongOrNull() ?: 0L
+            if (repairPhase == "boost_download") {
+                val currentMb = current / (1024 * 1024)
+                val totalMb = target / (1024 * 1024)
+                val pct = if (target > 0) (current * 100 / target) else 0
+                "$repairLabel: %,d / %,d MB (%d%%)".format(currentMb, totalMb, pct)
+            } else {
+                val pct = if (target > 0) (current * 100 / target) else 0
+                "$repairLabel: %,d / %,d (%d%%)".format(current, target, pct)
+            }
+        } else {
+            "$repairLabel..."
+        }
+    }
+
+    // Handle repairing_witnesses initial notification
+    if (base == "repairing_witnesses") {
+        return if (parts.size == 3) {
+            val missing = parts[2].toLongOrNull() ?: 0L
+            "Repairing $missing witnesses..."
+        } else {
+            "Repairing witnesses..."
+        }
+    }
+
     val label = when (base) {
         "idle" -> "Idle"
         "starting" -> "Starting..."

@@ -453,9 +453,7 @@ impl AsyncWallet {
     /// Full rescan: clear tree state, witnesses, and force re-validation.
     ///
     /// Clears tree state + all witnesses + resets delta_bundle_verified.
-    /// Notes are preserved — they'll get fresh witnesses on next sync.
-    /// This is safe on Android where the boost file may not be at the
-    /// same path as the delta store (deleting notes would lose them forever).
+    /// Next sync will rebuild the tree and witnesses from boost/delta data.
     pub async fn full_rescan(&self) -> Result<(), CoreError> {
         let acquired = self
             .core

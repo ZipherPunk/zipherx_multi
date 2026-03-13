@@ -80,10 +80,12 @@ impl eframe::App for ZipherXApp {
             self.last_interaction = std::time::Instant::now();
         }
 
-        // -- Auto-lock: idle timeout --
+        // -- Auto-lock: idle timeout (suppressed during sync/download) --
         if self.auto_lock_secs > 0
             && self.last_interaction.elapsed().as_secs() > self.auto_lock_secs
             && matches!(self.phase, Phase::Ready)
+            && !self.is_syncing
+            && !self.send_in_progress
         {
             // Lock the wallet
             if let Some(ref mut sk) = self.sk_bytes {
@@ -110,8 +112,14 @@ impl eframe::App for ZipherXApp {
         }
 
         // -- Read shared state from wallet thread --
-        if matches!(self.phase, Phase::Ready) {
+        // Poll even when locked so sync/download continues updating status bar.
+        if self.shared_state.is_some() {
             poll_shared_state(self, ctx);
+        }
+
+        // Schedule repaints even when locked (status bar shows sync progress).
+        if self.is_syncing || self.send_in_progress {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
 
         // -- Poll full node daemon (every 5s) --
@@ -291,6 +299,8 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         if !s.sync_phase.is_empty() && s.sync_phase != "Idle" {
             app.sync_phase = s.sync_phase.clone();
             app.sync_progress = s.sync_progress;
+            app.sync_current = s.sync_current;
+            app.sync_target = s.sync_target;
             app.is_syncing = !s.sync_complete;
 
             // Update sync tasks
@@ -545,54 +555,14 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         app.pending_resync_count = 0;
     }
 
-    // Instant sync on new block: peers send inv MSG_BLOCK when a block is mined.
-    // Only consume the flag if we can actually start a sync — otherwise leave it
-    // for the next frame so it doesn't get lost during an active sync.
-    let can_start_sync = !app.is_syncing && !app.send_in_progress
-        && app.sk_bytes.is_some() && app.initial_sync_done;
-    let new_block_pending = if can_start_sync {
-        if let Ok(mut s) = state.lock() {
-            let pending = s.new_block_pending;
-            if pending { s.new_block_pending = false; }
-            pending
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    // Background sync (inv MSG_BLOCK + periodic 90s) is handled autonomously
+    // by the wallet thread — works even when the UI is locked (sk_bytes zeroed).
+    // The wallet thread caches its own sk_bytes from the first StartSync.
 
-    // Background resync: instant on new block, periodic every 90s as fallback.
-    if can_start_sync {
-        let should_bg_sync = if new_block_pending {
-            true // Instant sync on new block — always, regardless of pending confirmation
-        } else if app.pending_confirmation_txid.is_none() {
-            match app.last_bg_sync {
-                None => {
-                    app.last_bg_sync = Some(std::time::Instant::now());
-                    false
-                }
-                Some(t) if t.elapsed().as_secs() >= 90 => true,
-                _ => false,
-            }
-        } else {
-            false
-        };
-        if should_bg_sync {
-            if let Ok(mut s) = state.lock() {
-                s.command = Some(sync::SyncCommand::StartSync {
-                    sk_bytes: app.sk_bytes.as_ref().cloned().unwrap_or_default(),
-                });
-            }
-            app.is_syncing = true;
-            app.last_bg_sync = Some(std::time::Instant::now());
-        }
-    }
-
-    // Request repaint if syncing or sending (immediate), otherwise periodic
-    // so peer count, mempool notifications, etc. stay live.
+    // Request repaint: throttle to ~10fps during sync/send (progress updates
+    // don't need 60fps), otherwise periodic 2s for peer count / notifications.
     if app.is_syncing || app.send_in_progress {
-        ctx.request_repaint();
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
     } else {
         ctx.request_repaint_after(std::time::Duration::from_secs(2));
     }

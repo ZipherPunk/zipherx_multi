@@ -411,7 +411,7 @@ fun SendScreen(
                     .fillMaxWidth()
                     .border(1.dp, ZColors.primary, RoundedCornerShape(0.dp))
                     .testTag("review_send_button"),
-                enabled = !isSending && addressValid && parseZclToZatoshis(amount) > 0L && !memoOverLimit,
+                enabled = !isSending && addressValid && parseZclToZatoshis(amount) > 0L && !memoOverLimit && (balance?.spendable ?: 0L) > 0L,
                 shape = RoundedCornerShape(0.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = ZColors.primary,

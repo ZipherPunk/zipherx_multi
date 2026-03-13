@@ -20,8 +20,12 @@ use zipherx_storage::database::WalletDatabase;
 pub(crate) fn build_tor_aware_client(timeout_secs: u64) -> Result<reqwest::Client, CoreError> {
     let socks_port = zipherx_tor::client::get_socks_port();
 
-    let mut builder =
-        reqwest::Client::builder().timeout(std::time::Duration::from_secs(timeout_secs));
+    // connect_timeout: max time to establish TCP + TLS connection.
+    // NO total timeout — a 1GB download can legitimately take 30+ minutes.
+    // Stalled connections are detected by chunk-level read errors.
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(timeout_secs.min(60)))
+        .tcp_nodelay(true);
 
     if socks_port > 0 && zipherx_tor::client::is_socks_running() {
         let proxy_url = format!("socks5h://127.0.0.1:{}", socks_port);
@@ -620,17 +624,25 @@ pub async fn download_boost_file_if_needed(
         .map(|name| boost_release_url(&tag, name))
         .collect();
 
-    // Get total size from all parts for progress
-    let mut total_download_size: u64 = 0;
+    // Get total size from all parts for progress (parallel HEAD requests)
+    let mut head_handles = Vec::new();
     for url in &part_urls {
-        let resp = client
-            .head(url.as_str())
-            .send()
+        let client = client.clone();
+        let url = url.clone();
+        head_handles.push(tokio::spawn(async move {
+            let resp = client
+                .head(url.as_str())
+                .send()
+                .await
+                .map_err(|e| CoreError::Storage(format!("HEAD request failed: {e}")))?;
+            Ok::<u64, CoreError>(resp.content_length().unwrap_or(0))
+        }));
+    }
+    let mut total_download_size: u64 = 0;
+    for handle in head_handles {
+        total_download_size += handle
             .await
-            .map_err(|e| CoreError::Storage(format!("HEAD request failed: {e}")))?;
-        if let Some(len) = resp.content_length() {
-            total_download_size += len;
-        }
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
     }
 
     eprintln!(
@@ -639,12 +651,44 @@ pub async fn download_boost_file_if_needed(
         total_download_size / (1024 * 1024),
     );
 
-    // Download parts in parallel, then concatenate
+    // Download parts in parallel with HTTP resume support, then concatenate.
+    // If a previous attempt left partial .tmp files, resume from where they
+    // stopped using HTTP Range headers instead of re-downloading from scratch.
     {
         use std::sync::atomic::{AtomicU64, Ordering};
 
-        let total_downloaded = Arc::new(AtomicU64::new(0));
+        // Check existing partial downloads for resume
+        let mut already_downloaded: u64 = 0;
+        for part_idx in 0..part_urls.len() {
+            let part_path = boost_cache_dir.join(format!("_part_{}.tmp", part_idx));
+            if let Ok(meta) = std::fs::metadata(&part_path) {
+                already_downloaded += meta.len();
+            }
+        }
+        if already_downloaded > 0 {
+            eprintln!(
+                "[ZipherX] Resuming download: {} MB already on disk",
+                already_downloaded / (1024 * 1024),
+            );
+        }
+
+        let total_downloaded = Arc::new(AtomicU64::new(already_downloaded));
         let progress_arc: Option<DownloadProgressFn> = progress.clone();
+
+        // Fire initial progress callback so UI shows total size immediately
+        // (otherwise UI stays at 0/0 until first chunk is downloaded)
+        if let Some(ref p) = progress_arc {
+            p(
+                already_downloaded,
+                total_download_size,
+                &format!(
+                    "Downloading {} parts... ({} MB / {} MB)",
+                    part_urls.len(),
+                    already_downloaded / (1024 * 1024),
+                    total_download_size / (1024 * 1024),
+                ),
+            );
+        }
 
         // Download each part to its own temp file in parallel
         let mut download_handles = Vec::new();
@@ -659,66 +703,152 @@ pub async fn download_boost_file_if_needed(
             let progress_c = progress_arc.as_ref().map(Arc::clone);
 
             let handle = tokio::spawn(async move {
+                let part_path_str = part_path.to_string_lossy().to_string();
+
+                // Check if partial file exists for resume
+                let existing_size = std::fs::metadata(&part_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+
+                if existing_size > 0 {
+                    eprintln!(
+                        "[ZipherX] Part {}/{}: resuming from {} MB",
+                        part_idx + 1,
+                        num_parts,
+                        existing_size / (1024 * 1024),
+                    );
+                } else {
+                    eprintln!(
+                        "[ZipherX] Downloading part {}/{}: {}",
+                        part_idx + 1,
+                        num_parts,
+                        url.rsplit('/').next().unwrap_or(&url),
+                    );
+                }
+
+                // Build request with Range header if resuming
+                let request = if existing_size > 0 {
+                    client
+                        .get(url.as_str())
+                        .header("Range", format!("bytes={}-", existing_size))
+                } else {
+                    client.get(url.as_str())
+                };
+
                 eprintln!(
-                    "[ZipherX] Downloading part {}/{}: {}",
+                    "[ZipherX] Part {}/{}: connecting...",
                     part_idx + 1,
                     num_parts,
-                    url.rsplit('/').next().unwrap_or(&url),
                 );
 
-                let mut response = client.get(url.as_str()).send().await.map_err(|e| {
+                let response = request.send().await.map_err(|e| {
                     CoreError::Storage(format!("Download part {} failed: {e}", part_idx + 1))
                 })?;
 
-                if !response.status().is_success() {
+                let status = response.status();
+                eprintln!(
+                    "[ZipherX] Part {}/{}: connected (HTTP {})",
+                    part_idx + 1,
+                    num_parts,
+                    status,
+                );
+
+                // 416 Range Not Satisfiable = part already fully downloaded
+                if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+                    eprintln!(
+                        "[ZipherX] Part {}/{}: already complete ({} MB)",
+                        part_idx + 1,
+                        num_parts,
+                        existing_size / (1024 * 1024),
+                    );
+                    return Ok::<String, CoreError>(part_path_str);
+                }
+
+                // 206 Partial Content = resume accepted
+                // 200 OK = server doesn't support Range, restart from scratch
+                let is_resume = status == reqwest::StatusCode::PARTIAL_CONTENT;
+                if !is_resume && existing_size > 0 {
+                    eprintln!(
+                        "[ZipherX] Part {}/{}: server returned {} (no resume support), restarting",
+                        part_idx + 1,
+                        num_parts,
+                        status,
+                    );
+                    // Subtract the existing bytes we already counted
+                    total_dl.fetch_sub(existing_size, Ordering::Relaxed);
+                }
+
+                if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
                     return Err(CoreError::Storage(format!(
                         "Download part {} returned HTTP {}",
                         part_idx + 1,
-                        response.status(),
+                        status,
                     )));
                 }
 
-                // Use BufWriter for efficient disk I/O (8MB buffer)
-                let part_path_str = part_path.to_string_lossy().to_string();
+                let mut response = response;
+
+                // Open file: append if resuming, create if starting fresh
                 let pp = part_path_str.clone();
                 let file = tokio::task::spawn_blocking(move || {
-                    let f = std::fs::File::create(&pp)
-                        .map_err(|e| CoreError::Storage(format!("Create part file: {e}")))?;
-                    Ok::<_, CoreError>(std::io::BufWriter::with_capacity(8 * 1024 * 1024, f))
+                    let f = if is_resume {
+                        std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&pp)
+                            .map_err(|e| CoreError::Storage(format!("Open part file for append: {e}")))?
+                    } else {
+                        std::fs::File::create(&pp)
+                            .map_err(|e| CoreError::Storage(format!("Create part file: {e}")))?
+                    };
+                    Ok::<_, CoreError>(std::io::BufWriter::with_capacity(16 * 1024 * 1024, f))
                 })
                 .await
                 .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
 
-                // Collect chunks in a buffer, flush to disk periodically
-                let mut writer = file;
-                let mut local_buf: Vec<u8> = Vec::with_capacity(4 * 1024 * 1024);
+                // Channel-based writer: network reads never block on disk I/O.
+                // Sender sends Vec<u8> buffers, writer task drains them to disk.
+                let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(4); // 4 × 16MB = 64MB backpressure
+                let writer_handle = std::thread::spawn(move || {
+                    let mut writer = file;
+                    while let Ok(buf) = rx.recv() {
+                        writer
+                            .write_all(&buf)
+                            .map_err(|e| CoreError::Storage(format!("Write chunk: {e}")))?;
+                    }
+                    writer
+                        .flush()
+                        .map_err(|e| CoreError::Storage(format!("Flush: {e}")))?;
+                    Ok::<(), CoreError>(())
+                });
 
-                while let Some(chunk) = response
-                    .chunk()
-                    .await
-                    .map_err(|e| CoreError::Storage(format!("Read chunk: {e}")))?
-                {
+                let mut local_buf: Vec<u8> = Vec::with_capacity(16 * 1024 * 1024);
+                let read_timeout = std::time::Duration::from_secs(120);
+
+                loop {
+                    let chunk = match tokio::time::timeout(read_timeout, response.chunk()).await {
+                        Ok(Ok(Some(c))) => c,
+                        Ok(Ok(None)) => break, // stream finished
+                        Ok(Err(e)) => return Err(CoreError::Storage(format!("Read chunk: {e}"))),
+                        Err(_) => return Err(CoreError::Storage(
+                            "Read chunk: no data received for 120s (stalled connection)".into(),
+                        )),
+                    };
                     let chunk_len = chunk.len() as u64;
                     local_buf.extend_from_slice(&chunk);
                     let prev = total_dl.fetch_add(chunk_len, Ordering::Relaxed);
                     let current_total = prev + chunk_len;
 
-                    // Flush buffer to disk when >= 4MB
-                    if local_buf.len() >= 4 * 1024 * 1024 {
+                    // Send buffer to writer thread when >= 16MB
+                    if local_buf.len() >= 16 * 1024 * 1024 {
                         let buf_data =
-                            std::mem::replace(&mut local_buf, Vec::with_capacity(4 * 1024 * 1024));
-                        writer = tokio::task::spawn_blocking(move || {
-                            writer
-                                .write_all(&buf_data)
-                                .map_err(|e| CoreError::Storage(format!("Write chunk: {e}")))?;
-                            Ok::<_, CoreError>(writer)
-                        })
-                        .await
-                        .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+                            std::mem::replace(&mut local_buf, Vec::with_capacity(16 * 1024 * 1024));
+                        tx.send(buf_data).map_err(|_| {
+                            CoreError::Storage("Writer thread died".into())
+                        })?;
                     }
 
-                    // Report progress every ~10MB
-                    if current_total % (10 * 1024 * 1024) < chunk_len {
+                    // Report progress every ~256KB for responsive UI
+                    if current_total % (256 * 1024) < chunk_len {
                         if let Some(ref p) = progress_c {
                             p(
                                 current_total,
@@ -734,27 +864,18 @@ pub async fn download_boost_file_if_needed(
                     }
                 }
 
-                // Flush remaining buffer
+                // Send remaining buffer
                 if !local_buf.is_empty() {
-                    let buf_data = local_buf;
-                    writer = tokio::task::spawn_blocking(move || {
-                        writer
-                            .write_all(&buf_data)
-                            .map_err(|e| CoreError::Storage(format!("Write final chunk: {e}")))?;
-                        Ok::<_, CoreError>(writer)
-                    })
-                    .await
-                    .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+                    tx.send(local_buf).map_err(|_| {
+                        CoreError::Storage("Writer thread died".into())
+                    })?;
                 }
 
-                // Flush BufWriter
-                tokio::task::spawn_blocking(move || {
-                    writer
-                        .flush()
-                        .map_err(|e| CoreError::Storage(format!("Flush: {e}")))
-                })
-                .await
-                .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+                // Drop sender to signal writer thread to finish
+                drop(tx);
+                writer_handle
+                    .join()
+                    .map_err(|_| CoreError::Storage("Writer thread panicked".into()))??;
 
                 eprintln!("[ZipherX] Part {}/{} complete", part_idx + 1, num_parts,);
 

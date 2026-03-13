@@ -1052,6 +1052,62 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                 );
                 cb_complete.on_complete(height);
 
+                // Auto-repair: if notes are missing witnesses after initial sync,
+                // clear tree state + witnesses via repair_database() then re-sync.
+                // The repair sync rebuilds witnesses from boost/delta data.
+                if let Ok(balance) = wallet.get_balance().await {
+                    if balance.note_count > 0
+                        && balance.note_count > balance.spendable_note_count
+                    {
+                        let missing = balance.note_count - balance.spendable_note_count;
+                        eprintln!(
+                            "[ZipherX] FFI: {}/{} notes spendable — repairing {} witnesses",
+                            balance.spendable_note_count, balance.note_count, missing,
+                        );
+                        // Inform user that repair is starting
+                        cb_complete.on_progress(
+                            "repairing_witnesses".into(),
+                            0,
+                            missing as u64,
+                        );
+                        match wallet.repair_database().await {
+                            Ok(()) => {
+                                eprintln!("[ZipherX] FFI: tree state cleared, re-syncing for witness rebuild");
+                                // Create progress callback for repair sync so UI shows progress
+                                let cb_repair = cb_complete.clone();
+                                let repair_progress_fn: zipherx_core::async_sync::SyncProgressFn =
+                                    Arc::new(move |status: SyncStatus| {
+                                        let (phase, current, target) = sync_status_to_progress(&status);
+                                        // Prefix phase with "repair:" so UI can show "Repairing..."
+                                        let repair_phase = format!("repair:{}", phase);
+                                        cb_repair.on_progress(repair_phase, current, target);
+                                    });
+                                match wallet.sync(&sk_bytes, Some(repair_progress_fn)).await {
+                                    Ok(h) => {
+                                        eprintln!(
+                                            "[ZipherX] FFI: witness repair complete at height {}",
+                                            h,
+                                        );
+                                        cb_complete.on_complete(h);
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "[ZipherX] FFI: witness repair sync failed: {}",
+                                            e,
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[ZipherX] FFI: repair_database failed: {}",
+                                    e,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 // Phase 2a: Request mempool inventories from all connected peers.
                 // BIP 35: "mempool" message tells peers to send inv for ALL their
                 // mempool TXs. Without this, peers only announce TXs that arrive

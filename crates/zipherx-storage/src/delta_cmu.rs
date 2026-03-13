@@ -269,6 +269,57 @@ impl DeltaCMUStore {
         Ok(outputs)
     }
 
+    /// Remove duplicate output records from the binary file.
+    ///
+    /// Deduplicates by (height, index), keeping the first occurrence.
+    /// Rewrites the file in place. Returns the number of duplicates removed.
+    pub fn dedup_outputs(&self) -> Result<usize, StorageError> {
+        let all = self.load_outputs()?;
+        if all.is_empty() {
+            return Ok(0);
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        let mut unique: Vec<&DeltaOutput> = Vec::with_capacity(all.len());
+        for o in &all {
+            if seen.insert((o.height, o.index)) {
+                unique.push(o);
+            }
+        }
+
+        let removed = all.len() - unique.len();
+        if removed == 0 {
+            return Ok(0);
+        }
+
+        // Rewrite the file with only unique records
+        let path = self.outputs_path();
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+
+        for output in &unique {
+            let record = serialize_output_record(output);
+            file.write_all(&record)?;
+        }
+        file.sync_all()?;
+
+        // Update manifest count
+        if let Some(mut manifest) = self.get_manifest()? {
+            manifest.output_count = unique.len() as u64;
+            manifest.cmu_count = manifest.output_count;
+            manifest.updated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            self.save_manifest(&manifest)?;
+        }
+
+        Ok(removed)
+    }
+
     /// Append output records with dedup by (height, index) (FIX #784).
     ///
     /// Updates the manifest with new height range and counts.

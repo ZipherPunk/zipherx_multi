@@ -134,26 +134,29 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 .font(theme::mono(28.0))
                 .color(theme::GREEN),
         );
-        if app.balance.total != app.balance.spendable {
-            ui.label(
-                egui::RichText::new(format!(
-                    "({} ZCL total, {} spendable notes)",
-                    fmt_zcl(app.balance.total),
-                    app.balance.spendable_note_count
-                ))
-                .font(theme::mono(10.0))
-                .color(theme::MUTED),
-            );
-        } else if app.balance.spendable_note_count > 0 {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} spendable note{}",
-                    app.balance.spendable_note_count,
-                    if app.balance.spendable_note_count == 1 { "" } else { "s" }
-                ))
-                .font(theme::mono(10.0))
-                .color(theme::MUTED),
-            );
+        if app.balance.note_count > 0 {
+            if app.balance.total != app.balance.spendable {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "({} ZCL total, {}/{} spendable notes)",
+                        fmt_zcl(app.balance.total),
+                        app.balance.spendable_note_count,
+                        app.balance.note_count,
+                    ))
+                    .font(theme::mono(10.0))
+                    .color(theme::MUTED),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}/{} spendable notes",
+                        app.balance.spendable_note_count,
+                        app.balance.note_count,
+                    ))
+                    .font(theme::mono(10.0))
+                    .color(theme::MUTED),
+                );
+            }
         }
 
         ui.add_space(15.0);
@@ -328,9 +331,29 @@ fn show_sync_progress(app: &mut ZipherXApp, ui: &mut egui::Ui) {
         _ => "Syncing",
     };
 
+    // Detail line: show current/target for phases that report it
+    let detail = if app.sync_target > 0 {
+        match app.sync_phase.as_str() {
+            "boost_download" => {
+                let dl_mb = app.sync_current as f64 / (1024.0 * 1024.0);
+                let total_mb = app.sync_target as f64 / (1024.0 * 1024.0);
+                format!(" ({:.0}/{:.0} MB)", dl_mb, total_mb)
+            }
+            "header_sync" | "delta_sync" | "block_scan" => {
+                format!(" ({}/{})", app.sync_current, app.sync_target)
+            }
+            "witness_update" => {
+                format!(" ({}/{})", app.sync_current, app.sync_target)
+            }
+            _ => String::new(),
+        }
+    } else {
+        String::new()
+    };
+
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new(format!("{} {:.0}%", phase_label, progress * 100.0))
+            egui::RichText::new(format!("{} {:.0}%{}", phase_label, progress * 100.0, detail))
                 .font(theme::mono(10.0))
                 .color(theme::CYAN),
         );

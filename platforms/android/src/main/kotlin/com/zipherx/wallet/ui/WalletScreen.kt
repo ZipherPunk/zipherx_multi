@@ -403,9 +403,14 @@ fun WalletScreen(
                         }
                     },
                     modifier = Modifier.fillMaxWidth().testTag("send_button"),
-                    enabled = pendingTxid == null,
+                    enabled = pendingTxid == null && (balance?.spendable ?: 0L) > 0L,
                 ) {
-                    Text(if (pendingTxid != null) "Send [Locked]" else "Send")
+                    val label = when {
+                        pendingTxid != null -> "Send [Locked]"
+                        (balance?.spendable ?: 0L) == 0L -> "Send [Syncing...]"
+                        else -> "Send"
+                    }
+                    Text(label)
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))

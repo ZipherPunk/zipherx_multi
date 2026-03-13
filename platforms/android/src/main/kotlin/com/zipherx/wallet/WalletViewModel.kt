@@ -735,6 +735,13 @@ class WalletViewModel : ViewModel() {
 
                         override fun onMempoolTx(txid: String, amount: ULong) {
                             if (BuildConfig.DEBUG) Log.i(TAG, "Mempool TX detected: $txid ($amount zatoshis)")
+                            // Skip change outputs from our own sends — the mempool
+                            // monitor decrypts ALL outputs (including change) so the
+                            // same txid we just sent would appear as "incoming".
+                            if (txid == _pendingConfirmationTxid.value) {
+                                if (BuildConfig.DEBUG) Log.d(TAG, "Mempool TX $txid is our own send (change output) — skipping incoming notification")
+                                return
+                            }
                             val mempoolTx = Transaction(
                                 txid = txid,
                                 txType = "received",
@@ -817,6 +824,10 @@ class WalletViewModel : ViewModel() {
      */
     fun send(to: String, amount: Long, fee: Long, memo: String?) {
         if (_isSending.value) return
+        if (amount <= 0L) {
+            _errorMessage.value = "Insufficient spendable balance"
+            return
+        }
         val skArray = skBytes
         if (skArray == null) {
             _errorMessage.value = "Spending key not available"
@@ -1106,6 +1117,11 @@ class WalletViewModel : ViewModel() {
                         }
                         override fun onMempoolTx(txid: String, amount: ULong) {
                             if (BuildConfig.DEBUG) Log.i(TAG, "Mempool TX (silent): $txid ($amount zatoshis)")
+                            // Skip change outputs from our own sends
+                            if (txid == _pendingConfirmationTxid.value) {
+                                if (BuildConfig.DEBUG) Log.d(TAG, "Mempool TX $txid is our own send — skipping")
+                                return
+                            }
                             val mempoolTx = Transaction(
                                 txid = txid,
                                 txType = "received",

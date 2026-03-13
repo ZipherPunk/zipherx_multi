@@ -139,11 +139,11 @@ pub async fn sync_to_tip(
     }
 
     // ================================================================
-    // Step 1: Start boost download AND peer connection CONCURRENTLY.
+    // Step 1: Download boost file FIRST (no peers needed — pure HTTP).
     //
-    // The boost download is a 2GB HTTP download from GitHub — completely
-    // independent of P2P peers. Starting it before/during peer connection
-    // saves the 15-45s spent waiting for peer timeouts.
+    // Peers are NOT connected until after boost download + load completes.
+    // This avoids: (a) wasted peer connections during long downloads,
+    // (b) zombie peers that die waiting, (c) unnecessary reconnection.
     // ================================================================
 
     let boost_cache_dir = if !sk_bytes.is_empty() {
@@ -208,8 +208,10 @@ pub async fn sync_to_tip(
         }
     }
 
-    // Spawn boost download as a concurrent task (runs in parallel with peer connection)
-    let boost_download_handle = if boost_needs_download || update_tag.is_some() {
+    // Download boost file (blocking — no peers involved)
+    const BOOST_MAX_RETRIES: u32 = 3;
+    let mut boost_download_result: Option<(String, String)> = None;
+    if boost_needs_download || update_tag.is_some() {
         if let Some(ref boost_dir) = boost_cache_dir {
             eprintln!("[ZipherX] Downloading boost file (contains 2.5M headers + outputs)...");
             if let Some(ref p) = progress {
@@ -218,113 +220,41 @@ pub async fn sync_to_tip(
                     total_bytes: 0,
                 });
             }
-            let download_progress: Option<boost_download::DownloadProgressFn> =
+
+            let make_progress_fn = |progress: &Option<crate::sync::SyncProgressFn>| -> Option<boost_download::DownloadProgressFn> {
                 progress.as_ref().map(|p| {
                     let p = p.clone();
+                    let last_log_mb = std::sync::atomic::AtomicU64::new(0);
                     Arc::new(move |downloaded: u64, total: u64, _label: &str| {
-                        eprintln!(
-                            "[ZipherX] Boost download: {} / {} MB",
-                            downloaded / (1024 * 1024),
-                            total / (1024 * 1024),
-                        );
+                        // Log every 50 MB to avoid spam
+                        let dl_mb = downloaded / (1024 * 1024);
+                        let prev = last_log_mb.load(std::sync::atomic::Ordering::Relaxed);
+                        if dl_mb >= prev + 50 || prev == 0 {
+                            last_log_mb.store(dl_mb, std::sync::atomic::Ordering::Relaxed);
+                            eprintln!(
+                                "[ZipherX] Boost download: {} / {} MB",
+                                dl_mb,
+                                total / (1024 * 1024),
+                            );
+                        }
                         p(SyncStatus::BoostDownload {
                             downloaded_bytes: downloaded,
                             total_bytes: total,
                         });
                     }) as Arc<dyn Fn(u64, u64, &str) + Send + Sync>
-                });
+                })
+            };
 
-            let boost_dir_clone = boost_dir.clone();
-            let tag_clone = update_tag.clone();
-            Some(tokio::spawn(async move {
-                let tag_ref = tag_clone.as_deref();
-                boost_download::download_boost_file_if_needed(
-                    &boost_dir_clone,
-                    download_progress,
-                    tag_ref,
-                )
-                .await
-            }))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+            let mut last_error: Option<String> = None;
 
-    // Step 1b: Connect to peers (runs concurrently with boost download)
-    if peer_manager.connected_count() == 0 {
-        let mut last_err = None;
-        for attempt in 1..=3 {
-            tracing::info!("Peer connection attempt {}/3...", attempt);
-
-            match peer_manager.connect_with_counter(peer_count_ref.as_ref()).await {
-                Ok(()) => {
-                    last_err = None;
-                    break;
-                }
-                Err(e) => {
-                    tracing::warn!("Connection attempt {}/3 failed: {e}", attempt);
-                    last_err = Some(e);
-                    if attempt < 3 {
-                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                    }
-                }
-            }
-        }
-
-        if let Some(e) = last_err {
-            // If boost download is running, don't fail — we still need it
-            if boost_download_handle.is_none() {
-                return Err(CoreError::Network(e));
-            }
-            eprintln!(
-                "[ZipherX] Peer connection failed but boost download in progress, continuing..."
-            );
-        }
-    }
-
-    let peer_count = peer_manager.connected_count();
-    if let Some(ref pc) = peer_count_ref {
-        pc.store(peer_count as u32, Ordering::Relaxed);
-    }
-    tracing::info!("{} peers connected", peer_count);
-
-    // Step 1c: Await boost download result with retry logic.
-    // On failure, retry up to 3 times with increasing delay.
-    // If all retries fail, notify user via BoostFailed status and wait
-    // for their decision (continue with slow P2P sync, or abort).
-    const BOOST_MAX_RETRIES: u32 = 3;
-    let mut boost_download_result: Option<(String, String)> = None;
-    if let Some(handle) = boost_download_handle {
-        // First attempt (already spawned)
-        let mut last_error: Option<String> = None;
-        match handle.await {
-            Ok(Ok(result)) => {
-                boost_download_result = Some(result);
-            }
-            Ok(Err(e)) => {
-                last_error = Some(e.to_string());
-                eprintln!("[ZipherX] Boost download failed (attempt 1/{}): {e}", BOOST_MAX_RETRIES);
-            }
-            Err(e) => {
-                last_error = Some(e.to_string());
-                eprintln!("[ZipherX] Boost download task panicked (attempt 1/{}): {e}", BOOST_MAX_RETRIES);
-            }
-        }
-
-        // Retry on failure
-        if boost_download_result.is_none() {
-            if let Some(ref boost_dir) = boost_cache_dir {
-                for attempt in 2..=BOOST_MAX_RETRIES {
+            for attempt in 1..=BOOST_MAX_RETRIES {
+                if attempt > 1 {
                     eprintln!(
                         "[ZipherX] Retrying boost download (attempt {}/{}), waiting {}s...",
                         attempt, BOOST_MAX_RETRIES, attempt * 5,
                     );
-                    // Clean up partial downloads before retry
-                    let _ = std::fs::remove_file(boost_dir.join("_part_0.tmp"));
-                    let _ = std::fs::remove_file(boost_dir.join("_part_1.tmp"));
-
+                    // Keep partial .tmp files for HTTP resume support —
+                    // download_boost_file_if_needed will resume from where they stopped.
                     tokio::time::sleep(tokio::time::Duration::from_secs((attempt * 5) as u64)).await;
 
                     if let Some(ref p) = progress {
@@ -333,86 +263,66 @@ pub async fn sync_to_tip(
                             total_bytes: 0,
                         });
                     }
+                }
 
-                    let boost_dir_retry = boost_dir.clone();
-                    let tag_retry = update_tag.clone();
-                    let progress_retry: Option<boost_download::DownloadProgressFn> =
-                        progress.as_ref().map(|p| {
-                            let p = p.clone();
-                            Arc::new(move |downloaded: u64, total: u64, _label: &str| {
-                                eprintln!(
-                                    "[ZipherX] Boost download: {} / {} MB",
-                                    downloaded / (1024 * 1024),
-                                    total / (1024 * 1024),
-                                );
-                                p(SyncStatus::BoostDownload {
-                                    downloaded_bytes: downloaded,
-                                    total_bytes: total,
-                                });
-                            }) as Arc<dyn Fn(u64, u64, &str) + Send + Sync>
-                        });
+                let download_progress = make_progress_fn(&progress);
+                let boost_dir_clone = boost_dir.clone();
+                let tag_clone = update_tag.clone();
 
-                    let retry_handle = tokio::spawn(async move {
-                        let tag_ref = tag_retry.as_deref();
-                        boost_download::download_boost_file_if_needed(
-                            &boost_dir_retry,
-                            progress_retry,
-                            tag_ref,
-                        )
-                        .await
-                    });
+                let handle = tokio::spawn(async move {
+                    let tag_ref = tag_clone.as_deref();
+                    boost_download::download_boost_file_if_needed(
+                        &boost_dir_clone,
+                        download_progress,
+                        tag_ref,
+                    )
+                    .await
+                });
 
-                    match retry_handle.await {
-                        Ok(Ok(result)) => {
+                match handle.await {
+                    Ok(Ok(result)) => {
+                        if attempt > 1 {
                             eprintln!("[ZipherX] Boost download succeeded on attempt {}", attempt);
-                            boost_download_result = Some(result);
-                            last_error = None;
-                            break;
                         }
-                        Ok(Err(e)) => {
-                            last_error = Some(e.to_string());
-                            eprintln!(
-                                "[ZipherX] Boost download failed (attempt {}/{}): {e}",
-                                attempt, BOOST_MAX_RETRIES,
-                            );
-                        }
-                        Err(e) => {
-                            last_error = Some(e.to_string());
-                            eprintln!(
-                                "[ZipherX] Boost download task panicked (attempt {}/{}): {e}",
-                                attempt, BOOST_MAX_RETRIES,
-                            );
-                        }
+                        boost_download_result = Some(result);
+                        last_error = None;
+                        break;
+                    }
+                    Ok(Err(e)) => {
+                        last_error = Some(e.to_string());
+                        eprintln!(
+                            "[ZipherX] Boost download failed (attempt {}/{}): {e}",
+                            attempt, BOOST_MAX_RETRIES,
+                        );
+                    }
+                    Err(e) => {
+                        last_error = Some(e.to_string());
+                        eprintln!(
+                            "[ZipherX] Boost download task panicked (attempt {}/{}): {e}",
+                            attempt, BOOST_MAX_RETRIES,
+                        );
                     }
                 }
             }
-        }
 
-        // All retries exhausted — notify user via BoostFailed status
-        if boost_download_result.is_none() {
-            let reason = last_error.unwrap_or_else(|| "Unknown error".to_string());
-            eprintln!(
-                "[ZipherX] Boost download failed after {} attempts: {}",
-                BOOST_MAX_RETRIES, reason,
-            );
-            eprintln!("[ZipherX] Falling back to P2P header sync (much slower)...");
-            if let Some(ref p) = progress {
-                p(SyncStatus::BoostFailed {
-                    reason: reason.clone(),
-                    attempts: BOOST_MAX_RETRIES,
-                });
+            // All retries exhausted — notify user via BoostFailed status
+            if boost_download_result.is_none() {
+                let reason = last_error.unwrap_or_else(|| "Unknown error".to_string());
+                eprintln!(
+                    "[ZipherX] Boost download failed after {} attempts: {}",
+                    BOOST_MAX_RETRIES, reason,
+                );
+                eprintln!("[ZipherX] Falling back to P2P header sync (much slower)...");
+                if let Some(ref p) = progress {
+                    p(SyncStatus::BoostFailed {
+                        reason: reason.clone(),
+                        attempts: BOOST_MAX_RETRIES,
+                    });
+                }
+                // Give UI time to show the BoostFailed status and let user decide.
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
-            // Give UI time to show the BoostFailed status and let user decide.
-            // The sync will continue with P2P header sync after this pause.
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         }
-    }
-
-    // Now check peer count — we need at least 1 peer for header sync
-    if peer_count == 0 {
-        return Err(CoreError::Network(
-            zipherx_network::types::NetworkError::NoPeersAvailable,
-        ));
     }
 
     // ================================================================
@@ -511,41 +421,48 @@ pub async fn sync_to_tip(
         .map_err(|e| CoreError::Storage(e.to_string()))?
         .unwrap_or(0);
 
-    // Step 3b: Reconnect peers if they dropped during boost load (can take 15+ min).
-    // Check for zombie peers: appear connected but listeners are dead (reader consumed,
-    // dispatcher inactive). These pass is_connected() but can't handle header requests.
-    {
-        let ready = peer_manager.get_ready_peers();
-        let zombie_count = ready.iter().filter(|p| !p.is_listener_active()).count();
-        let live_count = ready.len() - zombie_count;
+    // ================================================================
+    // Step 3b: Connect to P2P peers — AFTER boost download + load.
+    //
+    // Peers are only needed for: header sync (gap fill), delta sync,
+    // and block scan. Connecting them earlier wastes resources and
+    // creates zombie peers that die during long boost operations.
+    // ================================================================
+    if peer_manager.connected_count() == 0 {
+        let mut last_err = None;
+        for attempt in 1..=3 {
+            tracing::info!("Peer connection attempt {}/3...", attempt);
 
-        if live_count == 0 {
-            eprintln!(
-                "[ZipherX] No live peers after boost load ({} zombies, {} disconnected), reconnecting...",
-                zombie_count,
-                peer_manager.peers.len() - ready.len(),
-            );
-            // Disconnect zombies so connect() starts fresh
-            peer_manager.disconnect_all().await;
-            for attempt in 1..=3 {
-                match peer_manager.connect().await {
-                    Ok(()) => break,
-                    Err(e) => {
-                        eprintln!("[ZipherX] Reconnect attempt {}/3 failed: {e}", attempt);
-                        if attempt < 3 {
-                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                        }
+            match peer_manager.connect_with_counter(peer_count_ref.as_ref()).await {
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("Connection attempt {}/3 failed: {e}", attempt);
+                    last_err = Some(e);
+                    if attempt < 3 {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                     }
                 }
             }
-            let pc = peer_manager.connected_count();
-            eprintln!("[ZipherX] Reconnected: {} peers", pc);
-            if pc == 0 {
-                return Err(CoreError::Network(
-                    zipherx_network::types::NetworkError::NoPeersAvailable,
-                ));
-            }
         }
+
+        if let Some(e) = last_err {
+            return Err(CoreError::Network(e));
+        }
+    }
+
+    let peer_count = peer_manager.connected_count();
+    if let Some(ref pc) = peer_count_ref {
+        pc.store(peer_count as u32, Ordering::Relaxed);
+    }
+    tracing::info!("{} peers connected", peer_count);
+
+    if peer_count == 0 {
+        return Err(CoreError::Network(
+            zipherx_network::types::NetworkError::NoPeersAvailable,
+        ));
     }
 
     // Step 4: P2P header sync — only fetches gap from boost height to chain tip.
@@ -1090,12 +1007,14 @@ pub async fn sync_to_tip(
                             .unwrap_or(false);
 
                         if root_valid {
-                            // FIX #1300: Tree root is valid, but check if any notes
-                            // have stale/invalid witness anchors. If so, we must rebuild
-                            // the tree to re-create witnesses with the correct anchor.
+                            // Check if any notes are missing witnesses or anchors.
+                            // If so, rebuild the tree to re-create them.
                             let db_c = db.clone();
-                            let hs_ref = header_store.clone();
-                            let has_invalid_anchors = tokio::task::spawn_blocking(move || -> bool {
+                            // Check only for missing witnesses/anchors (NOT HeaderStore validation).
+                            // The delta-based HeaderStore is INCOMPLETE — valid anchors may not
+                            // be present in it. Checking anchors against HeaderStore caused false
+                            // positives → full tree rebuild from boost on every sync.
+                            let has_missing_witnesses = tokio::task::spawn_blocking(move || -> bool {
                                 let notes = match db_c.get_all_unspent_notes(0) {
                                     Ok(n) => n,
                                     Err(_) => return false,
@@ -1106,16 +1025,7 @@ pub async fn sync_to_tip(
                                     {
                                         return true; // Missing witness
                                     }
-                                    if let Some(ref anchor) = note.anchor {
-                                        if anchor.len() == 32 {
-                                            let valid = hs_ref
-                                                .contains_sapling_root(anchor)
-                                                .unwrap_or(false);
-                                            if !valid {
-                                                return true; // Invalid anchor
-                                            }
-                                        }
-                                    } else {
+                                    if note.anchor.is_none() {
                                         return true; // No anchor
                                     }
                                 }
@@ -1124,9 +1034,9 @@ pub async fn sync_to_tip(
                             .await
                             .unwrap_or(false);
 
-                            if has_invalid_anchors {
+                            if has_missing_witnesses {
                                 eprintln!(
-                                    "[ZipherX] Tree root valid but notes have invalid/missing anchors — forcing tree rebuild for witness re-creation",
+                                    "[ZipherX] Tree root valid but notes have missing witnesses/anchors — forcing tree rebuild for witness re-creation",
                                 );
                                 if let Some(ref p) = progress {
                                     p(SyncStatus::WitnessUpdate {
@@ -1335,6 +1245,10 @@ pub async fn sync_to_tip(
                         let mut witness_map: Vec<([u8; 32], u64)> = Vec::new();
                         let mut global_cmu_idx: usize = 0;
                         let mut page_offset: usize = 0;
+                        // Dedup: delta store has duplicates from delta_sync + block_scan.
+                        // Without dedup, duplicates past skip_count get appended → wrong tree root.
+                        let mut seen_cmus: HashSet<(u32, [u8; 32])> = HashSet::new();
+                        let mut dedup_skipped: usize = 0;
 
                         loop {
                             let page = delta_store
@@ -1352,17 +1266,27 @@ pub async fn sync_to_tip(
 
                             if need_witnesses {
                                 // Individual append with witness creation
-                                for (_h, cmu) in &page {
-                                    if global_cmu_idx < skip_count {
-                                        global_cmu_idx += 1;
-                                        continue;
-                                    }
-                                    global_cmu_idx += 1;
+                                for (h, cmu) in &page {
                                     if cmu.len() != 32 {
+                                        global_cmu_idx += 1;
                                         continue;
                                     }
                                     let mut cmu_arr = [0u8; 32];
                                     cmu_arr.copy_from_slice(cmu);
+
+                                    let is_new = seen_cmus.insert((*h, cmu_arr));
+
+                                    if global_cmu_idx < skip_count {
+                                        global_cmu_idx += 1;
+                                        if !is_new { dedup_skipped += 1; }
+                                        continue;
+                                    }
+                                    global_cmu_idx += 1;
+
+                                    if !is_new {
+                                        dedup_skipped += 1;
+                                        continue;
+                                    }
 
                                     commitment_tree::append(&cmu_arr).map_err(|e| {
                                         CoreError::Crypto(format!("Delta CMU append: {e}"))
@@ -1386,19 +1310,34 @@ pub async fn sync_to_tip(
                                     }
                                 }
                             } else {
-                                // Fast path: batch append (skip first skip_count CMUs)
-                                let cmu_bytes: Vec<u8> = page
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, _)| {
-                                        let idx = global_cmu_idx;
+                                // Fast path: batch append (skip first skip_count, dedup)
+                                let mut batch_buf: Vec<u8> = Vec::new();
+                                for (h, cmu) in &page {
+                                    if cmu.len() != 32 {
                                         global_cmu_idx += 1;
-                                        idx >= skip_count
-                                    })
-                                    .flat_map(|(_, (_, cmu))| cmu.iter().copied())
-                                    .collect();
-                                if !cmu_bytes.is_empty() {
-                                    commitment_tree::append_batch(&cmu_bytes).map_err(|e| {
+                                        continue;
+                                    }
+                                    let mut cmu_arr = [0u8; 32];
+                                    cmu_arr.copy_from_slice(cmu);
+
+                                    let is_new = seen_cmus.insert((*h, cmu_arr));
+
+                                    if global_cmu_idx < skip_count {
+                                        global_cmu_idx += 1;
+                                        if !is_new { dedup_skipped += 1; }
+                                        continue;
+                                    }
+                                    global_cmu_idx += 1;
+
+                                    if !is_new {
+                                        dedup_skipped += 1;
+                                        continue;
+                                    }
+
+                                    batch_buf.extend_from_slice(cmu);
+                                }
+                                if !batch_buf.is_empty() {
+                                    commitment_tree::append_batch(&batch_buf).map_err(|e| {
                                         CoreError::Crypto(format!("Delta CMU append: {e}"))
                                     })?;
                                 }
@@ -1408,6 +1347,13 @@ pub async fn sync_to_tip(
                             if page_len < DELTA_CMU_PAGE {
                                 break;
                             }
+                        }
+
+                        if dedup_skipped > 0 {
+                            eprintln!(
+                                "[ZipherX] Delta load: deduplicated {} duplicate CMUs",
+                                dedup_skipped,
+                            );
                         }
 
                         // Update tree height in DB
@@ -2615,24 +2561,10 @@ pub async fn rebuild_witnesses_if_needed(
     // Check if all existing anchors are the SAME — Sapling requires all spends
     // in a TX to share the same anchor. Different anchors = different tree states.
     let mut anchors_differ = false;
-    let mut has_invalid_anchor = false;
     let mut first_anchor: Option<&[u8]> = None;
     for n in &all_unspent {
         if let Some(ref anchor) = n.anchor {
             if anchor.len() == 32 {
-                // FIX #1300: Check if anchor is actually valid on blockchain
-                if !has_invalid_anchor {
-                    let valid = _header_store
-                        .contains_sapling_root(anchor)
-                        .unwrap_or(false);
-                    if !valid {
-                        eprintln!(
-                            "[ZipherX] Witness rebuild: note id={} has INVALID anchor {} — forcing rebuild",
-                            n.id, hex::encode(anchor),
-                        );
-                        has_invalid_anchor = true;
-                    }
-                }
                 if let Some(first) = first_anchor {
                     if first != anchor.as_slice() {
                         anchors_differ = true;
@@ -2644,9 +2576,13 @@ pub async fn rebuild_witnesses_if_needed(
         }
     }
 
-    // Rebuild ALL witnesses when any are missing, anchors differ, or anchors are invalid
+    // Rebuild ALL witnesses when any are missing or anchors differ.
+    // Note: FIX #1300 previously also checked anchors against header store,
+    // but the delta-based header store is incomplete (only blocks where sapling
+    // root changed) and falsely flagged valid anchors as invalid, triggering
+    // unnecessary full rebuilds on every sync.
     let notes_needing_witnesses: Vec<&zipherx_storage::types::Note> =
-        if missing_witnesses || anchors_differ || has_invalid_anchor {
+        if missing_witnesses || anchors_differ {
             all_unspent.iter().collect()
         } else {
             Vec::new()
@@ -3069,24 +3005,22 @@ pub async fn rebuild_witnesses_if_needed(
         );
     }
 
-    // FIX #1300: Validate all witness anchors against header store before storing.
-    // If the rebuilt tree root doesn't match any blockchain root, storing these
-    // witnesses would permanently block sends (anchor validation in async_send.rs).
+    // Log anchor for diagnostics (witnesses already passed internal consistency).
+    // Previously FIX #1300 rejected witnesses when anchors weren't in header store,
+    // but the delta-based header store is INCOMPLETE (only blocks where sapling root
+    // changed). Witnesses built from boost+delta CMUs are mathematically correct;
+    // their anchors ARE valid blockchain roots even if the header store doesn't
+    // have them. Anchor validation for sends happens against the full chain anyway.
     if !witness_updates.is_empty() {
         let sample_anchor = &witness_updates[0].2;
-        let anchor_valid = _header_store
+        let anchor_in_hs = _header_store
             .contains_sapling_root(sample_anchor)
             .unwrap_or(false);
-        if !anchor_valid {
-            eprintln!(
-                "[ZipherX] Witness rebuild: anchor {} NOT found in header store — NOT storing witnesses (tree data corrupted)",
-                hex::encode(sample_anchor),
-            );
-            eprintln!(
-                "[ZipherX] Witness rebuild: Full Rescan required to fix commitment tree",
-            );
-            return Ok(0);
-        }
+        eprintln!(
+            "[ZipherX] Witness rebuild: anchor {}... in_header_store={}",
+            hex::encode(&sample_anchor[..8]),
+            anchor_in_hs,
+        );
     }
 
     if witness_updates.is_empty() {
@@ -3691,6 +3625,13 @@ async fn post_boost_delta_scan(
     chain_tip: u64,
     progress: &Option<SyncProgressFn>,
 ) -> Result<(u32, usize), CoreError> {
+    // Dedup delta store on disk (removes duplicates accumulated from no_dedup appends)
+    match delta_store.dedup_outputs() {
+        Ok(0) => {},
+        Ok(n) => eprintln!("[ZipherX] Post-boost scan: deduped delta store, removed {} duplicates", n),
+        Err(e) => eprintln!("[ZipherX] Post-boost scan: dedup warning: {}", e),
+    }
+
     // Load ALL delta outputs (sparse, typically ~3K records, ~2MB)
     let total_outputs = delta_store
         .output_count()
@@ -4441,7 +4382,7 @@ async fn post_boost_full_block_scan(
                     .max()
                     .expect("chunk_delta_outputs confirmed non-empty");
                 delta_store
-                    .append_outputs_no_dedup(&chunk_delta_outputs, min_h, max_h, None)
+                    .append_outputs(&chunk_delta_outputs, min_h, max_h, None)
                     .map_err(|e| CoreError::Storage(e.to_string()))?;
             }
 
@@ -5336,7 +5277,7 @@ async fn scan_blocks_for_pending_txs(
             let min_h = chunk_delta_outputs.iter().map(|o| o.height as u64).min().expect("chunk_delta_outputs confirmed non-empty");
             let max_h = chunk_delta_outputs.iter().map(|o| o.height as u64).max().expect("chunk_delta_outputs confirmed non-empty");
             delta_store
-                .append_outputs_no_dedup(&chunk_delta_outputs, min_h, max_h, None)
+                .append_outputs(&chunk_delta_outputs, min_h, max_h, None)
                 .map_err(|e| CoreError::Storage(e.to_string()))?;
         }
 
