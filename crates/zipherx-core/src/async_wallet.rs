@@ -186,6 +186,15 @@ impl AsyncWallet {
         // Update peer count after sync completes
         peer_count_ref.store(pm.connected_count() as u32, Ordering::Relaxed);
 
+        // Reset live_chain_tip to the actual synced height so it stays anchored
+        // to reality. Without this, fetch_add(1) per inv MSG_BLOCK drifts
+        // live_chain_tip above median+100 over long sessions, causing
+        // get_consensus_height() to fall back to a stale peer_start_height
+        // median — which makes header sync return 0 new headers.
+        if let Ok(synced_height) = &result {
+            pm.live_chain_tip.store(*synced_height, Ordering::Relaxed);
+        }
+
         // Pre-initialize the Sapling prover after sync so that send() is instant.
         // The params files are cached on disk; this just loads them into memory.
         // Only runs once per app session (is_prover_ready() returns true afterwards).
