@@ -1,0 +1,25 @@
+[package]
+name = "zipherx-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+zipherx-crypto = { workspace = true }
+zipherx-network = { workspace = true }
+zipherx-storage = { workspace = true }
+zipherx-platform = { workspace = true }
+tokio.workspace = true
+futures.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+rand.workspace = true
+once_cell.workspace = true
+reqwest = { workspace = true }
+memmap2 = { workspace = true }
+sha2 = { workspace = true }
+bech32 = { workspace = true }
+zeroize = "1.7"
+zipherx-tor = { workspace = true }

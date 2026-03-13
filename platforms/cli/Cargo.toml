@@ -1,0 +1,36 @@
+[package]
+name = "zipherx-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ZipherX wallet CLI for Linux, Windows, and macOS"
+
+[[bin]]
+name = "zipherx-cli"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates — use directly, no FFI overhead
+zipherx-crypto = { path = "../../crates/zipherx-crypto" }
+zipherx-platform = { path = "../../crates/zipherx-platform" }
+zipherx-tor = { path = "../../crates/zipherx-tor" }
+zipherx-core = { path = "../../crates/zipherx-core" }
+zipherx-network = { path = "../../crates/zipherx-network" }
+zipherx-storage = { path = "../../crates/zipherx-storage" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# CLI
+rustyline = "14"
+rpassword = "=7.4.0"  # Pinned for supply chain security
+crossterm = "0.27"
+
+# Encryption for secure storage
+argon2 = "0.5"
+aes-gcm = { workspace = true }
+
+# Utilities
+hex = { workspace = true }
+dirs = { workspace = true }
+rand = { workspace = true }

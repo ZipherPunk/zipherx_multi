@@ -1,0 +1,28 @@
+[package]
+name = "zipherx-tor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Phase 1: Type definitions and stubs only.
+# Phase 2: Uncomment Arti dependencies for full Tor integration.
+#
+# arti-client = { version = "0.37", default-features = false, features = ["tokio", "rustls", "onion-service-client", "onion-service-service", "experimental-api"] }
+# tor-rtcompat = { version = "0.37", features = ["tokio", "rustls"] }
+# tor-hsservice = "0.37"
+# tor-hscrypto = "0.37"
+# tor-llcrypto = "0.37"
+# tor-proto = "0.37"
+# ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+# reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "stream"] }
+
+tokio.workspace = true
+futures.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+dirs = "5.0"
+once_cell = "1.19"
+rand.workspace = true
+ed25519-dalek.workspace = true
+sha3.workspace = true
+data-encoding = "2.5"

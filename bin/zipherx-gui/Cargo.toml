@@ -1,0 +1,53 @@
+[package]
+name = "zipherx-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ZipherX Desktop — Privacy-first Zclassic wallet (egui)"
+
+[[bin]]
+name = "zipherx-gui"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates — direct Rust API, no UniFFI bridge
+zipherx-platform = { path = "../../crates/zipherx-platform" }
+zipherx-crypto = { path = "../../crates/zipherx-crypto" }
+zipherx-network = { path = "../../crates/zipherx-network" }
+zipherx-storage = { path = "../../crates/zipherx-storage" }
+zipherx-core = { path = "../../crates/zipherx-core" }
+zipherx-tor = { path = "../../crates/zipherx-tor" }
+
+# GUI
+eframe = "0.29"
+egui = "0.29"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Async runtime (background sync thread owns its own)
+tokio = { workspace = true }
+
+# QR code generation
+qrcode = "0.14"
+
+# Crypto — key storage
+argon2 = "0.5"
+aes-gcm = { workspace = true }
+
+# Security
+zeroize = { workspace = true }
+rand = { workspace = true }
+
+# Serialization
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# HTTP (for JSON-RPC to zclassicd)
+ureq = { workspace = true }
+base64 = { workspace = true }
+
+# Utilities
+libc = "0.2"
+dirs = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
