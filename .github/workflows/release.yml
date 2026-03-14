@@ -160,8 +160,15 @@ jobs:
         run: |
           cargo run -p uniffi-bindgen -- generate crates/zipherx-ffi/src/zipherx.udl --language kotlin --out-dir platforms/android/src/main/kotlin/
 
+      - name: Decode keystore
+        run: echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > platforms/android/release.keystore
+
       - name: Build APK
         working-directory: platforms/android
+        env:
+          ZIPHERX_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          ZIPHERX_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          ZIPHERX_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
