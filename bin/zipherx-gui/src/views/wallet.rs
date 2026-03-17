@@ -3,6 +3,8 @@
 use crate::app::{fmt_zcl, ZipherXApp};
 use crate::theme;
 use crate::widgets::qr;
+use zeroize::Zeroize;
+use zipherx_platform::SecureStorage;
 
 /// Show the main wallet dashboard.
 pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -123,9 +125,15 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.add_space(5.0);
         }
 
+        // -- Seed migration banner --
+        if app.needs_seed_migration {
+            show_seed_migration(app, ui);
+            ui.add_space(8.0);
+        }
+
         // -- Balance --
         ui.label(
-            egui::RichText::new("BALANCE")
+            egui::RichText::new("TOTAL BALANCE")
                 .font(theme::mono(11.0))
                 .color(theme::MUTED),
         );
@@ -143,11 +151,23 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     .color(egui::Color32::from_rgba_unmultiplied(255, 215, 0, 180)),
             );
         } else {
+            let total = app.balance.spendable + app.transparent_balance;
             ui.label(
-                egui::RichText::new(format!("{} ZCL", fmt_zcl(app.balance.spendable)))
+                egui::RichText::new(format!("{} ZCL", fmt_zcl(total)))
                     .font(theme::mono(28.0))
-                    .color(theme::GREEN),
+                    .color(egui::Color32::WHITE),
             );
+
+            ui.add_space(6.0);
+
+            // Shielded balance
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("SHIELDED  {} ZCL", fmt_zcl(app.balance.spendable)))
+                        .font(theme::mono(12.0))
+                        .color(theme::GREEN),
+                );
+            });
             if app.balance.note_count > 0 {
                 if app.balance.total != app.balance.spendable {
                     ui.label(
@@ -157,7 +177,7 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             app.balance.spendable_note_count,
                             app.balance.note_count,
                         ))
-                        .font(theme::mono(10.0))
+                        .font(theme::mono(9.0))
                         .color(theme::MUTED),
                     );
                 } else {
@@ -166,7 +186,33 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             "{}/{} spendable notes",
                             app.balance.spendable_note_count, app.balance.note_count,
                         ))
-                        .font(theme::mono(10.0))
+                        .font(theme::mono(9.0))
+                        .color(theme::MUTED),
+                    );
+                }
+            }
+
+            // Transparent balance
+            if app.transparent_address.is_some() {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "TRANSPARENT  {} ZCL",
+                            fmt_zcl(app.transparent_balance)
+                        ))
+                        .font(theme::mono(12.0))
+                        .color(theme::YELLOW),
+                    );
+                });
+                // Imported key indicator
+                if app.imported_key_count > 0 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Includes {} imported address(es) \u{2014} not covered by recovery phrase",
+                            app.imported_key_count
+                        ))
+                        .font(theme::mono(9.0))
                         .color(theme::MUTED),
                     );
                 }
@@ -317,6 +363,34 @@ fn show_receive(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 }
             }
 
+            // Transparent address
+            if let Some(ref t_addr) = app.transparent_address {
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new("YOUR TRANSPARENT ADDRESS")
+                        .font(theme::mono(12.0))
+                        .color(egui::Color32::from_rgb(180, 180, 180)),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(t_addr)
+                        .font(theme::mono(11.0))
+                        .color(egui::Color32::from_rgb(180, 180, 180)),
+                );
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ COPY T-ADDRESS ]")
+                            .font(theme::mono(11.0))
+                            .color(egui::Color32::from_rgb(180, 180, 180)),
+                    ))
+                    .clicked()
+                {
+                    ctx.copy_text(t_addr.clone());
+                    app.clipboard_clear_at = Some(std::time::Instant::now());
+                    ctx.request_repaint_after(std::time::Duration::from_secs(31));
+                }
+            }
+
             ui.add_space(5.0);
             if ui
                 .add(egui::Button::new(
@@ -408,6 +482,8 @@ fn show_recent_transactions(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui:
             "received" => ("[+]", theme::GREEN, "+"),
             "sent" => ("[-]", theme::RED, "-"),
             "self" => ("[S]", theme::YELLOW, "~"),
+            "self_z2t" => ("[z>t]", theme::YELLOW, "~"),
+            "self_t2z" => ("[t>z]", theme::YELLOW, "~"),
             _ => ("[?]", theme::MUTED, ""),
         };
 
@@ -465,35 +541,39 @@ fn show_recent_transactions(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui:
                 });
 
                 // Expanded details
+                let mut btn_clicked = false;
                 if app.history_expanded == Some(i) {
                     ui.label(
                         egui::RichText::new(format!("TXID: {}", &tx.txid))
                             .font(theme::mono(9.0))
                             .color(theme::MUTED),
                     );
-                    if ui
-                        .add(egui::Button::new(
-                            egui::RichText::new("[COPY TXID]")
-                                .font(theme::mono(9.0))
-                                .color(theme::CYAN),
-                        ))
-                        .clicked()
-                    {
+                    let copy_btn = ui.add(egui::Button::new(
+                        egui::RichText::new("[COPY TXID]")
+                            .font(theme::mono(9.0))
+                            .color(theme::CYAN),
+                    ));
+                    if copy_btn.clicked() {
                         ctx.copy_text(tx.txid.clone());
                         app.clipboard_clear_at = Some(std::time::Instant::now());
                         // GUI-H3: ensure repaint fires for clipboard auto-clear
                         ctx.request_repaint_after(std::time::Duration::from_secs(31));
+                        btn_clicked = true;
                     }
                 }
+                btn_clicked
             });
 
-        // Click to expand/collapse — use frame rect, not ui.min_rect()
-        let last = ui.interact(
-            frame_resp.response.rect,
-            egui::Id::new(format!("tx_{}", i)),
-            egui::Sense::click(),
-        );
-        if last.clicked() {
+        // Click to expand/collapse — use raw pointer input instead of ui.interact()
+        // to avoid creating a competing click widget that steals clicks from buttons inside.
+        let row_rect = frame_resp.response.rect;
+        let clicked_row = ctx.input(|i| {
+            i.pointer.primary_released()
+                && i.pointer
+                    .latest_pos()
+                    .is_some_and(|pos| row_rect.contains(pos))
+        });
+        if clicked_row && !frame_resp.inner {
             app.history_expanded = if app.history_expanded == Some(i) {
                 None
             } else {
@@ -800,4 +880,199 @@ fn show_boost_failed_dialog(app: &mut ZipherXApp, ui: &mut egui::Ui, reason: &st
             });
         });
     ui.add_space(10.0);
+}
+
+/// Seed migration banner — upgrade from pre-transparent-address versions.
+fn show_seed_migration(app: &mut ZipherXApp, ui: &mut egui::Ui) {
+    egui::Frame::none()
+        .fill(egui::Color32::from_rgb(30, 25, 0))
+        .inner_margin(12.0)
+        .rounding(4.0)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("[!] ENABLE TRANSPARENT ADDRESSES")
+                    .font(theme::mono(13.0))
+                    .color(theme::YELLOW),
+            );
+            ui.add_space(4.0);
+
+            match app.seed_migration_mode.as_str() {
+                "banner" => {
+                    ui.label(
+                        egui::RichText::new(
+                            "Transparent address (t-address) support is available. \
+                             Provide your recovery phrase or generate a new one.",
+                        )
+                        .font(theme::mono(10.0))
+                        .color(theme::MUTED),
+                    );
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(
+                                egui::RichText::new("I HAVE MY PHRASE")
+                                    .font(theme::mono(11.0))
+                                    .color(egui::Color32::BLACK),
+                            )
+                            .clicked()
+                        {
+                            app.seed_migration_mode = "enter_phrase".to_string();
+                        }
+                        ui.add_space(8.0);
+                        if ui
+                            .button(
+                                egui::RichText::new("GENERATE NEW")
+                                    .font(theme::mono(11.0))
+                                    .color(egui::Color32::BLACK),
+                            )
+                            .clicked()
+                        {
+                            match zipherx_crypto::mnemonic::generate() {
+                                Ok(phrase) => {
+                                    app.seed_migration_words =
+                                        phrase.split_whitespace().map(String::from).collect();
+                                    app.seed_migration_mode = "backup".to_string();
+                                }
+                                Err(e) => {
+                                    app.send_error = Some(format!("Generate failed: {e}"));
+                                }
+                            }
+                        }
+                        ui.add_space(8.0);
+                        if ui
+                            .button(
+                                egui::RichText::new("SKIP")
+                                    .font(theme::mono(10.0))
+                                    .color(theme::MUTED),
+                            )
+                            .clicked()
+                        {
+                            app.needs_seed_migration = false;
+                        }
+                    });
+                }
+
+                "enter_phrase" => {
+                    ui.label(
+                        egui::RichText::new("Enter your 24-word recovery phrase:")
+                            .font(theme::mono(10.0))
+                            .color(theme::MUTED),
+                    );
+                    ui.add_space(4.0);
+                    ui.add(
+                        egui::TextEdit::multiline(&mut app.seed_migration_input)
+                            .font(theme::mono(11.0))
+                            .desired_rows(2)
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(egui::RichText::new("ACTIVATE").font(theme::mono(11.0)))
+                            .clicked()
+                        {
+                            let words: Vec<&str> =
+                                app.seed_migration_input.trim().split_whitespace().collect();
+                            if words.len() == 24 {
+                                let phrase = words.join(" ");
+                                match zipherx_crypto::mnemonic::to_seed(&phrase) {
+                                    Ok(seed) => {
+                                        // Verify SK matches if we have one
+                                        let sk_matches = if let Some(ref sk) = app.sk_bytes {
+                                            zipherx_crypto::keys::derive_spending_key(&seed, 0)
+                                                .map(|derived| &*derived == sk.as_slice())
+                                                .unwrap_or(false)
+                                        } else {
+                                            true
+                                        };
+                                        if sk_matches {
+                                            let _ = app.storage.store_key("wallet_seed", &seed);
+                                            if let Ok(t_addr) = zipherx_crypto::transparent::derive_transparent_address(&seed, 0, 0) {
+                                                app.transparent_address = Some(t_addr);
+                                            }
+                                            app.needs_seed_migration = false;
+                                            app.seed_migration_input.zeroize();
+                                        } else {
+                                            app.send_error = Some(
+                                                "This phrase does not match the current wallet.".to_string(),
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        app.send_error =
+                                            Some(format!("Invalid phrase: {e}"));
+                                    }
+                                }
+                            } else {
+                                app.send_error =
+                                    Some(format!("Enter exactly 24 words (got {}).", words.len()));
+                            }
+                        }
+                        ui.add_space(8.0);
+                        if ui
+                            .button(egui::RichText::new("BACK").font(theme::mono(10.0)).color(theme::MUTED))
+                            .clicked()
+                        {
+                            app.seed_migration_mode = "banner".to_string();
+                            app.seed_migration_input.zeroize();
+                        }
+                    });
+                }
+
+                "backup" => {
+                    ui.label(
+                        egui::RichText::new("WRITE DOWN THIS PHRASE — it controls your t-address funds:")
+                            .font(theme::mono(10.0))
+                            .color(theme::RED),
+                    );
+                    ui.add_space(6.0);
+                    let phrase = app.seed_migration_words.join(" ");
+                    egui::Frame::none()
+                        .fill(theme::BG)
+                        .inner_margin(10.0)
+                        .rounding(2.0)
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(&phrase)
+                                    .font(theme::mono(12.0))
+                                    .color(theme::GREEN),
+                            );
+                        });
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "This is SEPARATE from your shielded private key. Keep BOTH to fully recover.",
+                        )
+                        .font(theme::mono(9.0))
+                        .color(theme::YELLOW),
+                    );
+                    ui.add_space(8.0);
+                    if ui
+                        .button(
+                            egui::RichText::new("I HAVE SAVED THIS — ACTIVATE")
+                                .font(theme::mono(11.0))
+                                .color(egui::Color32::BLACK),
+                        )
+                        .clicked()
+                    {
+                        let phrase = app.seed_migration_words.join(" ");
+                        if let Ok(seed) = zipherx_crypto::mnemonic::to_seed(&phrase) {
+                            let _ = app.storage.store_key("wallet_seed", &seed);
+                            if let Ok(t_addr) =
+                                zipherx_crypto::transparent::derive_transparent_address(&seed, 0, 0)
+                            {
+                                app.transparent_address = Some(t_addr);
+                            }
+                            app.needs_seed_migration = false;
+                        }
+                        for w in app.seed_migration_words.iter_mut() {
+                            w.zeroize();
+                        }
+                        app.seed_migration_words.clear();
+                    }
+                }
+
+                _ => {}
+            }
+        });
 }

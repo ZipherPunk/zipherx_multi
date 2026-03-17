@@ -45,10 +45,12 @@ import com.zipherx.wallet.ZColors
 @Composable
 fun BalanceCard(
     balance: Balance?,
+    transparentBalance: Long = 0L,
     syncPhase: String,
     syncProgress: Double,
     isSyncing: Boolean,
     isPendingConfirmation: Boolean = false,
+    importedKeyCount: UInt = 0u,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -59,14 +61,15 @@ fun BalanceCard(
             .shadow(4.dp, ambientColor = ZColors.glow, spotColor = ZColors.glow)
             .padding(16.dp),
     ) {
-        // Header
+        // Total balance header (shielded + transparent)
+        val totalBalance = (balance?.total ?: 0L) + transparentBalance
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "SHIELDED BALANCE",
+                text = "TOTAL BALANCE",
                 style = MaterialTheme.typography.labelMedium,
                 color = ZColors.primaryDark,
             )
@@ -124,9 +127,9 @@ fun BalanceCard(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
         } else {
-            // Balance amount with glow
+            // Total balance amount with glow
             Text(
-                text = formatZcl(balance?.total ?: 0L),
+                text = formatZcl(totalBalance),
                 style = MaterialTheme.typography.headlineLarge.copy(
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
@@ -140,7 +143,60 @@ fun BalanceCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Spendable
+            // Shielded breakdown
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "SHIELDED",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ZColors.primaryDim,
+                )
+                Text(
+                    text = formatZcl(balance?.total ?: 0L),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ZColors.primaryDark,
+                )
+            }
+
+            // Transparent breakdown
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "TRANSPARENT",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ZColors.primaryDim,
+                )
+                Text(
+                    text = formatZcl(transparentBalance),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ZColors.primaryDark,
+                )
+            }
+
+            // Imported key indicator
+            if (importedKeyCount > 0u) {
+                Text(
+                    text = "Includes $importedKeyCount imported address(es) \u2014 not covered by recovery phrase",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 9.sp,
+                    ),
+                    color = ZColors.primaryDim,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Spendable (shielded + transparent)
             Row(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             ) {
@@ -150,7 +206,7 @@ fun BalanceCard(
                     color = ZColors.primaryDim,
                 )
                 Text(
-                    text = formatZcl(balance?.spendable ?: 0L),
+                    text = formatZcl((balance?.spendable ?: 0L) + transparentBalance),
                     style = MaterialTheme.typography.labelMedium,
                     color = ZColors.primaryDark,
                 )

@@ -19,6 +19,7 @@ public struct BalanceView: View {
     public let syncETA: TimeInterval?
     public let connectedPeers: UInt32
     public let pendingConfirmation: Bool
+    public let importedKeyCount: UInt32
 
     @State private var blinkVisible = true
 
@@ -32,7 +33,8 @@ public struct BalanceView: View {
         syncSpeed: Double = 0,
         syncETA: TimeInterval? = nil,
         connectedPeers: UInt32 = 0,
-        pendingConfirmation: Bool = false
+        pendingConfirmation: Bool = false,
+        importedKeyCount: UInt32 = 0
     ) {
         self.balance = balance
         self.syncPhase = syncPhase
@@ -44,6 +46,7 @@ public struct BalanceView: View {
         self.syncETA = syncETA
         self.connectedPeers = connectedPeers
         self.pendingConfirmation = pendingConfirmation
+        self.importedKeyCount = importedKeyCount
     }
 
     public var body: some View {
@@ -107,6 +110,13 @@ public struct BalanceView: View {
                 if let bal = balance {
                     Text("\(bal.spendableNoteCount)/\(bal.noteCount) notes spendable")
                         .font(ZFonts.small)
+                        .foregroundColor(ZColors.primaryDim)
+                }
+
+                // Imported key indicator
+                if importedKeyCount > 0 {
+                    Text("Includes \(importedKeyCount) imported address(es) \u{2014} not covered by recovery phrase")
+                        .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(ZColors.primaryDim)
                 }
 
