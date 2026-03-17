@@ -26,10 +26,12 @@ private func _ffiMnemonicToSeed(phrase: String) throws -> [UInt8] { try mnemonic
 private func _ffiDeriveSpendingKey(seed: [UInt8], accountIndex: UInt32) throws -> [UInt8] { try deriveSpendingKey(seed: seed, accountIndex: accountIndex) }
 private func _ffiDeriveAddress(skBytes: [UInt8], diversifierIndex: UInt64) throws -> String { try deriveAddress(skBytes: skBytes, diversifierIndex: diversifierIndex) }
 private func _ffiValidateAddress(address: String) -> Bool { validateAddress(address: address) }
+private func _ffiValidateTransparentAddress(address: String) -> Bool { validateTransparentAddress(address: address) }
 private func _ffiInitializeWallet(config: WalletConfigFfi) throws { try initializeWallet(config: config) }
 private func _ffiCreateWalletNew() throws -> [String] { try createWalletNew() }
 private func _ffiRestoreWallet(words: [String]) throws { try restoreWallet(words: words) }
 private func _ffiGetBalance() throws -> BalanceInfo { try getBalance() }
+private func _ffiGetTransparentBalance() throws -> UInt64 { try getTransparentBalance() }
 private func _ffiGetWalletSummary() throws -> WalletSummaryFfi { try getWalletSummary() }
 private func _ffiGetTransactionHistory(limit: UInt32, offset: UInt32) throws -> [TransactionDisplayFfi] { try getTransactionHistory(limit: limit, offset: offset) }
 private func _ffiGetTransactionCounts() throws -> TransactionCountsFfi { try getTransactionCounts() }
@@ -49,10 +51,19 @@ private func _ffiGetBannedPeers() throws -> [BannedPeerInfoFfi] { try getBannedP
 private func _ffiAddCustomPeer(host: String, port: UInt16) throws -> Bool { try addCustomPeer(host: host, port: port) }
 private func _ffiUnbanPeer(host: String) throws -> Bool { try unbanPeer(host: host) }
 private func _ffiDisconnectPeer(peerId: String) throws -> Bool { try disconnectPeer(peerId: peerId) }
+// Funded transparent key export & WIF import
+private func _ffiExportFundedTransparentWifs() throws -> [FundedTransparentKeyFfi] { try exportFundedTransparentWifs() }
+private func _ffiValidateWifKeys(wifs: [String]) throws -> [WifValidationResultFfi] { try validateWifKeys(wifs: wifs) }
+private func _ffiImportWifKeys(encryptedKeys: [[UInt8]], addresses: [String]) throws -> WifImportResultFfi { try importWifKeys(encryptedKeys: encryptedKeys, addresses: addresses) }
+private func _ffiGetImportedKeyCount() throws -> UInt32 { try getImportedKeyCount() }
 #endif
 
 /// Keychain identifier for the spending key.
 private let kSpendingKeyIdentifier = "spending_key"
+/// Keychain identifier for the wallet seed (used for transparent address derivation).
+private let kWalletSeedIdentifier = "wallet_seed"
+/// Keychain identifier for the BIP39 mnemonic phrase (for recovery phrase export).
+private let kWalletMnemonicIdentifier = "wallet_mnemonic"
 
 // MARK: - Swift-native error type
 
@@ -353,6 +364,15 @@ public enum ZipherXWrapper {
         #endif
     }
 
+    /// Return `true` when `address` is a valid Zclassic transparent address.
+    public static func validateTransparentAddress(_ address: String) -> Bool {
+        #if canImport(ZipherXFFI)
+        return _ffiValidateTransparentAddress(address: address)
+        #else
+        return false
+        #endif
+    }
+
     // MARK: Wallet Lifecycle
 
     /// Build a default WalletConfig using standard Application Support paths.
@@ -522,13 +542,18 @@ public enum ZipherXWrapper {
             var skBytes = try _ffiDeriveSpendingKey(seed: seed, accountIndex: 0)
             // SA-AUDIT: Zero the Data copy used for Keychain storage
             var keyData = Data(skBytes)
+            var seedData = Data(seed)
             defer {
                 // H-16: Zero out sensitive key material after use
                 seed.replaceSubrange(0..<seed.count, with: repeatElement(0, count: seed.count))
                 skBytes.replaceSubrange(0..<skBytes.count, with: repeatElement(0, count: skBytes.count))
                 keyData.resetBytes(in: 0..<keyData.count)
+                seedData.resetBytes(in: 0..<seedData.count)
             }
             try storeSpendingKey(keyData)
+            try storeSeed(seedData)
+            // Store mnemonic phrase for recovery phrase export (parity with Android)
+            try storeMnemonic(phrase)
             return words
         } catch let e as ZipherXError {
             throw e
@@ -552,13 +577,18 @@ public enum ZipherXWrapper {
             var skBytes = try _ffiDeriveSpendingKey(seed: seed, accountIndex: 0)
             // SA-AUDIT: Zero the Data copy used for Keychain storage
             var keyData = Data(skBytes)
+            var seedData = Data(seed)
             defer {
                 // H-16: Zero out sensitive key material after use
                 seed.replaceSubrange(0..<seed.count, with: repeatElement(0, count: seed.count))
                 skBytes.replaceSubrange(0..<skBytes.count, with: repeatElement(0, count: skBytes.count))
                 keyData.resetBytes(in: 0..<keyData.count)
+                seedData.resetBytes(in: 0..<seedData.count)
             }
             try storeSpendingKey(keyData)
+            try storeSeed(seedData)
+            // Store mnemonic phrase for recovery phrase export (parity with Android)
+            try storeMnemonic(phrase)
         } catch let e as ZipherXError {
             throw e
         } catch let e {
@@ -749,6 +779,19 @@ public enum ZipherXWrapper {
         #endif
     }
 
+    /// Fetch the transparent (t-address) balance in zatoshis.
+    public static func getTransparentBalance() throws -> UInt64 {
+        #if canImport(ZipherXFFI)
+        do {
+            return try _ffiGetTransparentBalance()
+        } catch let e {
+            throw ZipherXError.storageError(e.localizedDescription)
+        }
+        #else
+        throw ZipherXError.ffiNotAvailable
+        #endif
+    }
+
     /// Fetch a high-level summary of the wallet state.
     public static func getSummary() throws -> WalletSummary {
         #if canImport(ZipherXFFI)
@@ -788,6 +831,45 @@ public enum ZipherXWrapper {
     public static func loadSpendingKey() -> Data? {
         let storage = AppleSecureStorage()
         return try? storage.loadKey(identifier: kSpendingKeyIdentifier)
+    }
+
+    /// Store the wallet seed in Keychain for transparent address scanning.
+    public static func storeSeed(_ data: Data) throws {
+        let storage = AppleSecureStorage()
+        try storage.storeKey(identifier: kWalletSeedIdentifier, data: data, requireUserPresence: true)
+    }
+
+    /// Load the wallet seed from Keychain.
+    /// Returns `nil` if no seed is stored.
+    public static func loadSeed() -> Data? {
+        let storage = AppleSecureStorage()
+        return try? storage.loadKey(identifier: kWalletSeedIdentifier)
+    }
+
+    /// Store the BIP39 mnemonic phrase in Keychain for recovery phrase export.
+    /// Requires biometric/passcode authentication to read back (userPresence).
+    public static func storeMnemonic(_ phrase: String) throws {
+        let storage = AppleSecureStorage()
+        var data = Data(phrase.utf8)
+        defer { data.resetBytes(in: 0..<data.count) }
+        try storage.storeKey(identifier: kWalletMnemonicIdentifier, data: data, requireUserPresence: true)
+    }
+
+    /// Load the BIP39 mnemonic phrase from Keychain.
+    /// Returns `nil` if no mnemonic is stored (e.g., wallet imported from key).
+    public static func loadMnemonic() -> String? {
+        let storage = AppleSecureStorage()
+        guard let data = try? storage.loadKey(identifier: kWalletMnemonicIdentifier), !data.isEmpty else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Load a named key from Keychain.
+    /// Returns `nil` if the key doesn't exist.
+    public static func loadKey(_ identifier: String) -> Data? {
+        let storage = AppleSecureStorage()
+        return try? storage.loadKey(identifier: identifier)
     }
 
     // MARK: Balance and History
@@ -833,6 +915,65 @@ public enum ZipherXWrapper {
         }
         #else
         throw ZipherXError.ffiNotAvailable
+        #endif
+    }
+
+    // MARK: Funded Transparent Key Export & WIF Import
+
+    /// Export all funded transparent addresses with their WIF private keys.
+    public static func exportFundedTransparentWifs() -> [(address: String, wif: String, balance: UInt64, isChange: Bool, isImported: Bool)] {
+        #if canImport(ZipherXFFI)
+        do {
+            return try _ffiExportFundedTransparentWifs().map { k in
+                (address: k.address, wif: k.wif, balance: k.balance, isChange: k.isChange, isImported: k.isImported)
+            }
+        } catch {
+            return []
+        }
+        #else
+        return []
+        #endif
+    }
+
+    /// Validate WIF private keys, returning validity and derived address for each.
+    public static func validateWifKeys(_ wifs: [String]) -> [(valid: Bool, address: String, errorMessage: String)] {
+        #if canImport(ZipherXFFI)
+        do {
+            return try _ffiValidateWifKeys(wifs: wifs).map { r in
+                (valid: r.valid, address: r.address, errorMessage: r.errorMessage)
+            }
+        } catch {
+            return []
+        }
+        #else
+        return []
+        #endif
+    }
+
+    /// Import WIF keys via encrypted key blobs and addresses.
+    public static func importWifKeys(encryptedKeys: [[UInt8]], addresses: [String]) -> (imported: [String], errors: [(String, String)], duplicates: [String]) {
+        #if canImport(ZipherXFFI)
+        do {
+            let result = try _ffiImportWifKeys(encryptedKeys: encryptedKeys, addresses: addresses)
+            return (
+                imported: result.imported.map { $0.address },
+                errors: result.errors.map { ($0.address, $0.errorMessage) },
+                duplicates: result.duplicates
+            )
+        } catch {
+            return (imported: [], errors: [], duplicates: [])
+        }
+        #else
+        return (imported: [], errors: [], duplicates: [])
+        #endif
+    }
+
+    /// Get the number of imported transparent keys.
+    public static func getImportedKeyCount() -> UInt32 {
+        #if canImport(ZipherXFFI)
+        return (try? _ffiGetImportedKeyCount()) ?? 0
+        #else
+        return 0
         #endif
     }
 }

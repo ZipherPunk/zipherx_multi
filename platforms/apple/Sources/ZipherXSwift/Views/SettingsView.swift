@@ -41,6 +41,11 @@ public struct SettingsView: View {
     // Security audit state
     @State private var showAuditReport: Bool = false
 
+    // WIF import state
+    @State private var showWifImport: Bool = false
+    @State private var wifImportText: String = ""
+    @State private var wifImportResults: [(valid: Bool, address: String, prefix: String)]? = nil
+
     // Delete all data state
     @State private var showDeleteConfirm: Bool = false
 
@@ -463,6 +468,32 @@ public struct SettingsView: View {
                                     .fill(ZColors.primaryDim.opacity(0.3))
                                     .frame(height: 1)
 
+                                // Import WIF keys
+                                Button(action: { showWifImport = true }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "square.and.arrow.down")
+                                            .font(ZFonts.small)
+                                        Text("IMPORT WIF KEYS")
+                                            .font(ZFonts.caption)
+                                    }
+                                    .foregroundColor(ZColors.primary)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .stroke(ZColors.primaryDim, lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+
+                                Text("Import transparent private keys (WIF format). Not covered by recovery phrase.")
+                                    .font(ZFonts.small)
+                                    .foregroundColor(ZColors.primaryDim)
+
+                                Rectangle()
+                                    .fill(ZColors.primaryDim.opacity(0.3))
+                                    .frame(height: 1)
+
                                 // Security audit report
                                 Button(action: { showAuditReport = true }) {
                                     HStack(spacing: 6) {
@@ -613,6 +644,154 @@ public struct SettingsView: View {
         .sheet(isPresented: $showAuditReport) {
             securityAuditSheet
         }
+        .sheet(isPresented: $showWifImport) {
+            wifImportSheet
+        }
+    }
+
+    // MARK: - WIF Import Sheet
+
+    private var wifImportSheet: some View {
+        ZStack {
+            ZColors.terminalBlack.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Text("IMPORT TRANSPARENT KEYS")
+                            .font(ZFonts.title)
+                            .foregroundColor(ZColors.primary)
+                        Spacer()
+                    }
+                    .padding(.top, 24)
+
+                    Text("Paste WIF private keys (one per line):")
+                        .font(ZFonts.small)
+                        .foregroundColor(ZColors.primaryDim)
+
+                    TextEditor(text: $wifImportText)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(ZColors.primary)
+                        .frame(minHeight: 100, maxHeight: 150)
+                        .padding(4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(ZColors.primaryDim.opacity(0.5), lineWidth: 1)
+                        )
+                        .scrollContentBackground(.hidden)
+
+                    // Validate button
+                    Button(action: validateWifKeys) {
+                        Text("VALIDATE")
+                            .font(ZFonts.heading)
+                            .foregroundColor(ZColors.primary)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(ZColors.primaryDim, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    // Results
+                    if let results = wifImportResults {
+                        let validCount = results.filter { $0.valid }.count
+                        ForEach(Array(results.enumerated()), id: \.offset) { _, item in
+                            HStack(spacing: 4) {
+                                Text(item.valid ? "[OK]" : "[X]")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(item.valid ? ZColors.success : ZColors.error)
+                                Text(item.prefix)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(ZColors.primaryDim)
+                                Text("-> \(item.address)")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(item.valid ? ZColors.primary : ZColors.error)
+                                    .lineLimit(1)
+                            }
+                        }
+
+                        Text("WARNING: Imported keys are NOT covered by your recovery phrase. Back up WIF keys separately.")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(ZColors.warning)
+
+                        if validCount > 0 {
+                            Button(action: importValidWifKeys) {
+                                Text("IMPORT \(validCount) KEY(S)")
+                                    .font(ZFonts.heading)
+                                    .foregroundColor(ZColors.primary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .stroke(ZColors.primary, lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    Button(action: {
+                        wifImportText = ""
+                        wifImportResults = nil
+                        showWifImport = false
+                    }) {
+                        Text("CLOSE")
+                            .font(ZFonts.heading)
+                            .foregroundColor(ZColors.primaryDim)
+                            .padding(.horizontal, 48)
+                            .padding(.vertical, 12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(ZColors.primaryDim.opacity(0.5), lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                }
+                .padding(.horizontal, 24)
+            }
+        }
+    }
+
+    private func validateWifKeys() {
+        let lines = wifImportText.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let validationResults = ZipherXWrapper.validateWifKeys(lines)
+        var results: [(valid: Bool, address: String, prefix: String)] = []
+        for (i, r) in validationResults.enumerated() {
+            let line = i < lines.count ? lines[i] : ""
+            let prefix = line.count > 8 ? "\(String(line.prefix(8)))..." : line
+            if r.valid {
+                results.append((valid: true, address: r.address, prefix: prefix))
+            } else {
+                results.append((valid: false, address: r.errorMessage, prefix: prefix))
+            }
+        }
+        wifImportResults = results
+    }
+
+    private func importValidWifKeys() {
+        let lines = wifImportText.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let validationResults = ZipherXWrapper.validateWifKeys(lines)
+        var encKeys: [[UInt8]] = []
+        var addresses: [String] = []
+        for (i, r) in validationResults.enumerated() {
+            if r.valid && i < lines.count {
+                // Store WIF bytes as the encrypted key placeholder
+                encKeys.append(Array(lines[i].utf8))
+                addresses.append(r.address)
+            }
+        }
+        if !encKeys.isEmpty {
+            let _ = ZipherXWrapper.importWifKeys(encryptedKeys: encKeys, addresses: addresses)
+        }
+        wifImportText = ""
+        wifImportResults = nil
+        showWifImport = false
     }
 
     // MARK: - Export Key Sheet
@@ -959,6 +1138,8 @@ public struct SettingsView: View {
         let storage = AppleSecureStorage()
         // Delete Keychain items
         _ = try? storage.deleteKey(identifier: "spending_key")
+        _ = try? storage.deleteKey(identifier: "wallet_seed")
+        _ = try? storage.deleteKey(identifier: "wallet_mnemonic")
         _ = try? storage.deleteKey(identifier: "db_encryption_key")
         _ = try? storage.deleteKey(identifier: "screenshot_protection")
 
