@@ -139,6 +139,14 @@ pub struct TransparentAddressSet {
 }
 
 impl TransparentAddressSet {
+    /// Create an empty address set (for imported-only wallets with no seed).
+    pub fn empty() -> Self {
+        Self {
+            addresses: Vec::new(),
+            imported: Vec::new(),
+        }
+    }
+
     /// Derive addresses for scanning. Uses a gap limit to cover
     /// addresses that may have been used.
     pub fn from_seed(seed: &[u8], account: u32, gap_limit: u32) -> Self {

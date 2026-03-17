@@ -175,6 +175,23 @@ impl AsyncWallet {
             .boost_cache_dir
             .as_ref()
             .map(std::path::PathBuf::from);
+        // Even without a seed, check for imported WIF addresses to scan
+        let imported_addrs = {
+            let db_clone = self.db.clone();
+            tokio::task::spawn_blocking(move || {
+                db_clone.get_imported_transparent_addresses().unwrap_or_default()
+            }).await.unwrap_or_default()
+        };
+        let t_addrs = if !imported_addrs.is_empty() {
+            let mut addr_set = crate::scanner::TransparentAddressSet::empty();
+            for (db_id, addr) in &imported_addrs {
+                addr_set.add_imported(addr.clone(), *db_id);
+            }
+            Some(addr_set)
+        } else {
+            None
+        };
+
         let result = async_sync::sync_to_tip(
             &mut pm,
             &self.header_store,
@@ -185,7 +202,7 @@ impl AsyncWallet {
             progress,
             Some(peer_count_ref.clone()),
             boost_cache,
-            None, // transparent_addresses — set via sync_with_transparent()
+            t_addrs.as_ref(),
         )
         .await;
 

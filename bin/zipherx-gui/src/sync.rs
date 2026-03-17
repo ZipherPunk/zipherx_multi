@@ -79,6 +79,7 @@ pub struct SharedState {
 
     // -- transparent --
     pub transparent_balance: u64,
+    pub transparent_address: Option<String>,
 
     // -- boost download failure (user must decide) --
     /// Set when boost download fails after all retries.
@@ -168,6 +169,7 @@ impl Default for SharedState {
             maintenance_result: None,
 
             transparent_balance: 0,
+            transparent_address: None,
 
             mempool_tx: None,
             new_block_pending: false,
@@ -339,6 +341,10 @@ fn wallet_thread_main(
                                 }).await
                             });
                             eprintln!("[ZipherX] Imported WIF key for {}", address);
+                            // Set the transparent address in shared state so the UI can display it
+                            if let Ok(mut s) = state.lock() {
+                                s.transparent_address = Some(address.clone());
+                            }
                         }
                         Err(e) => {
                             eprintln!("[ZipherX] Failed to import WIF for {}: {}", address, e);
@@ -348,6 +354,22 @@ fn wallet_thread_main(
                 // Zeroize raw keys
                 for (mut sk, _) in pending {
                     sk.iter_mut().for_each(|b| *b = 0);
+                }
+
+                // Trigger full rescan so the scanner picks up UTXOs for the imported addresses.
+                // This clears notes/history/UTXOs and resets scan state — the next sync cycle
+                // will redo boost scan + full block scan with the imported address in the address set.
+                eprintln!("[ZipherX] WIF import: triggering full rescan for imported addresses...");
+                let _ = runtime.block_on(async {
+                    let db_c = db.clone();
+                    tokio::task::spawn_blocking(move || db_c.full_rescan_reset()).await
+                });
+                initial_sync_done = false;
+
+                // Notify UI that a rescan is starting
+                if let Ok(mut s) = state.lock() {
+                    s.sync_phase = "Rescanning for imported addresses...".into();
+                    s.sync_progress = 0.0;
                 }
             }
         }

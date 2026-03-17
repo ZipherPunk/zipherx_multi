@@ -277,6 +277,10 @@ pub struct ZipherXApp {
     pub wif_import_results: Option<Vec<(bool, String, String)>>,
     /// Number of imported transparent keys (for balance view indicator)
     pub imported_key_count: u32,
+    /// WIF import status message shown after import attempt
+    pub wif_import_status: Option<(String, bool)>, // (message, is_success)
+    /// Whether a WIF rescan is in progress
+    pub wif_rescan_in_progress: bool,
 
     // -- seed import --
     pub seed_import_input: String,
@@ -482,6 +486,8 @@ impl Default for ZipherXApp {
             wif_import_text: String::new(),
             wif_import_results: None,
             imported_key_count: 0,
+            wif_import_status: None,
+            wif_rescan_in_progress: false,
 
             seed_import_input: String::new(),
 

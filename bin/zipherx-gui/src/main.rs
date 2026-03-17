@@ -359,6 +359,12 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         }
         app.transparent_balance = s.transparent_balance;
         app.imported_key_count = s.imported_key_count;
+        // Update transparent address from shared state (e.g., after WIF import)
+        if let Some(ref addr) = s.transparent_address {
+            if app.transparent_address.is_none() {
+                app.transparent_address = Some(addr.clone());
+            }
+        }
 
         // Network
         app.peer_count = s.peer_count;
