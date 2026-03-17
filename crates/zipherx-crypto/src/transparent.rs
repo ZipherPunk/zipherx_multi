@@ -218,12 +218,16 @@ pub fn validate_wif(wif: &str) -> bool {
 }
 
 /// Derive and export the transparent private key as WIF from seed.
+///
+/// `is_change` selects the BIP-44 chain: `false` = external (chain 0, receiving),
+/// `true` = internal (chain 1, change addresses).
 pub fn export_transparent_wif(
     seed: &[u8],
     account: u32,
     child_index: u32,
+    is_change: bool,
 ) -> Result<Zeroizing<String>, CryptoError> {
-    let sk_bytes = derive_transparent_secret_key(seed, account, child_index, false)?;
+    let sk_bytes = derive_transparent_secret_key(seed, account, child_index, is_change)?;
     encode_wif(&sk_bytes)
 }
 
@@ -480,5 +484,19 @@ mod tests {
         assert!(validate_wif(&wif));
         assert!(!validate_wif("not_a_wif"));
         assert!(!validate_wif(""));
+    }
+
+    #[test]
+    fn test_export_transparent_wif_change_address() {
+        let seed = test_seed();
+        let external_wif = export_transparent_wif(&seed, 0, 0, false).unwrap();
+        let change_wif = export_transparent_wif(&seed, 0, 0, true).unwrap();
+        assert_ne!(&*external_wif, &*change_wif);
+        let (_, ext_addr) = decode_wif(&external_wif).unwrap();
+        let (_, chg_addr) = decode_wif(&change_wif).unwrap();
+        let expected_ext = derive_transparent_address(&seed, 0, 0).unwrap();
+        let expected_chg = derive_transparent_change_address(&seed, 0, 0).unwrap();
+        assert_eq!(ext_addr, expected_ext);
+        assert_eq!(chg_addr, expected_chg);
     }
 }

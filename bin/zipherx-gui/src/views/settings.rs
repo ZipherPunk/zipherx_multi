@@ -2,9 +2,10 @@
 
 use zeroize::Zeroize;
 
-use crate::app::{Phase, ZipherXApp};
+use crate::app::ZipherXApp;
 use crate::sync::SyncCommand;
 use crate::theme;
+use zipherx_platform::SecureStorage;
 
 pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     egui::ScrollArea::vertical()
@@ -777,6 +778,67 @@ fn show_security_section(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Co
     if app.show_export {
         show_export_display(app, ui, ctx);
     }
+
+    ui.add_space(10.0);
+    ui.separator();
+
+    // Export recovery phrase
+    ui.add_space(5.0);
+    if !app.show_mnemonic_export {
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new("[ EXPORT RECOVERY PHRASE ]")
+                    .font(theme::mono(12.0))
+                    .color(theme::YELLOW),
+            ))
+            .clicked()
+        {
+            app.show_mnemonic_export_confirm = true;
+        }
+        ui.label(
+            egui::RichText::new("Export your 24-word mnemonic. Not available for seed/key imports.")
+                .font(theme::mono(10.0))
+                .color(theme::MUTED),
+        );
+    }
+
+    // Mnemonic export confirmation (password re-auth)
+    if app.show_mnemonic_export_confirm {
+        show_mnemonic_export_confirm(app, ui, ctx);
+    }
+
+    // Mnemonic display (auto-dismisses after 60s)
+    if app.show_mnemonic_export {
+        show_mnemonic_export_display(app, ui, ctx);
+    }
+
+    // Export seed (128 hex chars)
+    ui.add_space(5.0);
+    if !app.show_seed_export {
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new("[ EXPORT SEED (HEX) ]")
+                    .font(theme::mono(12.0))
+                    .color(theme::YELLOW),
+            ))
+            .clicked()
+        {
+            app.show_seed_export_confirm = true;
+        }
+        ui.label(
+            egui::RichText::new("Export raw 64-byte seed as 128 hex characters. Derives both z and t keys.")
+                .font(theme::mono(10.0))
+                .color(theme::MUTED),
+        );
+    }
+
+    if app.show_seed_export_confirm {
+        show_seed_export_confirm(app, ui, ctx);
+    }
+
+    if app.show_seed_export {
+        show_seed_export_display(app, ui, ctx);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,19 +1113,36 @@ fn show_danger_zone(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                                     unsafe { std::ptr::write_volatile(b, 0) };
                                 }
                             }
-                            app.sk_bytes = None;
+                            drop(app.sk_bytes.take()); // Ensure zeroed bytes are dropped
 
-                            // Delete all data
+                            // Delete all data from encrypted storage
                             app.storage.delete_all_data();
 
-                            // Reset state
-                            app.address = None;
-                            app.balance = Default::default();
-                            app.transactions.clear();
-                            app.shared_state = None;
-                            app.reauth_password.zeroize();
-                            app.password_error = None;
-                            app.phase = Phase::Locked;
+                            // Delete wallet DB, headers, delta store, boost cache
+                            let data_dir = app.storage.data_dir().clone();
+                            for name in &[
+                                "wallet.db", "wallet.db-wal", "wallet.db-shm",
+                                "zipherx_wallet.db", "zipherx_wallet.db-wal", "zipherx_wallet.db-shm",
+                                "headers.db", "headers.db-wal", "headers.db-shm",
+                                "zipherx_headers.db", "zipherx_headers.db-wal", "zipherx_headers.db-shm",
+                            ] {
+                                let _ = std::fs::remove_file(data_dir.join(name));
+                            }
+                            for dir_name in &["delta", "BoostCache"] {
+                                let _ = std::fs::remove_dir_all(data_dir.join(dir_name));
+                            }
+                            // Delete delta files
+                            for pattern in &[
+                                "delta_manifest.json", "delta_nullifiers.bin",
+                                "delta_sapling_roots.bin", "shielded_outputs_delta.bin",
+                            ] {
+                                let _ = std::fs::remove_file(data_dir.join(pattern));
+                            }
+
+                            eprintln!("[ZipherX] All data deleted. Exiting for clean restart.");
+
+                            // Exit the process — wallet thread holds stale state
+                            std::process::exit(0);
                         } else {
                             app.password_error = Some("Wrong password".into());
                         }
@@ -1122,7 +1201,7 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Con
                     || enter
                 {
                     if app.storage.verify_password(&app.export_password) {
-                        // Export key
+                        // Export shielded key
                         if let Some(ref sk) = app.sk_bytes {
                             match zipherx_crypto::keys::encode_spending_key(sk) {
                                 Ok(encoded) => {
@@ -1134,6 +1213,14 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Con
                                 Err(e) => {
                                     app.password_error = Some(format!("Export failed: {}", e));
                                 }
+                            }
+                        }
+                        // Export transparent key (WIF) if seed available
+                        if let Ok(seed) = app.storage.load_key("wallet_seed") {
+                            if let Ok(wif) = zipherx_crypto::transparent::export_transparent_wif(
+                                &seed, 0, 0, false,
+                            ) {
+                                app.export_t_key_display = (*wif).clone();
                             }
                         }
                     } else {
@@ -1171,6 +1258,7 @@ fn show_export_display(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Cont
     if let Some(start) = app.export_auto_dismiss {
         if start.elapsed().as_secs() >= 60 {
             app.export_key_display.zeroize();
+            app.export_t_key_display.zeroize();
             app.show_export = false;
             app.export_auto_dismiss = None;
             return;
@@ -1189,43 +1277,396 @@ fn show_export_display(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Cont
         .rounding(4.0)
         .show(ui, |ui| {
             ui.label(
-                egui::RichText::new("PRIVATE KEY \u{2014} KEEP SECRET")
+                egui::RichText::new("PRIVATE KEYS \u{2014} KEEP SECRET")
                     .font(theme::mono(12.0))
                     .color(theme::RED),
             );
             ui.add_space(5.0);
+
+            // Shielded private key
+            ui.label(
+                egui::RichText::new("SHIELDED (z-address)")
+                    .font(theme::mono(10.0))
+                    .color(theme::GREEN),
+            );
             ui.label(
                 egui::RichText::new(&app.export_key_display)
                     .font(theme::mono(9.0))
                     .color(theme::YELLOW),
             );
-            ui.add_space(5.0);
             ui.horizontal(|ui| {
                 if ui
                     .add(egui::Button::new(
-                        egui::RichText::new("[ COPY ]")
-                            .font(theme::mono(11.0))
+                        egui::RichText::new("[ COPY SHIELDED KEY ]")
+                            .font(theme::mono(9.0))
                             .color(theme::CYAN),
                     ))
                     .clicked()
                 {
                     ctx.copy_text(app.export_key_display.clone());
                     app.clipboard_clear_at = Some(std::time::Instant::now());
-                    // GUI-H3: ensure repaint fires for clipboard auto-clear
                     ctx.request_repaint_after(std::time::Duration::from_secs(31));
+                }
+            });
+
+            // Transparent private key (WIF)
+            if !app.export_t_key_display.is_empty() {
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("TRANSPARENT (t-address)")
+                        .font(theme::mono(10.0))
+                        .color(theme::YELLOW),
+                );
+                ui.label(
+                    egui::RichText::new(&app.export_t_key_display)
+                        .font(theme::mono(9.0))
+                        .color(theme::YELLOW),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("[ COPY TRANSPARENT KEY ]")
+                                .font(theme::mono(9.0))
+                                .color(theme::CYAN),
+                        ))
+                        .clicked()
+                    {
+                        ctx.copy_text(app.export_t_key_display.clone());
+                        app.clipboard_clear_at = Some(std::time::Instant::now());
+                        ctx.request_repaint_after(std::time::Duration::from_secs(31));
+                    }
+                });
+            }
+
+            ui.add_space(5.0);
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new("[ DISMISS ]")
+                        .font(theme::mono(11.0))
+                        .color(theme::MUTED),
+                ))
+                .clicked()
+            {
+                app.export_key_display.zeroize();
+                app.export_t_key_display.zeroize();
+                app.show_export = false;
+                app.export_auto_dismiss = None;
+            }
+        });
+}
+
+// ---------------------------------------------------------------------------
+// MNEMONIC EXPORT — password re-auth
+// ---------------------------------------------------------------------------
+
+fn show_mnemonic_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context) {
+    egui::Frame::none()
+        .fill(egui::Color32::from_rgb(25, 20, 10))
+        .inner_margin(12.0)
+        .rounding(4.0)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("ENTER PASSWORD TO EXPORT RECOVERY PHRASE")
+                    .font(theme::mono(12.0))
+                    .color(theme::YELLOW),
+            );
+            ui.add_space(5.0);
+
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut app.mnemonic_export_password)
+                    .password(true)
+                    .hint_text("Password")
+                    .font(theme::mono(12.0))
+                    .desired_width((ui.available_width() - 20.0).min(350.0)),
+            );
+
+            ui.add_space(5.0);
+            let enter =
+                response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ CONFIRM ]")
+                            .font(theme::mono(12.0))
+                            .color(theme::GREEN),
+                    ))
+                    .clicked()
+                    || enter
+                {
+                    if app.storage.verify_password(&app.mnemonic_export_password) {
+                        // Load mnemonic from secure storage
+                        match app.storage.load_key("wallet_mnemonic") {
+                            Ok(mnemonic_bytes) => {
+                                if let Ok(phrase) = String::from_utf8(mnemonic_bytes) {
+                                    app.export_mnemonic_display = phrase;
+                                    app.show_mnemonic_export = true;
+                                    app.show_mnemonic_export_confirm = false;
+                                    app.mnemonic_export_auto_dismiss =
+                                        Some(std::time::Instant::now());
+                                } else {
+                                    app.password_error =
+                                        Some("Failed to decode mnemonic".into());
+                                }
+                            }
+                            Err(_) => {
+                                app.password_error = Some(
+                                    "No recovery phrase stored (wallet imported from key/seed)"
+                                        .into(),
+                                );
+                            }
+                        }
+                    } else {
+                        app.password_error = Some("Wrong password".into());
+                    }
+                    app.mnemonic_export_password.zeroize();
                 }
                 if ui
                     .add(egui::Button::new(
-                        egui::RichText::new("[ DISMISS ]")
+                        egui::RichText::new("[ CANCEL ]")
+                            .font(theme::mono(12.0))
+                            .color(theme::MUTED),
+                    ))
+                    .clicked()
+                {
+                    app.mnemonic_export_password.zeroize();
+                    app.show_mnemonic_export_confirm = false;
+                }
+            });
+
+            if let Some(ref err) = app.password_error {
+                if err != "CONFIRM_DELETE" {
+                    ui.label(
+                        egui::RichText::new(err)
+                            .font(theme::mono(10.0))
+                            .color(theme::RED),
+                    );
+                }
+            }
+        });
+}
+
+// ---------------------------------------------------------------------------
+// MNEMONIC EXPORT — display (auto-dismiss 60s)
+// ---------------------------------------------------------------------------
+
+fn show_mnemonic_export_display(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    // Auto-dismiss after 60s
+    if let Some(start) = app.mnemonic_export_auto_dismiss {
+        if start.elapsed().as_secs() >= 60 {
+            app.export_mnemonic_display.zeroize();
+            app.show_mnemonic_export = false;
+            app.mnemonic_export_auto_dismiss = None;
+            return;
+        }
+        let remaining = 60 - start.elapsed().as_secs();
+        ui.label(
+            egui::RichText::new(format!("Auto-dismiss in {}s", remaining))
+                .font(theme::mono(9.0))
+                .color(theme::MUTED),
+        );
+    }
+
+    egui::Frame::none()
+        .fill(egui::Color32::from_rgb(30, 20, 0))
+        .inner_margin(12.0)
+        .rounding(4.0)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("RECOVERY PHRASE (24 WORDS) \u{2014} KEEP SECRET")
+                    .font(theme::mono(12.0))
+                    .color(theme::YELLOW),
+            );
+            ui.label(
+                egui::RichText::new("WRITE THESE DOWN AND KEEP THEM SAFE!")
+                    .font(theme::mono(10.0))
+                    .color(theme::RED),
+            );
+            ui.add_space(8.0);
+
+            // Display words in a 4x6 grid
+            let words: Vec<&str> = app.export_mnemonic_display.split_whitespace().collect();
+            egui::Grid::new("mnemonic_export_grid")
+                .num_columns(4)
+                .spacing([20.0, 6.0])
+                .show(ui, |ui| {
+                    for (i, word) in words.iter().enumerate() {
+                        ui.label(
+                            egui::RichText::new(format!("{:>2}. {}", i + 1, word))
+                                .font(theme::mono(12.0))
+                                .color(theme::GREEN),
+                        );
+                        if (i + 1) % 4 == 0 {
+                            ui.end_row();
+                        }
+                    }
+                });
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ COPY PHRASE ]")
+                            .font(theme::mono(9.0))
+                            .color(theme::CYAN),
+                    ))
+                    .clicked()
+                {
+                    ctx.copy_text(app.export_mnemonic_display.clone());
+                    app.clipboard_clear_at = Some(std::time::Instant::now());
+                    ctx.request_repaint_after(std::time::Duration::from_secs(6));
+                }
+            });
+
+            ui.add_space(5.0);
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new("[ DISMISS ]")
+                        .font(theme::mono(11.0))
+                        .color(theme::MUTED),
+                ))
+                .clicked()
+            {
+                app.export_mnemonic_display.zeroize();
+                app.show_mnemonic_export = false;
+                app.mnemonic_export_auto_dismiss = None;
+            }
+        });
+}
+
+fn show_seed_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context) {
+    egui::Frame::none()
+        .fill(egui::Color32::from_rgb(30, 25, 0))
+        .inner_margin(12.0)
+        .rounding(4.0)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("ENTER PASSWORD TO EXPORT SEED")
+                    .font(theme::mono(12.0))
+                    .color(theme::YELLOW),
+            );
+            ui.add_space(5.0);
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut app.seed_export_password)
+                    .password(true)
+                    .hint_text("wallet password")
+                    .font(theme::mono(12.0))
+                    .desired_width(250.0),
+            );
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                let enter = response.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if enter
+                    || ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("[ CONFIRM ]")
+                                .font(theme::mono(11.0))
+                                .color(theme::GREEN),
+                        ))
+                        .clicked()
+                {
+                    if app.storage.verify_password(&app.seed_export_password) {
+                        match app.storage.load_key("wallet_seed") {
+                            Ok(seed) => {
+                                app.export_seed_display = hex::encode(&seed);
+                                app.show_seed_export = true;
+                                app.show_seed_export_confirm = false;
+                                app.seed_export_auto_dismiss =
+                                    Some(std::time::Instant::now());
+                            }
+                            Err(_) => {
+                                app.send_error =
+                                    Some("No seed stored (wallet imported from key only)".into());
+                                app.show_seed_export_confirm = false;
+                            }
+                        }
+                    } else {
+                        app.send_error = Some("Wrong password".into());
+                    }
+                    app.seed_export_password.zeroize();
+                }
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ CANCEL ]")
                             .font(theme::mono(11.0))
                             .color(theme::MUTED),
                     ))
                     .clicked()
                 {
-                    app.export_key_display.zeroize();
-                    app.show_export = false;
-                    app.export_auto_dismiss = None;
+                    app.show_seed_export_confirm = false;
+                    app.seed_export_password.zeroize();
                 }
             });
+        });
+}
+
+fn show_seed_export_display(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    // Auto-dismiss after 60s
+    if let Some(t) = app.seed_export_auto_dismiss {
+        if t.elapsed().as_secs() >= 60 {
+            app.export_seed_display.zeroize();
+            app.show_seed_export = false;
+            app.seed_export_auto_dismiss = None;
+            return;
+        }
+    }
+
+    egui::Frame::none()
+        .fill(egui::Color32::from_rgb(30, 10, 10))
+        .inner_margin(12.0)
+        .rounding(4.0)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("WALLET SEED \u{2014} KEEP SECRET")
+                    .font(theme::mono(12.0))
+                    .color(theme::RED),
+            );
+            ui.add_space(3.0);
+            ui.label(
+                egui::RichText::new("This 64-byte seed derives ALL keys (shielded + transparent).")
+                    .font(theme::mono(9.0))
+                    .color(theme::YELLOW),
+            );
+            ui.add_space(5.0);
+
+            // Seed hex display
+            ui.label(
+                egui::RichText::new("SEED (128 hex)")
+                    .font(theme::mono(10.0))
+                    .color(theme::GREEN),
+            );
+            ui.label(
+                egui::RichText::new(&app.export_seed_display)
+                    .font(theme::mono(9.0))
+                    .color(theme::YELLOW),
+            );
+            ui.horizontal(|ui| {
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ COPY SEED ]")
+                            .font(theme::mono(9.0))
+                            .color(theme::CYAN),
+                    ))
+                    .clicked()
+                {
+                    ctx.copy_text(app.export_seed_display.clone());
+                    app.clipboard_clear_at = Some(std::time::Instant::now());
+                    ctx.request_repaint_after(std::time::Duration::from_secs(31));
+                }
+            });
+
+            ui.add_space(5.0);
+            if ui
+                .add(egui::Button::new(
+                    egui::RichText::new("[ DISMISS ]")
+                        .font(theme::mono(11.0))
+                        .color(theme::MUTED),
+                ))
+                .clicked()
+            {
+                app.export_seed_display.zeroize();
+                app.show_seed_export = false;
+                app.seed_export_auto_dismiss = None;
+            }
         });
 }

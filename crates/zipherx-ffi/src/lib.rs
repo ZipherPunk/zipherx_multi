@@ -216,6 +216,15 @@ pub struct BannedPeerInfoFFI {
     pub remaining_seconds: u64,
 }
 
+pub struct TransparentUtxoFFI {
+    pub txid: String,
+    pub output_index: u32,
+    pub address: String,
+    pub value: u64,
+    pub height: u64,
+    pub is_change: bool,
+}
+
 // ============================================================================
 // Callback Interfaces (must match UDL callback interfaces)
 // ============================================================================
@@ -902,6 +911,29 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
         }
     });
 
+    // Load wallet seed for transparent address scanning (BIP-44 derivation).
+    // Without the seed, transparent UTXOs won't be discovered during sync.
+    let seed_bytes: Option<SecureVec> = match PLATFORM_STORAGE.lock() {
+        Ok(guard) => guard
+            .as_ref()
+            .and_then(|s| s.load_key("wallet_seed".to_string()))
+            .map(SecureVec),
+        Err(e) => {
+            let guard = e.into_inner();
+            guard
+                .as_ref()
+                .and_then(|s| s.load_key("wallet_seed".to_string()))
+                .map(SecureVec)
+        }
+    };
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[ZipherX] FFI start_sync: sk_bytes={} bytes, seed={} bytes",
+        sk_bytes.len(),
+        seed_bytes.as_ref().map_or(0, |s| s.len()),
+    );
+
     // RF-6: Warn if spending key is unavailable — sync will proceed but
     // note discovery (trial decryption) will be disabled.
     if sk_bytes.is_empty() {
@@ -939,6 +971,7 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
     // is an inherent limitation of Rust's allocator (no guaranteed zeroing of freed
     // memory). Mitigated by the short lifetime and SecureVec's volatile zeroing.
     let sk_bg = SecureVec(sk_bytes.to_vec());
+    let seed_bg: Option<SecureVec> = seed_bytes.as_ref().map(|s| SecureVec(s.to_vec()));
 
     // Event-driven mempool detection: set callback on peer manager BEFORE sync.
     // Block listeners handle inv→getdata→tx internally and fire this callback
@@ -946,12 +979,22 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
     {
         let sk_mempool = sk_bg.0.clone();
         let cb_mp = cb_mempool.clone();
-        let detector = zipherx_core::mempool_monitor::MempoolDetector::new(
-            sk_mempool,
-            std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
-                cb_mp.on_mempool_tx(info.txid, info.amount);
-            }),
-        );
+        let detector = if let Some(ref seed) = seed_bg {
+            zipherx_core::mempool_monitor::MempoolDetector::new_with_transparent(
+                sk_mempool,
+                &seed.0,
+                std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
+                    cb_mp.on_mempool_tx(info.txid, info.amount);
+                }),
+            )
+        } else {
+            zipherx_core::mempool_monitor::MempoolDetector::new(
+                sk_mempool,
+                std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
+                    cb_mp.on_mempool_tx(info.txid, info.amount);
+                }),
+            )
+        };
         let mempool_callback = detector.into_callback();
         runtime::block_on(async {
             let mut pm = wallet.peer_manager.lock().await;
@@ -1000,7 +1043,15 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
         }
 
         // Phase 1: Initial sync with progress UI
-        let sync_result = wallet.sync(&sk_bytes, Some(progress_fn)).await;
+        // Use sync_with_transparent when seed is available (enables transparent
+        // UTXO discovery via BIP-44 address derivation from seed).
+        let sync_result = if let Some(ref seed) = seed_bg {
+            wallet
+                .sync_with_transparent(&sk_bg, seed, Some(progress_fn))
+                .await
+        } else {
+            wallet.sync(&sk_bg, Some(progress_fn)).await
+        };
 
         // ── Restore Tor after initial sync ──────────────────────────────
         // This block runs on both sync success AND failure so that P2P
@@ -1084,7 +1135,11 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                                         let repair_phase = format!("repair:{}", phase);
                                         cb_repair.on_progress(repair_phase, current, target);
                                     });
-                                match wallet.sync(&sk_bytes, Some(repair_progress_fn)).await {
+                                match if let Some(ref seed) = seed_bg {
+                                    wallet.sync_with_transparent(&sk_bg, seed, Some(repair_progress_fn)).await
+                                } else {
+                                    wallet.sync(&sk_bg, Some(repair_progress_fn)).await
+                                } {
                                     Ok(h) => {
                                         eprintln!(
                                             "[ZipherX] FFI: witness repair complete at height {}",
@@ -1140,12 +1195,18 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                         _ = new_block_notify.notified() => {
                             #[cfg(debug_assertions)]
                             eprintln!("[ZipherX] FFI: new block announced by peer — instant sync");
-                            // Small delay to let the block propagate to all peers
-                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                            // Delay to let the block propagate to all peers before syncing.
+                            // 500ms was too short — headers often not available yet, causing
+                            // the sync to find 0 new blocks and miss the confirmation.
+                            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                         }
                     }
 
-                    match wallet.sync(&sk_bg, None).await {
+                    match if let Some(ref seed) = seed_bg {
+                        wallet.sync_with_transparent(&sk_bg, seed, None).await
+                    } else {
+                        wallet.sync(&sk_bg, None).await
+                    } {
                         Ok(h) => {
                             // Request mempool after each sync — sync may reconnect
                             // peers (zombie detection), and new peers need a fresh
@@ -1172,7 +1233,7 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                         }
                         Err(e) => {
                             // Non-fatal: SyncInProgress (manual sync running), network glitch, etc.
-                            #[cfg(debug_assertions)]
+                            // Always log (not just debug) so production issues are visible.
                             eprintln!("[ZipherX] FFI: background sync error (non-fatal): {}", e);
                             let _ = e;
                         }
@@ -1323,6 +1384,96 @@ fn send_with_progress(
         // completion (success or error), resetting IS_SENDING to false.
         let _guard = SendGuard;
         match wallet.send(request, &sk_bytes, Some(progress_fn)).await {
+            Ok(result) => cb_complete.on_complete(result.txid, result.amount, result.fee),
+            Err(e) => cb_error.on_error(e.to_string()),
+        }
+    })
+    .map_err(|e| {
+        IS_SENDING.store(false, Ordering::SeqCst);
+        WalletError::from(e)
+    })?;
+
+    Ok(())
+}
+
+/// Send a transparent transaction (spending transparent UTXOs).
+///
+/// Supports t→t and t→z (shielding). Requires both the spending key
+/// (for Sapling change) and the wallet seed (for transparent key derivation).
+///
+/// BLOCKING: This function blocks the calling thread. Call from a background thread.
+fn send_transparent_with_progress(
+    to_address: String,
+    amount: u64,
+    fee: u64,
+    memo: Option<String>,
+    sk_bytes: Vec<u8>,
+    seed: Vec<u8>,
+    callback: Box<dyn SendProgressCallback>,
+) -> Result<(), WalletError> {
+    let sk_bytes = SecureVec(sk_bytes);
+    let seed_secure = SecureVec(seed);
+
+    if let Some(ref m) = memo {
+        if m.len() > 512 {
+            return Err(WalletError::InvalidInput {
+                msg: format!("Memo exceeds 512-byte limit ({} bytes)", m.len()),
+            });
+        }
+    }
+
+    if zipherx_tor::client::is_tor_only_mode() {
+        if !zipherx_tor::client::is_socks_running() {
+            return Err(WalletError::NetworkError {
+                msg: "Tor-only mode enabled but Tor SOCKS5 proxy is not running".into(),
+            });
+        }
+    }
+
+    if IS_SENDING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(WalletError::SyncInProgress);
+    }
+
+    struct SendGuard;
+    impl Drop for SendGuard {
+        fn drop(&mut self) {
+            IS_SENDING.store(false, Ordering::SeqCst);
+        }
+    }
+
+    let wallet = get_wallet().map_err(|e| {
+        IS_SENDING.store(false, Ordering::SeqCst);
+        e
+    })?;
+    let callback = Arc::new(callback);
+
+    let request = SendRequest {
+        to_address,
+        amount_zatoshis: amount,
+        fee_zatoshis: fee,
+        memo,
+    };
+
+    let progress_fn: zipherx_core::async_send::SendProgressFn = {
+        let cb = callback.clone();
+        Arc::new(move |phase: SendPhase| {
+            let (phase_str, current, total) = send_phase_to_progress(&phase);
+            cb.on_phase(phase_str, current, total);
+        })
+    };
+
+    let cb_complete = callback.clone();
+    let cb_error = callback;
+
+    runtime::spawn(async move {
+        let _guard = SendGuard;
+        match wallet
+            .send_transparent(request, &sk_bytes, &seed_secure, Some(progress_fn))
+            .await
+        {
             Ok(result) => cb_complete.on_complete(result.txid, result.amount, result.fee),
             Err(e) => cb_error.on_error(e.to_string()),
         }
@@ -1615,6 +1766,94 @@ fn set_platform_storage(storage: Box<dyn PlatformStorageCallback>) {
 }
 
 // ============================================================================
+// Transparent Addresses
+// ============================================================================
+
+/// Derive a transparent (t1...) address from seed.
+///
+/// # Security
+/// `seed` is master seed material. Callers MUST zero the corresponding
+/// `ByteArray` / `Data` immediately after use.
+fn derive_transparent_address(
+    seed: Vec<u8>,
+    account_index: u32,
+    child_index: u32,
+) -> Result<String, WalletError> {
+    let seed = SecureVec(seed);
+    zipherx_crypto::transparent::derive_transparent_address(&seed, account_index, child_index)
+        .map_err(|e| WalletError::CryptoError { msg: e.to_string() })
+}
+
+/// Export the transparent private key in WIF (Wallet Import Format).
+///
+/// # Security
+/// The returned string is a private key. Callers MUST zero the string
+/// after displaying it to the user.
+fn export_transparent_wif(
+    seed: Vec<u8>,
+    account_index: u32,
+    child_index: u32,
+) -> Result<String, WalletError> {
+    let seed = SecureVec(seed);
+    let wif = zipherx_crypto::transparent::export_transparent_wif(
+        &seed,
+        account_index,
+        child_index,
+        false,
+    )
+    .map_err(|e| WalletError::CryptoError { msg: e.to_string() })?;
+    Ok((*wif).clone())
+}
+
+/// Derive a transparent change address (internal chain).
+fn derive_transparent_change_address(
+    seed: Vec<u8>,
+    account_index: u32,
+    child_index: u32,
+) -> Result<String, WalletError> {
+    let seed = SecureVec(seed);
+    zipherx_crypto::transparent::derive_transparent_change_address(
+        &seed,
+        account_index,
+        child_index,
+    )
+    .map_err(|e| WalletError::CryptoError { msg: e.to_string() })
+}
+
+/// Validate a transparent address (t1... or t3...).
+fn validate_transparent_address(address: String) -> bool {
+    zipherx_crypto::transparent::validate_transparent_address(&address)
+}
+
+/// Get the transparent balance from the wallet database.
+fn get_transparent_balance() -> Result<u64, WalletError> {
+    let wallet = get_wallet()?;
+    runtime::block_on(wallet.get_transparent_balance())
+        .map_err(|e| WalletError::from(e))?
+        .map_err(|e| WalletError::from(e))
+}
+
+/// Get all unspent transparent UTXOs.
+fn get_transparent_utxos() -> Result<Vec<TransparentUtxoFFI>, WalletError> {
+    let wallet = get_wallet()?;
+    let utxos = runtime::block_on(wallet.get_unspent_transparent_utxos())
+        .map_err(|e| WalletError::from(e))?
+        .map_err(|e| WalletError::from(e))?;
+
+    Ok(utxos
+        .into_iter()
+        .map(|u| TransparentUtxoFFI {
+            txid: hex::encode(&u.txid),
+            output_index: u.output_index,
+            address: u.address,
+            value: u.value,
+            height: u.height,
+            is_change: u.is_change,
+        })
+        .collect())
+}
+
+// ============================================================================
 // Internal Helpers
 // ============================================================================
 
@@ -1655,6 +1894,7 @@ fn sync_status_to_progress(status: &SyncStatus) -> (String, u64, u64) {
             u64::try_from(*total_notes).unwrap_or(u64::MAX),
         ),
         SyncStatus::BoostFailed { .. } => ("boost_failed".into(), 0, 0),
+        SyncStatus::ConfirmationsUpdated { height } => ("confirmations_updated".into(), *height, *height),
         SyncStatus::Complete { height } => ("complete".into(), *height, *height),
         SyncStatus::Failed(_) => ("failed".into(), 0, 0),
     }
@@ -1673,6 +1913,7 @@ fn sync_status_to_phase(status: &SyncStatus) -> String {
         SyncStatus::GapFill { .. } => "gap_fill".into(),
         SyncStatus::WitnessUpdate { .. } => "witness_update".into(),
         SyncStatus::BoostFailed { .. } => "boost_failed".into(),
+        SyncStatus::ConfirmationsUpdated { .. } => "confirmations_updated".into(),
         SyncStatus::Complete { .. } => "complete".into(),
         SyncStatus::Failed(_) => "failed".into(),
     }
