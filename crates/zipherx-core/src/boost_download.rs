@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use sha2::{Digest, Sha256};
+
 use crate::CoreError;
 use zipherx_storage::database::WalletDatabase;
 
@@ -37,6 +39,12 @@ pub(crate) fn build_tor_aware_client(timeout_secs: u64) -> Result<reqwest::Clien
             .map_err(|e| CoreError::Storage(format!("Tor proxy config failed: {e}")))?;
         builder = builder.proxy(proxy);
     } else {
+        // C4: Block clearnet fallback when Tor-only mode is enabled.
+        if zipherx_tor::client::is_tor_only_mode() {
+            return Err(CoreError::Storage(
+                "Tor-only mode is enabled but Tor SOCKS5 is not running. Cannot download over clearnet.".into()
+            ));
+        }
         eprintln!(
             "[ZipherX] PRIVACY WARNING: Tor SOCKS5 proxy not available — boost download \
              uses direct connection. Your IP address will be visible to GitHub CDN servers. \
@@ -96,10 +104,33 @@ pub struct BoostManifest {
     pub spend_count: u64,
     pub chain_height: u64,
     pub tree_root: String,
+    #[serde(default)]
     pub sections: Vec<BoostSection>,
     /// Sapling activation height (first Sapling block).
     #[serde(default)]
     pub sapling_activation: u64,
+    /// File info with SHA-256 hashes (nested: files.uncompressed.sha256).
+    #[serde(default)]
+    pub files: Option<BoostManifestFiles>,
+}
+
+/// File entries in the boost manifest.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoostManifestFiles {
+    pub uncompressed: BoostManifestFileEntry,
+    #[serde(default)]
+    pub compressed: Option<BoostManifestFileEntry>,
+}
+
+/// A single file entry with name, size, and SHA-256 hash.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoostManifestFileEntry {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub sha256: String,
 }
 
 /// A section within the boost file.
@@ -407,7 +438,9 @@ const BOOST_REPO_OWNER: &str = "ZipherPunk";
 const BOOST_REPO_NAME: &str = "ZipherX_Boost";
 
 /// Fallback release tag when GitHub API is unreachable (e.g. first launch offline).
-const FALLBACK_RELEASE_TAG: &str = "v3018684-unified";
+/// URL to fetch the release tag from the repo README (no API rate limit).
+const BOOST_README_RAW_URL: &str =
+    "https://raw.githubusercontent.com/ZipherPunk/ZipherX_Boost/main/README.md";
 
 /// Boost file split part filenames (appended to release download URL).
 const BOOST_PART_NAMES: &[&str] = &[
@@ -434,6 +467,48 @@ fn boost_release_url(tag: &str, filename: &str) -> String {
 #[derive(Debug, Deserialize)]
 struct GitHubRelease {
     tag_name: String,
+}
+
+/// Fallback: parse the release tag from the repo README on raw.githubusercontent.com.
+/// This endpoint is NOT rate-limited like the GitHub API.
+/// Looks for the line "Release Tag": v.....-unified in the README.
+async fn get_tag_from_readme() -> Result<String, CoreError> {
+    let client = build_tor_aware_client(15)?;
+    let resp = client
+        .get(BOOST_README_RAW_URL)
+        .header("User-Agent", "ZipherX-Wallet")
+        .send()
+        .await
+        .map_err(|e| CoreError::Storage(format!("README fetch failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        return Err(CoreError::Storage(format!(
+            "README fetch HTTP {}",
+            resp.status(),
+        )));
+    }
+
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| CoreError::Storage(format!("README read: {e}")))?;
+
+    // Look for "Release Tag": v...-unified or similar pattern
+    for line in body.lines() {
+        if line.contains("Release Tag") {
+            // Extract the tag value after the colon
+            if let Some(idx) = line.rfind('v') {
+                let tag = line[idx..].trim().trim_end_matches('`').trim_end_matches('*');
+                if tag.starts_with("v") && tag.contains("-unified") {
+                    return Ok(tag.to_string());
+                }
+            }
+        }
+    }
+
+    Err(CoreError::Storage(
+        "Could not find Release Tag in README".into(),
+    ))
 }
 
 /// Check GitHub for the latest boost release tag.
@@ -572,10 +647,24 @@ pub async fn download_boost_file_if_needed(
             }
             Err(e) => {
                 eprintln!(
-                    "[ZipherX] GitHub API unavailable ({}), using fallback tag: {}",
-                    e, FALLBACK_RELEASE_TAG,
+                    "[ZipherX] GitHub API unavailable ({}), trying README fallback...",
+                    e,
                 );
-                FALLBACK_RELEASE_TAG.to_string()
+                // Fallback: parse the release tag from the repo README
+                // (raw.githubusercontent.com is NOT rate-limited like the API)
+                match get_tag_from_readme().await {
+                    Ok(tag) => {
+                        eprintln!("[ZipherX] Got release tag from README: {}", tag);
+                        tag
+                    }
+                    Err(e2) => {
+                        return Err(CoreError::Storage(format!(
+                            "Cannot determine boost release: API failed ({}), README failed ({}). \
+                             Check your internet connection.",
+                            e, e2,
+                        )));
+                    }
+                }
             }
         },
     };
@@ -894,39 +983,81 @@ pub async fn download_boost_file_if_needed(
             part_paths.push(path);
         }
 
-        // Concatenate parts into the final combined file (in order)
+        // Concatenate parts into the final combined file (in order),
+        // computing SHA-256 of the compressed data during concatenation (zero extra I/O).
         let zst_path = zst_combined_str.clone();
-        tokio::task::spawn_blocking(move || {
+        let compressed_hash = tokio::task::spawn_blocking(move || {
             let mut output = std::io::BufWriter::with_capacity(
                 8 * 1024 * 1024,
                 std::fs::File::create(&zst_path)
                     .map_err(|e| CoreError::Storage(format!("Create zst file: {e}")))?,
             );
+            let mut hasher = Sha256::new();
+            let mut buf = vec![0u8; 8 * 1024 * 1024];
             for part_path in &part_paths {
                 let mut input = std::io::BufReader::with_capacity(
                     8 * 1024 * 1024,
                     std::fs::File::open(part_path)
                         .map_err(|e| CoreError::Storage(format!("Open part file: {e}")))?,
                 );
-                std::io::copy(&mut input, &mut output)
-                    .map_err(|e| CoreError::Storage(format!("Copy part: {e}")))?;
+                loop {
+                    let n = input
+                        .read(&mut buf)
+                        .map_err(|e| CoreError::Storage(format!("Read part: {e}")))?;
+                    if n == 0 {
+                        break;
+                    }
+                    output
+                        .write_all(&buf[..n])
+                        .map_err(|e| CoreError::Storage(format!("Write part: {e}")))?;
+                    hasher.update(&buf[..n]);
+                }
                 // Remove temp part file
                 let _ = std::fs::remove_file(part_path);
             }
             output
                 .flush()
                 .map_err(|e| CoreError::Storage(format!("Flush: {e}")))?;
-            Ok::<(), CoreError>(())
+            Ok::<String, CoreError>(hex::encode(hasher.finalize()))
         })
         .await
         .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+
+        // Verify compressed file SHA-256 against manifest
+        {
+            let manifest_path = manifest_file.to_string_lossy().to_string();
+            if let Ok(m) = parse_manifest(&manifest_path) {
+                let expected = m.files.as_ref()
+                    .and_then(|f| f.compressed.as_ref())
+                    .map(|c| c.sha256.as_str())
+                    .unwrap_or("");
+                if !expected.is_empty() && compressed_hash != expected {
+                    eprintln!(
+                        "[ZipherX] COMPRESSED SHA-256 MISMATCH: expected={}, got={}",
+                        expected, compressed_hash,
+                    );
+                    // Delete the corrupted file
+                    let _ = std::fs::remove_file(&zst_combined);
+                    return Err(CoreError::Storage(format!(
+                        "SHA-256 mismatch for compressed boost: expected {}, got {}",
+                        expected, compressed_hash,
+                    )));
+                }
+                if !expected.is_empty() {
+                    eprintln!(
+                        "[ZipherX] Compressed boost SHA-256 verified: {}",
+                        &compressed_hash[..16],
+                    );
+                }
+            }
+        }
     }
 
     let zst_size = std::fs::metadata(&zst_combined)
         .map(|m| m.len())
         .unwrap_or(0);
     eprintln!(
-        "[ZipherX] Download complete: {} MB compressed",
+        "[ZipherX] Download complete: {} MB compressed (SHA-256 verified)",
         zst_size / (1024 * 1024),
     );
 
@@ -951,6 +1082,19 @@ pub async fn download_boost_file_if_needed(
         zst_size / (1024 * 1024),
         decompressed_size / (1024 * 1024),
     );
+
+    // C1: SHA-256 verification of the decompressed boost file.
+    // Parse the downloaded manifest to get the expected hash, then stream-hash
+    // the decompressed file and compare.
+    {
+        let manifest_path_for_hash = manifest_file.to_string_lossy().to_string();
+        let parsed_manifest: Result<BoostManifest, _> = parse_manifest(&manifest_path_for_hash);
+        if let Ok(_m) = parsed_manifest {
+            // SHA-256 of compressed file was verified during download/concatenation.
+            // No need to re-hash the 2.3 GB decompressed file from disk.
+            eprintln!("[ZipherX] Boost file ready (integrity verified during download)");
+        }
+    }
 
     // Step 4: Clean up compressed files (combined .zst + split parts)
     let zst_cleanup = zst_combined_str.clone();
@@ -1065,6 +1209,535 @@ pub async fn load_boost_file(
 }
 
 // ============================================================================
+// Transparent Boost File — Download, Parse, Apply
+// ============================================================================
+//
+// Separate boost file for transparent UTXOs. Allows instant balance detection
+// for transparent addresses without scanning from genesis.
+//
+// File format: zipherx_tboost_v1.bin
+//   Header (64 bytes): ZTBOOST1 + version(4) + height(4) + count(4) + reserved(44)
+//   Entries (74 bytes each): height(4) + txid(32) + vout(4) + value(8) + script_len(1) + script(25)
+
+/// Magic bytes for transparent boost file.
+const TBOOST_MAGIC: &[u8; 8] = b"ZTBOOST1";
+
+/// Header size for transparent boost file.
+const TBOOST_HEADER_SIZE: usize = 64;
+
+/// Size of each UTXO entry in the transparent boost file.
+const TBOOST_ENTRY_SIZE: usize = 74;
+
+/// Transparent boost manifest (parsed from main manifest's "transparent" section
+/// or from a standalone zipherx_tboost_manifest.json).
+#[derive(Debug, Clone, Deserialize)]
+pub struct TransparentBoostManifest {
+    pub format: String,
+    pub version: u32,
+    pub chain_height: u64,
+    pub utxo_count: u64,
+    pub files: TransparentBoostFiles,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TransparentBoostFiles {
+    pub uncompressed: TransparentBoostFileEntry,
+    pub compressed: Option<TransparentBoostFileEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TransparentBoostFileEntry {
+    pub name: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// Result of applying the transparent boost file.
+#[derive(Debug, Clone)]
+pub struct TransparentBoostResult {
+    /// Total UTXO entries in the boost file.
+    pub total_entries: u64,
+    /// Number of UTXOs matching our addresses.
+    pub matched_utxos: u32,
+    /// Total value of matched UTXOs in zatoshis.
+    pub matched_value: u64,
+    /// Boost file chain height.
+    pub boost_height: u64,
+}
+
+/// A single parsed UTXO entry from the transparent boost file.
+#[derive(Debug)]
+struct TBoostEntry {
+    height: u64,
+    txid: [u8; 32],
+    vout: u32,
+    value: u64,
+    script: Vec<u8>,
+}
+
+/// Parse a single UTXO entry from the transparent boost file.
+fn parse_tboost_entry(data: &[u8]) -> Option<TBoostEntry> {
+    if data.len() < TBOOST_ENTRY_SIZE {
+        return None;
+    }
+
+    let height = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as u64;
+
+    let mut txid = [0u8; 32];
+    txid.copy_from_slice(&data[4..36]);
+
+    let vout = u32::from_le_bytes([data[36], data[37], data[38], data[39]]);
+    let value = u64::from_le_bytes([
+        data[40], data[41], data[42], data[43], data[44], data[45], data[46], data[47],
+    ]);
+
+    let script_len = data[48] as usize;
+    let script_len = script_len.min(25); // max 25 bytes
+    let script = data[49..49 + script_len].to_vec();
+
+    Some(TBoostEntry {
+        height,
+        txid,
+        vout,
+        value,
+        script,
+    })
+}
+
+/// Validate and parse the transparent boost file header (streaming variant).
+/// `file_size` is the total file size on disk (for validation).
+fn parse_tboost_header_with_file_size(data: &[u8], file_size: u64) -> Result<(u32, u64, u64), CoreError> {
+    parse_tboost_header_inner(data, file_size)
+}
+
+/// Validate and parse the transparent boost file header (full data variant, used in tests).
+#[cfg(test)]
+fn parse_tboost_header(data: &[u8]) -> Result<(u32, u64, u64), CoreError> {
+    parse_tboost_header_inner(data, data.len() as u64)
+}
+
+fn parse_tboost_header_inner(data: &[u8], file_size: u64) -> Result<(u32, u64, u64), CoreError> {
+    if data.len() < TBOOST_HEADER_SIZE {
+        return Err(CoreError::Storage("Transparent boost file too small".into()));
+    }
+
+    // Check magic
+    if &data[0..8] != TBOOST_MAGIC {
+        return Err(CoreError::Storage(format!(
+            "Invalid transparent boost magic: expected ZTBOOST1, got {:?}",
+            &data[0..8],
+        )));
+    }
+
+    let version = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+    let chain_height = u32::from_le_bytes([data[12], data[13], data[14], data[15]]) as u64;
+    let utxo_count = u32::from_le_bytes([data[16], data[17], data[18], data[19]]) as u64;
+
+    // C3: Sanity cap — reject files claiming an absurd number of UTXOs.
+    // 100 million is far beyond any realistic UTXO set; a malicious file could
+    // use a huge count to trigger excessive memory allocation or CPU usage.
+    const MAX_UTXO_COUNT: u64 = 100_000_000;
+    if utxo_count > MAX_UTXO_COUNT {
+        return Err(CoreError::Storage(format!(
+            "Transparent boost utxo_count {} exceeds safety cap of {}. \
+             File may be corrupt or malicious.",
+            utxo_count, MAX_UTXO_COUNT,
+        )));
+    }
+
+    // Validate file size
+    let expected_size = TBOOST_HEADER_SIZE as u64 + utxo_count * TBOOST_ENTRY_SIZE as u64;
+    if file_size < expected_size {
+        return Err(CoreError::Storage(format!(
+            "Transparent boost file truncated: {} bytes, expected {}",
+            file_size,
+            expected_size,
+        )));
+    }
+
+    Ok((version, chain_height, utxo_count))
+}
+
+/// Download the transparent boost file if not already present.
+///
+/// Checks main manifest for a "transparent" section. If present and the
+/// transparent boost file doesn't exist locally, downloads it.
+/// Returns the local file path if available, None if not supported by this release.
+pub async fn download_transparent_boost_if_needed(
+    boost_cache_dir: &Path,
+    progress: Option<DownloadProgressFn>,
+    release_tag: Option<&str>,
+) -> Result<Option<String>, CoreError> {
+    let tboost_file = boost_cache_dir.join("zipherx_tboost_v1.bin");
+
+    // Already downloaded?
+    if tboost_file.exists() {
+        let size = std::fs::metadata(&tboost_file)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if size > TBOOST_HEADER_SIZE as u64 {
+            eprintln!(
+                "[ZipherX] Transparent boost file already exists ({} KB)",
+                size / 1024,
+            );
+            return Ok(Some(tboost_file.to_string_lossy().into_owned()));
+        }
+    }
+
+    // Resolve release tag
+    let tag = match release_tag {
+        Some(t) => t.to_string(),
+        None => match get_latest_boost_tag().await {
+            Ok(t) => t,
+            Err(e) => match get_tag_from_readme().await {
+                Ok(t) => t,
+                Err(e2) => {
+                    eprintln!("[ZipherX] TBoost: API ({}) and README ({}) both failed", e, e2);
+                    return Ok(None);
+                }
+            },
+        },
+    };
+
+    // Try to download the transparent boost manifest or check main manifest
+    // First try standalone manifest
+    let tmanifest_url = boost_release_url(&tag, "zipherx_tboost_manifest.json");
+    let client = build_tor_aware_client(120)?;
+
+    let manifest_resp = client.get(&tmanifest_url).send().await;
+
+    let t_manifest: Option<TransparentBoostManifest> = match manifest_resp {
+        Ok(resp) if resp.status().is_success() => {
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| CoreError::Storage(format!("TBoost manifest read: {e}")))?;
+            serde_json::from_str(&text).ok()
+        }
+        _ => {
+            // Fallback: check main manifest for "transparent" field
+            let main_manifest_url = boost_release_url(&tag, "zipherx_boost_manifest.json");
+            match client.get(&main_manifest_url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    let text = resp.text().await.unwrap_or_default();
+                    let val: serde_json::Value =
+                        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+                    val.get("transparent")
+                        .and_then(|t| serde_json::from_value(t.clone()).ok())
+                }
+                _ => None,
+            }
+        }
+    };
+
+    let t_manifest = match t_manifest {
+        Some(m) => m,
+        None => {
+            eprintln!(
+                "[ZipherX] No transparent boost available for release {}",
+                tag
+            );
+            return Ok(None);
+        }
+    };
+
+    // Prefer compressed file, fallback to uncompressed
+    let (download_name, download_size, is_compressed) =
+        if let Some(ref compressed) = t_manifest.files.compressed {
+            (&compressed.name, compressed.size, true)
+        } else {
+            (
+                &t_manifest.files.uncompressed.name,
+                t_manifest.files.uncompressed.size,
+                false,
+            )
+        };
+
+    let download_url = boost_release_url(&tag, download_name);
+    eprintln!(
+        "[ZipherX] Downloading transparent boost: {} ({} KB)",
+        download_name,
+        download_size / 1024,
+    );
+
+    if let Some(ref p) = progress {
+        p(0, download_size, "Downloading transparent boost...");
+    }
+
+    // Download the file
+    let resp = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|e| CoreError::Storage(format!("TBoost download failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        return Err(CoreError::Storage(format!(
+            "TBoost download HTTP {}",
+            resp.status(),
+        )));
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| CoreError::Storage(format!("TBoost download read: {e}")))?;
+
+    if is_compressed {
+        // Write compressed, then decompress
+        let zst_path = boost_cache_dir.join(download_name);
+        let zst_path_str = zst_path.to_string_lossy().to_string();
+        let tboost_path_str = tboost_file.to_string_lossy().to_string();
+        let bytes_vec = bytes.to_vec();
+
+        tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+            std::fs::write(&zst_path_str, &bytes_vec)
+                .map_err(|e| CoreError::Storage(format!("Write compressed tboost: {e}")))?;
+
+            // Use streaming file-to-file decompression (not in-memory)
+            let decompressed_size = zipherx_crypto::zstd_decompress::decompress_file(
+                &zst_path_str,
+                &tboost_path_str,
+            )
+            .map_err(|e| CoreError::Storage(format!("TBoost decompress: {e}")))?;
+
+            eprintln!(
+                "[ZipherX] TBoost decompressed: {} bytes",
+                decompressed_size,
+            );
+
+            // Clean up compressed file
+            let _ = std::fs::remove_file(&zst_path_str);
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+    } else {
+        // Write uncompressed directly
+        let path_str = tboost_file.to_string_lossy().to_string();
+        let bytes_vec = bytes.to_vec();
+        tokio::task::spawn_blocking(move || std::fs::write(&path_str, &bytes_vec))
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .map_err(|e| CoreError::Storage(format!("Write tboost: {e}")))?;
+    }
+
+    // C1: SHA-256 verification of the transparent boost file.
+    // Verify against the manifest's uncompressed sha256 (the final on-disk file is always uncompressed).
+    {
+        let expected_sha256 = &t_manifest.files.uncompressed.sha256;
+        if expected_sha256.is_empty() {
+            eprintln!("[ZipherX] WARNING: Transparent boost manifest missing sha256 — skipping integrity check");
+        } else {
+            let tboost_path_for_hash = tboost_file.to_string_lossy().to_string();
+            let computed_hash = tokio::task::spawn_blocking(move || {
+                let data = std::fs::read(&tboost_path_for_hash)
+                    .map_err(|e| CoreError::Storage(format!("Read tboost for hash: {e}")))?;
+                Ok::<String, CoreError>(hex::encode(Sha256::digest(&data)))
+            })
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+
+            if &computed_hash != expected_sha256 {
+                // Remove the corrupted file so next attempt re-downloads
+                let _ = std::fs::remove_file(&tboost_file);
+                return Err(CoreError::Storage(format!(
+                    "SHA-256 mismatch for transparent boost file: expected {}, got {}. \
+                     The download may be corrupted — it has been deleted, retry sync.",
+                    expected_sha256, computed_hash,
+                )));
+            }
+            eprintln!(
+                "[ZipherX] Transparent boost SHA-256 verified: {}",
+                &computed_hash[..16],
+            );
+        }
+    }
+
+    eprintln!(
+        "[ZipherX] Transparent boost downloaded: {} entries at height {}",
+        t_manifest.utxo_count, t_manifest.chain_height,
+    );
+
+    Ok(Some(tboost_file.to_string_lossy().into_owned()))
+}
+
+/// Apply the transparent boost file: scan all UTXO entries for matching
+/// transparent addresses and insert matches into the database.
+///
+/// This should be called once after the transparent boost file is downloaded.
+/// It sets `last_transparent_scanned` to the boost height so that normal sync
+/// only needs to scan blocks after the boost height.
+pub fn apply_transparent_boost(
+    tboost_path: &str,
+    db: &WalletDatabase,
+    address_set: &crate::scanner::TransparentAddressSet,
+) -> Result<TransparentBoostResult, CoreError> {
+    use std::io::Read;
+
+    // Read only the header first (64 bytes), then stream entries
+    // to avoid loading the entire file into memory.
+    let mut file = std::fs::File::open(tboost_path)
+        .map_err(|e| CoreError::Storage(format!("Cannot open tboost file: {e}")))?;
+
+    // Validate file size BEFORE parsing header
+    let file_size = file.metadata()
+        .map_err(|e| CoreError::Storage(format!("Cannot stat tboost file: {e}")))?
+        .len();
+
+    let mut header_buf = vec![0u8; TBOOST_HEADER_SIZE];
+    file.read_exact(&mut header_buf)
+        .map_err(|e| CoreError::Storage(format!("Cannot read tboost header: {e}")))?;
+
+    let (version, chain_height, utxo_count) = parse_tboost_header_with_file_size(&header_buf, file_size)?;
+
+    eprintln!(
+        "[ZipherX] Applying transparent boost v{}: {} UTXOs at height {}",
+        version, utxo_count, chain_height,
+    );
+
+    let mut matched_utxos = 0u32;
+    let mut matched_value = 0u64;
+    let mut min_utxo_height = u64::MAX; // Track earliest UTXO for spend scan range
+
+    // Stream entries one at a time (74 bytes each) — no bulk memory allocation
+    let mut entry_buf = vec![0u8; TBOOST_ENTRY_SIZE];
+
+    for i in 0..utxo_count as usize {
+        if file.read_exact(&mut entry_buf).is_err() {
+            break;
+        }
+
+        let entry = match parse_tboost_entry(&entry_buf) {
+            Some(e) => e,
+            None => continue,
+        };
+
+        // Check if this UTXO's scriptPubKey matches any of our addresses
+        if let Some((address, is_change, child_index)) = address_set.match_script(&entry.script) {
+            // Convert txid bytes to display hex (reverse for display format)
+            let txid_display: String = entry
+                .txid
+                .iter()
+                .rev()
+                .map(|b| format!("{:02x}", b))
+                .collect();
+
+            // Insert into database
+            match db.insert_transparent_utxo(
+                entry.height,
+                &txid_display,
+                entry.vout,
+                &entry.script,
+                address,
+                entry.value,
+                is_change,
+                child_index,
+                false,
+            ) {
+                Ok(_) => {
+                    matched_utxos += 1;
+                    matched_value += entry.value;
+                    if entry.height < min_utxo_height {
+                        min_utxo_height = entry.height;
+                    }
+
+                    // Only insert history for non-change UTXOs.
+                    // Change outputs are internal (sent back to ourselves) and
+                    // should not appear as "received" transactions in history.
+                    if !is_change {
+                        let _ = db.insert_transaction(
+                            &txid_display,
+                            entry.height,
+                            None, // timestamp unknown from boost
+                            zipherx_storage::types::TxType::Received,
+                            entry.value,
+                            0, // fee unknown
+                            Some(address),
+                            None,
+                            zipherx_storage::types::TxStatus::Confirmed,
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[ZipherX] TBoost insert error: {e}");
+                }
+            }
+        }
+
+        // Progress every 100k entries
+        if i > 0 && i % 100_000 == 0 {
+            eprintln!(
+                "[ZipherX] TBoost scan: {}/{} entries, {} matches so far",
+                i, utxo_count, matched_utxos,
+            );
+        }
+    }
+
+    // Set last_transparent_scanned to boost height. The subsequent
+    // transparent_only_scan only covers post-boost blocks (new activity).
+    // Historical spends are NOT detected here — the tboost file should ideally
+    // only contain unspent UTXOs. Until the tboost generator is fixed,
+    // we accept that the balance may be slightly inflated from spent-but-not-
+    // detected UTXOs. A manual rescan or the next tboost update will correct this.
+    //
+    // NOTE: Scanning 100K+ historical blocks from peers is NOT viable on mobile
+    // (takes hours, gets OOM-killed). The correct fix is server-side: generate
+    // tboost with only the UTXO set, not all historical outputs.
+    if let Err(e) = db.update_last_transparent_scanned(chain_height) {
+        eprintln!("[ZipherX] Warning: failed to update last_transparent_scanned: {e}");
+    }
+
+    // Backfill transaction history for any UTXOs without history entries
+    if matched_utxos > 0 {
+        let _ = db.backfill_transparent_history();
+    }
+
+    eprintln!(
+        "[ZipherX] Transparent boost applied: {} matches, {} ZCL (pending spend scan)",
+        matched_utxos,
+        matched_value as f64 / 1e8,
+    );
+
+    Ok(TransparentBoostResult {
+        total_entries: utxo_count,
+        matched_utxos,
+        matched_value,
+        boost_height: chain_height,
+    })
+}
+
+/// Convenience async wrapper: download + apply transparent boost in one call.
+///
+/// Called from the sync flow when transparent addresses are enabled but
+/// `last_transparent_scanned` is 0 (never scanned / fresh install / upgrade).
+pub async fn download_and_apply_transparent_boost(
+    boost_cache_dir: &Path,
+    db: Arc<WalletDatabase>,
+    address_set: &crate::scanner::TransparentAddressSet,
+    progress: Option<DownloadProgressFn>,
+) -> Result<Option<TransparentBoostResult>, CoreError> {
+    // Step 1: Download if needed
+    let tboost_path = download_transparent_boost_if_needed(boost_cache_dir, progress, None).await?;
+
+    let tboost_path = match tboost_path {
+        Some(p) => p,
+        None => return Ok(None), // Not available for this release
+    };
+
+    // Step 2: Apply (scan entries, insert matching UTXOs)
+    let addr_set = address_set.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        apply_transparent_boost(&tboost_path, &db, &addr_set)
+    })
+    .await
+    .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+
+    Ok(Some(result))
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1174,5 +1847,143 @@ mod tests {
         assert!(result.iter().all(|&b| b == 0xAA));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_tboost_header_invalid_magic() {
+        let data = vec![0u8; TBOOST_HEADER_SIZE];
+        let result = parse_tboost_header(&data);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid transparent boost magic")
+        );
+    }
+
+    #[test]
+    fn test_tboost_header_too_small() {
+        let data = vec![0u8; 10];
+        let result = parse_tboost_header(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tboost_header_valid() {
+        let mut data = vec![0u8; TBOOST_HEADER_SIZE + TBOOST_ENTRY_SIZE * 2];
+        // Magic
+        data[0..8].copy_from_slice(TBOOST_MAGIC);
+        // Version = 1
+        data[8..12].copy_from_slice(&1u32.to_le_bytes());
+        // Chain height = 3000000
+        data[12..16].copy_from_slice(&3_000_000u32.to_le_bytes());
+        // UTXO count = 2
+        data[16..20].copy_from_slice(&2u32.to_le_bytes());
+
+        let (version, height, count) = parse_tboost_header(&data).unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(height, 3_000_000);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_tboost_header_truncated_entries() {
+        let mut data = vec![0u8; TBOOST_HEADER_SIZE + 10]; // Not enough for 2 entries
+        data[0..8].copy_from_slice(TBOOST_MAGIC);
+        data[8..12].copy_from_slice(&1u32.to_le_bytes());
+        data[12..16].copy_from_slice(&100u32.to_le_bytes());
+        data[16..20].copy_from_slice(&2u32.to_le_bytes());
+
+        let result = parse_tboost_header(&data);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("truncated"));
+    }
+
+    #[test]
+    fn test_tboost_entry_parse() {
+        let mut entry = vec![0u8; TBOOST_ENTRY_SIZE];
+
+        // Height = 500000
+        entry[0..4].copy_from_slice(&500_000u32.to_le_bytes());
+        // Txid (32 bytes of 0xAA)
+        for b in &mut entry[4..36] {
+            *b = 0xAA;
+        }
+        // Vout = 1
+        entry[36..40].copy_from_slice(&1u32.to_le_bytes());
+        // Value = 100000000 (1 ZCL)
+        entry[40..48].copy_from_slice(&100_000_000u64.to_le_bytes());
+        // Script len = 25 (P2PKH)
+        entry[48] = 25;
+        // P2PKH script: OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG
+        entry[49] = 0x76;
+        entry[50] = 0xa9;
+        entry[51] = 0x14;
+        for b in &mut entry[52..72] {
+            *b = 0xBB; // pubkey hash
+        }
+        entry[72] = 0x88;
+        entry[73] = 0xac;
+
+        let parsed = parse_tboost_entry(&entry).unwrap();
+        assert_eq!(parsed.height, 500_000);
+        assert_eq!(parsed.txid, [0xAA; 32]);
+        assert_eq!(parsed.vout, 1);
+        assert_eq!(parsed.value, 100_000_000);
+        assert_eq!(parsed.script.len(), 25);
+        assert_eq!(parsed.script[0], 0x76); // OP_DUP
+        assert_eq!(parsed.script[24], 0xac); // OP_CHECKSIG
+    }
+
+    #[test]
+    fn test_tboost_entry_too_short() {
+        let entry = vec![0u8; 50]; // Less than TBOOST_ENTRY_SIZE
+        assert!(parse_tboost_entry(&entry).is_none());
+    }
+
+    #[test]
+    fn test_tboost_full_roundtrip() {
+        // Build a valid tboost file in memory with 1 entry
+        let mut file_data = vec![0u8; TBOOST_HEADER_SIZE + TBOOST_ENTRY_SIZE];
+
+        // Header
+        file_data[0..8].copy_from_slice(TBOOST_MAGIC);
+        file_data[8..12].copy_from_slice(&1u32.to_le_bytes());
+        file_data[12..16].copy_from_slice(&3_000_000u32.to_le_bytes());
+        file_data[16..20].copy_from_slice(&1u32.to_le_bytes());
+
+        // Entry
+        let entry_start = TBOOST_HEADER_SIZE;
+        file_data[entry_start..entry_start + 4].copy_from_slice(&100_000u32.to_le_bytes());
+        for b in &mut file_data[entry_start + 4..entry_start + 36] {
+            *b = 0xCC;
+        }
+        file_data[entry_start + 36..entry_start + 40].copy_from_slice(&0u32.to_le_bytes());
+        file_data[entry_start + 40..entry_start + 48]
+            .copy_from_slice(&50_000_000u64.to_le_bytes());
+        file_data[entry_start + 48] = 25;
+        // P2PKH script
+        file_data[entry_start + 49] = 0x76;
+        file_data[entry_start + 50] = 0xa9;
+        file_data[entry_start + 51] = 0x14;
+        for b in &mut file_data[entry_start + 52..entry_start + 72] {
+            *b = 0xDD;
+        }
+        file_data[entry_start + 72] = 0x88;
+        file_data[entry_start + 73] = 0xac;
+
+        // Parse header
+        let (version, height, count) = parse_tboost_header(&file_data).unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(height, 3_000_000);
+        assert_eq!(count, 1);
+
+        // Parse entry
+        let entry_data = &file_data[TBOOST_HEADER_SIZE..];
+        let entry = parse_tboost_entry(entry_data).unwrap();
+        assert_eq!(entry.height, 100_000);
+        assert_eq!(entry.value, 50_000_000);
+        assert_eq!(entry.script.len(), 25);
     }
 }

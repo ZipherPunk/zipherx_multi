@@ -110,6 +110,8 @@ pub struct TransparentUtxo {
     pub is_change: bool,
     /// BIP-44 child index used to derive the address.
     pub child_index: u32,
+    /// Whether this UTXO belongs to an imported (WIF) key rather than a derived key.
+    pub is_imported: bool,
 }
 
 /// Transaction type identifiers.
@@ -123,6 +125,10 @@ pub enum TxType {
     Change,
     /// Send-to-self (user sent to their own address).
     SelfTransfer,
+    /// Self-send: shielded → transparent (z→t).
+    SelfZ2T,
+    /// Self-send: transparent → shielded (t→z).
+    SelfT2Z,
 }
 
 impl TxType {
@@ -132,6 +138,8 @@ impl TxType {
             Self::Received => "received",
             Self::Change => "change",
             Self::SelfTransfer => "self",
+            Self::SelfZ2T => "self_z2t",
+            Self::SelfT2Z => "self_t2z",
         }
     }
 
@@ -141,6 +149,8 @@ impl TxType {
             "received" => Some(Self::Received),
             "change" => Some(Self::Change),
             "self" => Some(Self::SelfTransfer),
+            "self_z2t" => Some(Self::SelfZ2T),
+            "self_t2z" => Some(Self::SelfT2Z),
             _ => None,
         }
     }

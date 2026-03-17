@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS transparent_utxos (
     is_spent INTEGER NOT NULL DEFAULT 0,
     spent_in_tx TEXT,
     spent_height INTEGER,
+    is_imported INTEGER NOT NULL DEFAULT 0,
     UNIQUE(txid, output_index)
 )";
 

@@ -94,6 +94,7 @@ pub async fn sync_to_tip(
     progress: Option<SyncProgressFn>,
     peer_count_ref: Option<Arc<AtomicU32>>,
     boost_cache_override: Option<std::path::PathBuf>,
+    transparent_addresses: Option<&scanner::TransparentAddressSet>,
 ) -> Result<u64, CoreError> {
     // Try to acquire the sync guard
     if !guards.try_acquire_sync() {
@@ -201,7 +202,11 @@ pub async fn sync_to_tip(
                     }
                     Ok(None) => {} // Up to date
                     Err(e) => {
-                        eprintln!("[ZipherX] Boost update check failed (non-fatal): {e}");
+                        // Suppress rate-limit spam — only log non-403 errors
+                        let msg = e.to_string();
+                        if !msg.contains("403") {
+                            eprintln!("[ZipherX] Boost update check failed (non-fatal): {e}");
+                        }
                     }
                 }
             }
@@ -415,6 +420,62 @@ pub async fn sync_to_tip(
                         "[ZipherX] Loaded {} headers from boost file into HeaderStore",
                         loaded
                     );
+                }
+            }
+        }
+    }
+
+    // Step 2b: Download + apply transparent boost (if needed)
+    //
+    // Only runs when: (a) transparent addresses are enabled, (b) tboost_applied == false.
+    // Uses a separate DB flag because peer-based transparent_only_scan sets
+    // last_transparent_scanned but only covers the gap from boost height to tip —
+    // it does NOT cover historical blocks 0..boost_height. The tboost file covers
+    // the full UTXO set from genesis to its snapshot height.
+    if let Some(t_addrs) = transparent_addresses {
+        if let Some(ref boost_dir) = boost_cache_dir {
+            let tboost_already_applied = {
+                let db_c = db.clone();
+                tokio::task::spawn_blocking(move || db_c.get_tboost_applied())
+                    .await
+                    .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+                    .unwrap_or(false)
+            };
+
+            if !tboost_already_applied {
+                eprintln!("[ZipherX] Transparent boost: not yet applied, checking for tboost file...");
+                let boost_dir_clone = boost_dir.clone();
+                let db_c = db.clone();
+                let addr_set = t_addrs.clone();
+
+                match boost_download::download_and_apply_transparent_boost(
+                    &boost_dir_clone,
+                    db_c.clone(),
+                    &addr_set,
+                    None,
+                )
+                .await
+                {
+                    Ok(Some(result)) => {
+                        eprintln!(
+                            "[ZipherX] Transparent boost applied: {} UTXOs matched, {} ZCL",
+                            result.matched_utxos,
+                            result.matched_value as f64 / 1e8,
+                        );
+                        // Mark as applied so we don't re-download on every sync
+                        let db_flag = db_c;
+                        let _ = tokio::task::spawn_blocking(move || db_flag.set_tboost_applied(true)).await;
+                    }
+                    Ok(None) => {
+                        eprintln!("[ZipherX] No transparent boost available — will scan from peers");
+                        // Still mark as applied so we don't retry every sync
+                        let db_flag = db_c;
+                        let _ = tokio::task::spawn_blocking(move || db_flag.set_tboost_applied(true)).await;
+                    }
+                    Err(e) => {
+                        eprintln!("[ZipherX] Transparent boost failed (non-fatal): {e}");
+                        // Don't mark as applied — retry next sync
+                    }
                 }
             }
         }
@@ -1564,6 +1625,7 @@ pub async fn sync_to_tip(
                 boost_output_count,
                 final_height,
                 &progress,
+                transparent_addresses,
             )
             .await;
 
@@ -1862,18 +1924,18 @@ pub async fn sync_to_tip(
                     .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
                 }
 
-                // Mark spent notes
+                // Mark spent notes (with confirmed block height for confirmation detection)
                 if !scan_result.spent_nullifiers.is_empty() {
                     let db_clone = db.clone();
                     let nullifiers = scan_result.spent_nullifiers.clone();
                     let spent_count =
                         tokio::task::spawn_blocking(move || -> Result<usize, CoreError> {
                             let mut count = 0;
-                            for (nullifier, txid_bytes) in &nullifiers {
+                            for (nullifier, txid_bytes, height) in &nullifiers {
                                 let mut txid_display = *txid_bytes;
                                 txid_display.reverse();
                                 let txid_hex = hex::encode(txid_display);
-                                match db_clone.mark_note_spent(nullifier, &txid_hex, 0) {
+                                match db_clone.mark_note_spent(nullifier, &txid_hex, *height) {
                                     Ok(true) => count += 1,
                                     Ok(false) => {}
                                     Err(e) => {
@@ -2040,6 +2102,14 @@ pub async fn sync_to_tip(
                 );
             }
         }
+    }
+
+    // Emit early progress event so UI can detect TX confirmations immediately,
+    // without waiting for witness rebuild (which can take several seconds).
+    if let Some(ref p) = progress {
+        p(SyncStatus::ConfirmationsUpdated {
+            height: final_height,
+        });
     }
 
     // FIX #1300: After Step 9, if tree root mismatch was detected, reset
@@ -2495,6 +2565,51 @@ pub async fn sync_to_tip(
                 total_bal, spendable_bal,
             );
         }
+
+        // Diagnostic: log all unspent notes for balance debugging
+        #[cfg(debug_assertions)]
+        {
+            let db_diag = db.clone();
+            if let Ok(all_notes) = tokio::task::spawn_blocking(move || db_diag.get_all_unspent_notes(0))
+                .await
+                .unwrap_or_else(|_| Ok(Vec::new()))
+            {
+                let t_bal = {
+                    let db_t = db.clone();
+                    tokio::task::spawn_blocking(move || db_t.get_transparent_balance())
+                        .await
+                        .unwrap_or(Ok(0))
+                        .unwrap_or(0)
+                };
+                #[cfg(debug_assertions)]
+                {
+                    eprintln!(
+                        "[ZipherX] DIAG: {} unspent shielded notes, transparent_balance={}",
+                        all_notes.len(), t_bal,
+                    );
+                    let db_diag = db.clone();
+                    if let Ok(dump) = tokio::task::spawn_blocking(move || db_diag.dump_transparent_utxos())
+                        .await
+                        .unwrap_or(Ok(String::new()))
+                    {
+                        if !dump.is_empty() {
+                            eprintln!("{}", dump);
+                        }
+                    }
+                    for (i, note) in all_notes.iter().enumerate() {
+                        let has_witness = note.witness.as_ref().map(|w| w.len()).unwrap_or(0) >= 100;
+                        eprintln!(
+                            "[ZipherX]   note[{}]: value={} height={} pos={:?} witness={} cmu={}... nf={}...",
+                            i, note.value, note.height,
+                            note.position,
+                            if has_witness { "yes" } else { "NO" },
+                            hex::encode(&note.cmu[..8.min(note.cmu.len())]),
+                            note.nullifier.as_ref().map(|nf| hex::encode(&nf[..8.min(nf.len())])).unwrap_or_else(|| "NONE".into()),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // FIX #1300: Auto-recover notes from expired/failed sends.
@@ -2532,7 +2647,34 @@ pub async fn sync_to_tip(
         }
     }
 
+    // Auto-recover transparent UTXOs incorrectly marked as spent
+    // (e.g., from a failed transparent send that was never mined).
+    {
+        let db_t = db.clone();
+        let t_result = tokio::task::spawn_blocking(move || {
+            db_t.restore_stuck_transparent_utxos(1500) // 20 blocks × 75s = 25 min expiry
+        }).await;
+        match t_result {
+            Ok(Ok(count)) if count > 0 => {
+                eprintln!(
+                    "[ZipherX] Restored {} stuck transparent UTXO(s) from failed sends",
+                    count
+                );
+            }
+            Ok(Err(e)) => {
+                eprintln!("[ZipherX] Transparent UTXO recovery failed: {e}");
+            }
+            _ => {}
+        }
+    }
+
     eprintln!("[ZipherX] Sync complete, sending Complete event to UI");
+
+    // Reset live_chain_tip to the actual synced height so that
+    // get_consensus_height() starts from a fresh baseline for the next sync.
+    // This prevents the stale peer_start_height cap from blocking header sync
+    // in long-running sessions (days/weeks without restart).
+    peer_manager.update_live_chain_tip(final_height);
 
     // Ensure block listeners are active for post-sync mempool detection.
     // Listeners may have died during long sync operations (boost scan, block download).
@@ -2683,9 +2825,16 @@ pub async fn rebuild_witnesses_if_needed(
     // Check if any notes are in the boost range (position < boost_output_count).
     // These notes' CMUs are inside the boost tree, NOT in the delta store,
     // so we must replay boost CMUs from the outputs section to create witnesses.
+    // When position is unknown (None), use note height vs boost height:
+    // notes discovered in blocks ABOVE boost_height are post-boost (delta range),
+    // so they don't require the expensive full boost replay (~49s).
+    let boost_height = manifest.chain_height;
     let has_boost_range_notes = notes_needing_witnesses
         .iter()
-        .any(|n| n.position.map(|p| p < boost_output_count).unwrap_or(true));
+        .any(|n| match n.position {
+            Some(p) => p < boost_output_count,
+            None => n.height <= boost_height,
+        });
 
     // Save current tree state for restoration after witness creation.
     let db_c = db.clone();
@@ -3778,6 +3927,7 @@ async fn post_boost_delta_scan(
                 txid_display.reverse();
                 let txid_hex = hex::encode(txid_display);
 
+                #[cfg(debug_assertions)]
                 eprintln!(
                     "[ZipherX]   Post-boost note: height={}, value={} zatoshis, txid={}...",
                     note.height,
@@ -3833,7 +3983,7 @@ async fn post_boost_delta_scan(
         tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
             let mut spends_by_tx: HashMap<String, (u64, u64)> = HashMap::new();
 
-            for (nullifier, txid_bytes) in &nullifiers {
+            for (nullifier, txid_bytes, height) in &nullifiers {
                 let mut txid_display = *txid_bytes;
                 txid_display.reverse();
                 let txid_hex = hex::encode(txid_display);
@@ -3846,7 +3996,7 @@ async fn post_boost_delta_scan(
                     .map(|n| n.value)
                     .unwrap_or(0);
 
-                let _ = db_clone.mark_note_spent(nullifier, &txid_hex, 0);
+                let _ = db_clone.mark_note_spent(nullifier, &txid_hex, *height);
 
                 if note_value > 0 {
                     let entry = spends_by_tx.entry(txid_hex).or_insert((0, 0));
@@ -3878,6 +4028,7 @@ async fn post_boost_delta_scan(
                 );
             }
 
+            #[cfg(debug_assertions)]
             if !spends_by_tx.is_empty() {
                 eprintln!(
                     "[ZipherX] Post-boost scan: created {} 'sent' TX history entries from spend detection",
@@ -3985,6 +4136,145 @@ async fn post_boost_delta_scan(
 // Post-Boost Full Block Scan (outputs + nullifiers)
 // ============================================================================
 
+/// Download blocks in a range and scan ONLY for transparent UTXOs/spends.
+///
+/// Used when the delta scan covers the shielded range (so full block scan is
+/// skipped) but transparent scanning hasn't been done for those blocks.
+/// Delta store only contains Sapling data — transparent outputs are absent.
+async fn transparent_only_scan(
+    peer_manager: &mut PeerManager,
+    header_store: &SqliteHeaderStore,
+    db: Arc<WalletDatabase>,
+    t_addrs: &scanner::TransparentAddressSet,
+    start_height: u64,
+    end_height: u64,
+) -> Result<(), CoreError> {
+    let pacing = PacingConfig::default();
+    let fetch_result = async_block_fetch::fetch_blocks_from_peers(
+        peer_manager,
+        start_height,
+        end_height,
+        &pacing,
+        header_store,
+    )
+    .await?;
+
+    let block_count = fetch_result.blocks.len();
+    if block_count == 0 {
+        return Ok(());
+    }
+
+    let mut t_utxos = Vec::new();
+    let mut t_spends = Vec::new();
+    for block in &fetch_result.blocks {
+        let (utxos, spends) = scanner::scan_block_transparent(block, t_addrs);
+        t_utxos.extend(utxos);
+        t_spends.extend(spends);
+    }
+
+    if t_utxos.is_empty() && t_spends.is_empty() {
+        eprintln!(
+            "[ZipherX] Transparent-only scan: {} blocks, no UTXOs or spends found",
+            block_count,
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "[ZipherX] Transparent-only scan: {} blocks, {} UTXOs, {} spends",
+        block_count, t_utxos.len(), t_spends.len(),
+    );
+
+    let height_timestamps: HashMap<u64, u32> = fetch_result
+        .blocks
+        .iter()
+        .map(|b| (b.height, b.timestamp))
+        .collect();
+
+    let db_clone = db.clone();
+    let ts_map = height_timestamps;
+    tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+        for utxo in &t_utxos {
+            let mut txid_display = utxo.txid;
+            txid_display.reverse();
+            let txid_hex = hex::encode(txid_display);
+            db_clone
+                .insert_transparent_utxo(
+                    utxo.height,
+                    &txid_hex,
+                    utxo.output_index,
+                    &utxo.script_pubkey,
+                    &utxo.address,
+                    utxo.value,
+                    utxo.is_change,
+                    utxo.child_index,
+                    false,
+                )
+                .map_err(|e| CoreError::Storage(e.to_string()))?;
+            if !utxo.is_change {
+                let block_ts = ts_map.get(&utxo.height).map(|&t| t as u64);
+                let _ = db_clone.insert_transaction(
+                    &txid_hex,
+                    utxo.height,
+                    block_ts,
+                    TxType::Received,
+                    utxo.value,
+                    0,
+                    Some(&utxo.address),
+                    None,
+                    TxStatus::Confirmed,
+                );
+            }
+        }
+        for spend in &t_spends {
+            let mut prevout_display = spend.prevout_txid;
+            prevout_display.reverse();
+            let prevout_hex = hex::encode(prevout_display);
+            let mut spending_display = spend.spending_txid;
+            spending_display.reverse();
+            let spending_hex = hex::encode(spending_display);
+            let marked = db_clone.mark_transparent_spent_by_prevout(
+                &prevout_hex,
+                spend.prevout_index,
+                &spending_hex,
+                spend.height,
+            );
+            if marked.unwrap_or(false) {
+                let block_ts = ts_map.get(&spend.height).map(|&t| t as u64);
+                if let Ok(Some(spent_val)) =
+                    db_clone.get_transparent_utxo_value(&prevout_hex, spend.prevout_index)
+                {
+                    let _ = db_clone.insert_transaction(
+                        &spending_hex,
+                        spend.height,
+                        block_ts,
+                        TxType::Sent,
+                        spent_val as u64,
+                        0,
+                        None,
+                        None,
+                        TxStatus::Confirmed,
+                    );
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+
+    // Update last_transparent_scanned so we don't re-scan these blocks
+    let db_update = db.clone();
+    let end_h = end_height;
+    tokio::task::spawn_blocking(move || {
+        let _ = db_update.update_last_transparent_scanned(end_h);
+    })
+    .await
+    .map_err(|e| CoreError::RuntimeError(e.to_string()))?;
+
+    Ok(())
+}
+
 /// Download ALL blocks from boost_height+1 to chain_tip, extract both shielded
 /// outputs (for note discovery) and nullifiers (for spend detection).
 ///
@@ -4005,6 +4295,7 @@ async fn post_boost_full_block_scan(
     boost_output_count: u64,
     chain_tip: u64,
     progress: &Option<SyncProgressFn>,
+    transparent_addresses: Option<&scanner::TransparentAddressSet>,
 ) -> Result<(usize, u32, bool), CoreError> {
     if boost_chain_height >= chain_tip {
         return Ok((0, 0, true));
@@ -4025,8 +4316,38 @@ async fn post_boost_full_block_scan(
         .get_delta_end_height()
         .map_err(|e| CoreError::Storage(e.to_string()))?;
 
+    // Get transparent scan progress (independent of shielded scan)
+    let last_t_scanned = if transparent_addresses.is_some() {
+        let db_t = db.clone();
+        tokio::task::spawn_blocking(move || db_t.get_last_transparent_scanned())
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
     // If we already scanned up to or past chain_tip, skip entirely
+    // But still check if transparent scanning needs to catch up
     if last_scanned >= chain_tip {
+        if let Some(t_addrs) = transparent_addresses {
+            if last_t_scanned < chain_tip {
+                let t_scan_start = (last_t_scanned + 1).max(boost_chain_height + 1);
+                eprintln!(
+                    "[ZipherX] Post-boost: shielded complete, transparent catch-up {}-{}",
+                    t_scan_start, chain_tip,
+                );
+                transparent_only_scan(
+                    peer_manager,
+                    header_store,
+                    db.clone(),
+                    t_addrs,
+                    t_scan_start,
+                    chain_tip,
+                )
+                .await?;
+            }
+        }
         eprintln!(
             "[ZipherX] Post-boost: last_scanned={} >= chain_tip={} — already scanned",
             last_scanned, chain_tip,
@@ -4035,6 +4356,26 @@ async fn post_boost_full_block_scan(
     }
 
     if is_verified && delta_end >= chain_tip {
+        // Delta covers the shielded range, but transparent scanning still needed
+        // because delta store only contains Sapling outputs (no transparent data).
+        if let Some(t_addrs) = transparent_addresses {
+            let t_scan_start = (last_t_scanned + 1).max(last_scanned + 1);
+            if t_scan_start <= chain_tip {
+                eprintln!(
+                    "[ZipherX] Post-boost: delta complete, but transparent scan needed for {}-{}",
+                    t_scan_start, chain_tip,
+                );
+                transparent_only_scan(
+                    peer_manager,
+                    header_store,
+                    db.clone(),
+                    t_addrs,
+                    t_scan_start,
+                    chain_tip,
+                )
+                .await?;
+            }
+        }
         eprintln!(
             "[ZipherX] Post-boost: delta verified up to {}, chain_tip={} — already complete",
             delta_end, chain_tip,
@@ -4250,6 +4591,7 @@ async fn post_boost_full_block_scan(
                             &sk, &div_arr, *value, &rcm_arr, correct_pos, false,
                         ) {
                             Ok(nf) => {
+                                #[cfg(debug_assertions)]
                                 eprintln!(
                                     "[ZipherX]   Recompute: cmu={}... value={} old_pos={:?} new_pos={} nf={}...",
                                     hex::encode(&cmu[..8]), value, old_position, correct_pos,
@@ -4457,6 +4799,103 @@ async fn post_boost_full_block_scan(
                 }
             }
 
+            // Build height → timestamp map from fetched blocks for TX history
+            let height_timestamps: HashMap<u64, u32> = fetch_result
+                .blocks
+                .iter()
+                .map(|b| (b.height, b.timestamp))
+                .collect();
+
+            // Scan for transparent UTXOs and spends
+            if let Some(t_addrs) = transparent_addresses {
+                let mut t_utxos = Vec::new();
+                let mut t_spends = Vec::new();
+                for block in &fetch_result.blocks {
+                    let (utxos, spends) = scanner::scan_block_transparent(block, t_addrs);
+                    t_utxos.extend(utxos);
+                    t_spends.extend(spends);
+                }
+                if !t_utxos.is_empty() || !t_spends.is_empty() {
+                    eprintln!(
+                        "[ZipherX] Transparent scan: {} UTXOs found, {} spends detected",
+                        t_utxos.len(),
+                        t_spends.len(),
+                    );
+                    let db_clone = db.clone();
+                    let ts_map = height_timestamps.clone();
+                    tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
+                        for utxo in &t_utxos {
+                            let mut txid_display = utxo.txid;
+                            txid_display.reverse();
+                            let txid_hex = hex::encode(txid_display);
+                            db_clone
+                                .insert_transparent_utxo(
+                                    utxo.height,
+                                    &txid_hex,
+                                    utxo.output_index,
+                                    &utxo.script_pubkey,
+                                    &utxo.address,
+                                    utxo.value,
+                                    utxo.is_change,
+                                    utxo.child_index,
+                                    false,
+                                )
+                                .map_err(|e| CoreError::Storage(e.to_string()))?;
+                            // Record in transaction history
+                            if !utxo.is_change {
+                                let block_ts = ts_map.get(&utxo.height).map(|&t| t as u64);
+                                let _ = db_clone.insert_transaction(
+                                    &txid_hex,
+                                    utxo.height,
+                                    block_ts,
+                                    TxType::Received,
+                                    utxo.value,
+                                    0,
+                                    Some(&utxo.address),
+                                    None,
+                                    TxStatus::Confirmed,
+                                );
+                            }
+                        }
+                        for spend in &t_spends {
+                            let mut prevout_display = spend.prevout_txid;
+                            prevout_display.reverse();
+                            let prevout_hex = hex::encode(prevout_display);
+                            let mut spending_display = spend.spending_txid;
+                            spending_display.reverse();
+                            let spending_hex = hex::encode(spending_display);
+                            let marked = db_clone.mark_transparent_spent_by_prevout(
+                                &prevout_hex,
+                                spend.prevout_index,
+                                &spending_hex,
+                                spend.height,
+                            );
+                            // Record sent TX in history if we spent our UTXO
+                            if marked.unwrap_or(false) {
+                                let block_ts = ts_map.get(&spend.height).map(|&t| t as u64);
+                                // Look up the value from the UTXO we just marked spent
+                                if let Ok(Some(spent_val)) = db_clone.get_transparent_utxo_value(&prevout_hex, spend.prevout_index) {
+                                    let _ = db_clone.insert_transaction(
+                                        &spending_hex,
+                                        spend.height,
+                                        block_ts,
+                                        TxType::Sent,
+                                        spent_val,
+                                        10000,
+                                        None,
+                                        None,
+                                        TxStatus::Confirmed,
+                                    );
+                                }
+                            }
+                        }
+                        Ok(())
+                    })
+                    .await
+                    .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+                }
+            }
+
             let chunk_notes_count = chunk_notes.len() as u32;
             let chunk_nf_count = chunk_nullifiers.len();
 
@@ -4465,13 +4904,6 @@ async fn post_boost_full_block_scan(
                 received, total_fetched, initial_count,
                 chunk_nf_count, chunk_notes_count, batch_remaining.len(),
             );
-
-            // Build height → timestamp map from fetched blocks for TX history
-            let height_timestamps: HashMap<u64, u32> = fetch_result
-                .blocks
-                .iter()
-                .map(|b| (b.height, b.timestamp))
-                .collect();
 
             // Insert discovered notes into DB
             if !chunk_notes.is_empty() {
@@ -4643,6 +5075,63 @@ async fn post_boost_full_block_scan(
         total_fetched, total_shielded_outputs, total_shielded_spends,
         total_nullifiers_found, total_notes_found, total_marked_spent,
     );
+
+    // Post-boost transparent spend scan: the main block_scan only fetches blocks
+    // with sapling activity (delta store entries). Blocks with ONLY transparent
+    // activity (e.g., a transparent spend with no shielded outputs) are missed.
+    // Run transparent_only_scan for the post-boost range to catch those spends.
+    if let Some(t_addrs) = transparent_addresses {
+        // Read last_transparent_scanned from DB — this is set by tboost apply to
+        // the boost snapshot height. Use it as scan start regardless of whether
+        // this is the initial sync or a background sync.
+        let db_t_read = db.clone();
+        let last_t = tokio::task::spawn_blocking(move || db_t_read.get_last_transparent_scanned())
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .unwrap_or(chain_tip);
+        let t_scan_from = last_t + 1;
+        if t_scan_from <= chain_tip && (chain_tip - t_scan_from) < 50_000 {
+            let t_block_count = chain_tip - t_scan_from + 1;
+            // Emit progress so UI shows what's happening
+            if let Some(ref p) = progress {
+                p(SyncStatus::BlockScan {
+                    current_height: t_scan_from,
+                    target_height: chain_tip,
+                    notes_found: 0,
+                });
+            }
+            eprintln!(
+                "[ZipherX] Post-sync transparent spend scan: {}-{} ({} blocks)",
+                t_scan_from, chain_tip, t_block_count,
+            );
+            match transparent_only_scan(
+                peer_manager,
+                header_store,
+                db.clone(),
+                t_addrs,
+                t_scan_from,
+                chain_tip,
+            )
+            .await
+            {
+                Ok(()) => {
+                    eprintln!("[ZipherX] Post-sync transparent spend scan completed successfully");
+                }
+                Err(e) => {
+                    eprintln!("[ZipherX] Post-sync transparent spend scan FAILED: {}", e);
+                }
+            }
+        }
+
+        // Update last_transparent_scanned to chain_tip
+        let db_t = db.clone();
+        let t_height = chain_tip;
+        tokio::task::spawn_blocking(move || {
+            let _ = db_t.update_last_transparent_scanned(t_height);
+        })
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))?;
+    }
 
     // ============================================================
     // Tree validation: boost tree + post-boost CMUs → validate root
@@ -5698,6 +6187,7 @@ pub async fn background_sync(
         None,
         None,
         None,
+        None,
     )
     .await?;
 
@@ -5732,7 +6222,7 @@ mod tests {
 
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let mut pm = PeerManager::new(pm_config);
-        let result = sync_to_tip(&mut pm, &hs, &ds, db, &[], &guards, None, None, None).await;
+        let result = sync_to_tip(&mut pm, &hs, &ds, db, &[], &guards, None, None, None, None).await;
 
         assert!(matches!(result, Err(CoreError::SyncInProgress)));
     }
@@ -5750,7 +6240,7 @@ mod tests {
 
         let pm_config = zipherx_network::peer_manager::PeerManagerConfig::default();
         let mut pm = PeerManager::new(pm_config);
-        let result = sync_to_tip(&mut pm, &hs, &ds, db, &[], &guards, None, None, None).await;
+        let result = sync_to_tip(&mut pm, &hs, &ds, db, &[], &guards, None, None, None, None).await;
 
         assert!(matches!(result, Err(CoreError::BroadcastingInProgress)));
     }

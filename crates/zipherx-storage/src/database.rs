@@ -177,6 +177,35 @@ impl WalletDatabase {
         // decryption fallback to find the missing 569,998 zatoshis.
         Self::migrate_data_rescan_v15(&conn)?;
 
+        // Migration v16: full rescan with last_scanned_height reset.
+        // Previous migrations reset tree_height but NOT last_scanned_height,
+        // causing post_boost_full_block_scan() to skip (sees last_scanned >= chain_tip).
+        // Post-boost spends were never re-detected → inflated balance.
+        Self::migrate_data_rescan_v16(&conn)?;
+
+        // Migration: add last_transparent_scanned column to sync_state.
+        // Tracks transparent scanning independently of shielded scanning,
+        // so blocks covered by delta (shielded-only) still get transparently scanned.
+        let _ = conn.execute(
+            "ALTER TABLE sync_state ADD COLUMN last_transparent_scanned INTEGER NOT NULL DEFAULT 0",
+            [],
+        ); // Ignores error if column already exists
+
+        // Migration: add tboost_applied flag to sync_state.
+        // Tracks whether the transparent boost file has been downloaded and applied,
+        // independent of last_transparent_scanned (which is set by peer-based scanning).
+        let _ = conn.execute(
+            "ALTER TABLE sync_state ADD COLUMN tboost_applied INTEGER NOT NULL DEFAULT 0",
+            [],
+        ); // Ignores error if column already exists
+
+        // Migration: add is_imported column to transparent_utxos.
+        // Tracks whether a UTXO belongs to an imported (WIF) key rather than a derived key.
+        let _ = conn.execute(
+            "ALTER TABLE transparent_utxos ADD COLUMN is_imported INTEGER NOT NULL DEFAULT 0",
+            [],
+        ); // Ignores error if column already exists
+
         Ok(Self {
             conn: Mutex::new(conn),
             cached_sent_count: AtomicU32::new(0),
@@ -320,6 +349,10 @@ impl WalletDatabase {
     }
 
     /// Mark a note as spent by pre-hashed nullifier.
+    ///
+    /// If the note is already marked spent (from the send flow) but has
+    /// spent_height = 0 (unconfirmed), update the height to the confirmed
+    /// block height so confirmation detection works.
     pub fn mark_note_spent_by_hashed_nullifier(
         &self,
         hashed_nf: &[u8],
@@ -332,6 +365,18 @@ impl WalletDatabase {
              WHERE nullifier = ?3 AND is_spent = 0",
             params![txid, spent_height as i64, hashed_nf],
         )?;
+
+        // FIX: If note was already marked spent (from send flow) with
+        // spent_height = 0, update the height now that we found it on-chain.
+        if updated == 0 && spent_height > 0 {
+            conn.execute(
+                "UPDATE notes SET spent_height = ?1
+                 WHERE nullifier = ?2 AND is_spent = 1
+                 AND (spent_height IS NULL OR spent_height = 0)",
+                params![spent_height as i64, hashed_nf],
+            )?;
+        }
+
         Ok(updated > 0)
     }
 
@@ -468,7 +513,23 @@ impl WalletDatabase {
         _current_height: u64,
         broadcast_expiry_blocks: u64,
     ) -> Result<(usize, u64), StorageError> {
-        let unconfirmed_txids = self.get_unconfirmed_spent_txids()?;
+        // FIX I11: Single lock acquisition + IMMEDIATE transaction to eliminate
+        // TOCTOU race between checking confirmation status and restoring notes.
+        // Previously, get_unconfirmed_spent_txids() acquired/released the lock,
+        // then a second lock was acquired — a TX could be confirmed in between.
+        let conn = recover_lock(self.conn.lock());
+
+        // Inline the unconfirmed txid query (was get_unconfirmed_spent_txids)
+        let unconfirmed_txids: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT spent_in_tx FROM notes
+                 WHERE is_spent = 1 AND spent_height = 0 AND spent_in_tx IS NOT NULL",
+            )?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+
         if unconfirmed_txids.is_empty() {
             return Ok((0, 0));
         }
@@ -476,92 +537,108 @@ impl WalletDatabase {
         let mut total_restored = 0usize;
         let mut total_value = 0u64;
 
-        let conn = recover_lock(self.conn.lock());
+        // Use IMMEDIATE transaction so the confirmation check + note restore
+        // are atomic — no other writer can insert a confirmation in between.
+        conn.execute_batch("BEGIN IMMEDIATE")?;
 
-        for txid in &unconfirmed_txids {
-            // Check if this TX was confirmed in any block
-            let confirmed: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM transaction_history
-                 WHERE txid = ?1 AND height > 0",
-                    params![txid],
-                    |row| row.get(0),
-                )
-                .unwrap_or(0);
-
-            if confirmed > 0 {
-                continue; // TX was mined — don't recover
-            }
-
-            // FIX #1300: Use BROADCAST TIMESTAMP for expiry, NOT note height.
-            // The note height is when the note was RECEIVED, which could be thousands
-            // of blocks ago. The broadcast time is when the TX was actually sent.
-            // Without a valid timestamp, we cannot determine expiry — skip recovery.
-            let tx_timestamp: Option<i64> = conn
-                .query_row(
-                    "SELECT timestamp FROM transaction_history WHERE txid = ?1",
-                    params![txid],
-                    |row| row.get(0),
-                )
-                .ok()
-                .flatten();
-
-            let expired = match tx_timestamp {
-                Some(ts) if ts > 0 => {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64;
-                    let elapsed_secs = now - ts;
-                    // 20 blocks × 75s = 1500s = 25 minutes
-                    let expiry_secs = broadcast_expiry_blocks as i64 * 75;
-                    elapsed_secs > expiry_secs
-                }
-                _ => {
-                    // No timestamp — legacy TX from before FIX #1300.
-                    // Use a conservative fallback: check if enough blocks have passed
-                    // since the CURRENT chain tip minus expiry window. If the TX has been
-                    // sitting unconfirmed and we're fully synced, recover it.
-                    // Only recover if we've completed at least 2 full syncs past the
-                    // expiry window (to avoid premature recovery of legacy TXs).
-                    false // Don't auto-recover TXs without timestamps — require manual rescan
-                }
-            };
-
-            if expired {
-                // Restore notes
-                let value: i64 = conn
+        let result: Result<(), StorageError> = (|| {
+            for txid in &unconfirmed_txids {
+                // Check if this TX was confirmed in any block
+                let confirmed: i64 = conn
                     .query_row(
-                        "SELECT COALESCE(SUM(value), 0) FROM notes
-                     WHERE spent_in_tx = ?1 AND is_spent = 1",
+                        "SELECT COUNT(*) FROM transaction_history
+                     WHERE txid = ?1 AND height > 0",
                         params![txid],
                         |row| row.get(0),
                     )
                     .unwrap_or(0);
 
-                let restored = conn.execute(
-                    "UPDATE notes SET is_spent = 0, spent_in_tx = NULL, spent_height = NULL
-                     WHERE spent_in_tx = ?1 AND is_spent = 1",
-                    params![txid],
-                )?;
-
-                // Mark the TX history as rejected
-                conn.execute(
-                    "UPDATE transaction_history SET status = 'rejected'
-                     WHERE txid = ?1 AND height = 0",
-                    params![txid],
-                )?;
-
-                if restored > 0 {
-                    eprintln!(
-                        "[ZipherX] AUTO-RECOVERY: Restored {} note(s) worth {} zatoshis from expired TX {}",
-                        restored,
-                        value,
-                        &txid[..16.min(txid.len())]
-                    );
-                    total_restored += restored;
-                    total_value += value.max(0) as u64;
+                if confirmed > 0 {
+                    continue; // TX was mined — don't recover
                 }
+
+                // FIX #1300: Use BROADCAST TIMESTAMP for expiry, NOT note height.
+                // The note height is when the note was RECEIVED, which could be thousands
+                // of blocks ago. The broadcast time is when the TX was actually sent.
+                // Without a valid timestamp, we cannot determine expiry — skip recovery.
+                let tx_timestamp: Option<i64> = conn
+                    .query_row(
+                        "SELECT timestamp FROM transaction_history WHERE txid = ?1",
+                        params![txid],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                    .flatten();
+
+                let expired = match tx_timestamp {
+                    Some(ts) if ts > 0 => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        let elapsed_secs = now - ts;
+                        // 20 blocks × 75s = 1500s = 25 minutes
+                        let expiry_secs = broadcast_expiry_blocks as i64 * 75;
+                        elapsed_secs > expiry_secs
+                    }
+                    _ => {
+                        // No timestamp — legacy TX from before FIX #1300.
+                        // Use a conservative fallback: check if enough blocks have passed
+                        // since the CURRENT chain tip minus expiry window. If the TX has been
+                        // sitting unconfirmed and we're fully synced, recover it.
+                        // Only recover if we've completed at least 2 full syncs past the
+                        // expiry window (to avoid premature recovery of legacy TXs).
+                        false // Don't auto-recover TXs without timestamps — require manual rescan
+                    }
+                };
+
+                if expired {
+                    // Restore notes
+                    let value: i64 = conn
+                        .query_row(
+                            "SELECT COALESCE(SUM(value), 0) FROM notes
+                         WHERE spent_in_tx = ?1 AND is_spent = 1",
+                            params![txid],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(0);
+
+                    let restored = conn.execute(
+                        "UPDATE notes SET is_spent = 0, spent_in_tx = NULL, spent_height = NULL
+                         WHERE spent_in_tx = ?1 AND is_spent = 1",
+                        params![txid],
+                    )?;
+
+                    // Mark the TX history as rejected
+                    conn.execute(
+                        "UPDATE transaction_history SET status = 'rejected'
+                         WHERE txid = ?1 AND height = 0",
+                        params![txid],
+                    )?;
+
+                    if restored > 0 {
+                        #[cfg(debug_assertions)]
+                        eprintln!(
+                            "[ZipherX] AUTO-RECOVERY: Restored {} note(s) worth {} zatoshis from expired TX {}",
+                            restored,
+                            value,
+                            &txid[..16.min(txid.len())]
+                        );
+                        total_restored += restored;
+                        total_value += value.max(0) as u64;
+                    }
+                }
+            }
+            Ok(())
+        })();
+
+        match result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT")?;
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
             }
         }
 
@@ -837,6 +914,50 @@ impl WalletDatabase {
                         rec.amount = net as u64;
                     }
                 }
+
+                // Check if this "sent" tx has a transparent UTXO belonging to us.
+                // If so, shielded value went to our own t-address → z→t self-send.
+                // SKIP if the sent entry already has a transparent destination
+                // (starts with "t1"/"t3") — that means it's a real t→t send with
+                // change, not a z→t deshield. Overwriting would hide the real send.
+                let already_transparent_send = rec.address.as_ref()
+                    .map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"));
+                if rec.tx_type == TxType::Sent && !already_transparent_send {
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[ZipherX] z→t check: txid={} (len={})",
+                        &rec.txid, rec.txid.len()
+                    );
+
+                    // Try exact match — exclude change UTXOs (is_change=1) which are
+                    // internal outputs, not real z→t deshielding destinations.
+                    let t_utxo: Option<(i64, String)> = conn
+                        .prepare(
+                            "SELECT value, address FROM transparent_utxos WHERE txid = ?1 AND is_change = 0 LIMIT 1",
+                        )
+                        .ok()
+                        .and_then(|mut stmt| {
+                            stmt.query_row(params![rec.txid], |row| {
+                                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                            })
+                            .ok()
+                        });
+
+                    if let Some((t_value, t_addr)) = t_utxo {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[ZipherX] MATCH! z→t self-send: value={} addr={}", t_value, t_addr);
+                        rec.tx_type = TxType::SelfZ2T;
+                        rec.amount = t_value as u64;
+                        rec.address = Some(t_addr);
+                    }
+                } else if already_transparent_send {
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[ZipherX] z→t check: skip txid={} (already transparent send to {})",
+                        &rec.txid[..16.min(rec.txid.len())],
+                        rec.address.as_deref().unwrap_or("?"),
+                    );
+                }
             }
 
             result.push(rec);
@@ -846,14 +967,20 @@ impl WalletDatabase {
         // This handles the case where notes were marked spent (spent_in_tx set)
         // but no "sent" TX history entry was ever created (e.g., post-boost scan
         // marked spends without creating history entries in older code).
+        #[cfg(debug_assertions)]
+        eprintln!("[ZipherX] Synthesize check: {} spend_txids, {} sent_txids", spend_txids.len(), sent_txids.len());
         for txid in &spend_txids {
             if sent_txids.contains(txid) {
+                #[cfg(debug_assertions)]
+                eprintln!("[ZipherX] Synthesize: skip {} (has real sent entry)", &txid[..16.min(txid.len())]);
                 continue; // Already has a real "sent" entry
             }
+            #[cfg(debug_assertions)]
+            eprintln!("[ZipherX] Synthesize: processing {} (no real sent entry)", &txid[..16.min(txid.len())]);
 
             // Check if we already synthesized or have this in result
             if result.iter().any(|r| {
-                &r.txid == txid && (r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer)
+                &r.txid == txid && (r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer || r.tx_type == TxType::SelfZ2T || r.tx_type == TxType::SelfT2Z)
             }) {
                 continue;
             }
@@ -869,15 +996,16 @@ impl WalletDatabase {
             let change: i64 = notes_change_stmt
                 .query_row(params![txid], |row| row.get(0))
                 .unwrap_or(0);
-            let fee = 10_000i64;
-            let net = total_input - change - fee;
 
-            // Get height and timestamp from any existing record for this txid
-            let (height, timestamp) = all_records
+            // Get height, timestamp, and fee from any existing record for this txid
+            // FIX I13: Use the actual fee from the existing record instead of hardcoding 10,000
+            let (height, timestamp, rec_fee) = all_records
                 .iter()
                 .find(|r| r.txid == *txid)
-                .map(|r| (r.height, r.timestamp))
-                .unwrap_or((0, None));
+                .map(|r| (r.height, r.timestamp, r.fee))
+                .unwrap_or((0, None, 10_000));
+            let fee = if rec_fee > 0 { rec_fee as i64 } else { 10_000i64 };
+            let net = total_input - change - fee;
 
             if net <= 0 {
                 // Send-to-self: all outputs went back to us
@@ -895,19 +1023,47 @@ impl WalletDatabase {
                     height,
                 });
             } else {
-                result.push(TransactionRecord {
-                    id: 0,
-                    txid: txid.clone(),
-                    tx_type: TxType::Sent,
-                    amount: net as u64,
-                    fee: fee as u64,
-                    address: None,
-                    memo: None,
-                    confirmations: 0,
-                    timestamp,
-                    status: TxStatus::Confirmed,
-                    height,
-                });
+                // Check if this is a z→t self-send
+                let t_utxo: Option<(i64, String)> = conn
+                    .prepare(
+                        "SELECT value, address FROM transparent_utxos WHERE txid = ?1 LIMIT 1",
+                    )
+                    .ok()
+                    .and_then(|mut stmt| {
+                        stmt.query_row(params![txid], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                        })
+                        .ok()
+                    });
+                if let Some((t_value, t_addr)) = t_utxo {
+                    result.push(TransactionRecord {
+                        id: 0,
+                        txid: txid.clone(),
+                        tx_type: TxType::SelfZ2T,
+                        amount: t_value as u64,
+                        fee: fee as u64,
+                        address: Some(t_addr),
+                        memo: None,
+                        confirmations: 0,
+                        timestamp,
+                        status: TxStatus::Confirmed,
+                        height,
+                    });
+                } else {
+                    result.push(TransactionRecord {
+                        id: 0,
+                        txid: txid.clone(),
+                        tx_type: TxType::Sent,
+                        amount: net as u64,
+                        fee: fee as u64,
+                        address: None,
+                        memo: None,
+                        confirmations: 0,
+                        timestamp,
+                        status: TxStatus::Confirmed,
+                        height,
+                    });
+                }
             }
         }
 
@@ -952,7 +1108,7 @@ impl WalletDatabase {
         // Cache total counts before pagination (avoids a separate full re-fetch)
         let sent = result
             .iter()
-            .filter(|r| r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer)
+            .filter(|r| r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer || r.tx_type == TxType::SelfZ2T || r.tx_type == TxType::SelfT2Z)
             .count() as u32;
         let received = result
             .iter()
@@ -1030,15 +1186,67 @@ impl WalletDatabase {
         // appears at a known height (from the sync), copy that height to the
         // "sent" entry so confirmations can be computed. This is critical for
         // the client's checkPendingConfirmation() to detect confirmation.
+        // All height-backfill queries use ORDER BY ... DESC to always pick the
+        // highest (confirmed) height, not a stale height=0 row from an earlier
+        // unconfirmed detection.
         conn.execute(
             "UPDATE transaction_history SET height = (
                  SELECT h2.height FROM transaction_history h2
                  WHERE h2.txid = transaction_history.txid AND h2.height > 0
-                 LIMIT 1
+                 ORDER BY h2.height DESC LIMIT 1
              )
              WHERE height = 0 AND EXISTS (
                  SELECT 1 FROM transaction_history h2
                  WHERE h2.txid = transaction_history.txid AND h2.height > 0
+             )",
+            [],
+        )?;
+
+        // For transparent-only sends (t→t): copy height from transparent_utxos.
+        // SECURITY: Scope to transparent-related tx_types.
+        conn.execute(
+            "UPDATE transaction_history SET height = (
+                 SELECT tu.height FROM transparent_utxos tu
+                 WHERE tu.txid = transaction_history.txid AND tu.height > 0
+                 ORDER BY tu.height DESC LIMIT 1
+             )
+             WHERE height = 0
+             AND tx_type IN ('sent', 'self_z2t', 'self_t2z')
+             AND (address LIKE 't1%' OR address LIKE 't3%' OR tx_type IN ('self_z2t', 'self_t2z'))
+             AND EXISTS (
+                 SELECT 1 FROM transparent_utxos tu
+                 WHERE tu.txid = transaction_history.txid AND tu.height > 0
+             )",
+            [],
+        )?;
+
+        // For sends with no change output: copy from notes.spent_height.
+        conn.execute(
+            "UPDATE transaction_history SET height = (
+                 SELECT n.spent_height FROM notes n
+                 WHERE n.spent_in_tx = transaction_history.txid AND n.spent_height > 0
+                 ORDER BY n.spent_height DESC LIMIT 1
+             )
+             WHERE height = 0 AND EXISTS (
+                 SELECT 1 FROM notes n
+                 WHERE n.spent_in_tx = transaction_history.txid AND n.spent_height > 0
+             )",
+            [],
+        )?;
+
+        // For transparent sends: copy from transparent_utxos.spent_height.
+        // SECURITY: Scope to transparent-related tx_types.
+        conn.execute(
+            "UPDATE transaction_history SET height = (
+                 SELECT tu.spent_height FROM transparent_utxos tu
+                 WHERE tu.spent_in_tx = transaction_history.txid AND tu.spent_height > 0
+                 ORDER BY tu.spent_height DESC LIMIT 1
+             )
+             WHERE height = 0
+             AND tx_type IN ('sent', 'self_z2t', 'self_t2z')
+             AND EXISTS (
+                 SELECT 1 FROM transparent_utxos tu
+                 WHERE tu.spent_in_tx = transaction_history.txid AND tu.spent_height > 0
              )",
             [],
         )?;
@@ -1049,6 +1257,19 @@ impl WalletDatabase {
             params![chain_height as i64],
         )?;
         Ok(())
+    }
+
+    /// Check if there are any unconfirmed sent transactions (height=0, tx_type='sent').
+    /// Used to enable faster sync polling while awaiting confirmation.
+    pub fn has_pending_sent_transactions(&self) -> bool {
+        let conn = recover_lock(self.conn.lock());
+        conn.query_row(
+            "SELECT COUNT(*) FROM transaction_history WHERE height = 0 AND tx_type = 'sent'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+            > 0
     }
 
     /// Get distinct block heights for transactions with missing timestamps.
@@ -1182,6 +1403,12 @@ impl WalletDatabase {
             "SELECT COALESCE(SUM(value), 0) FROM notes WHERE spent_in_tx = ?1 AND is_spent = 1",
         )?;
 
+        // FIX I13: Fetch the actual fee from the existing 'sent' entry instead of hardcoding 10,000.
+        let mut fee_stmt = conn.prepare(
+            "SELECT COALESCE(fee, 10000) FROM transaction_history
+             WHERE txid = ?1 AND tx_type = 'sent' LIMIT 1",
+        )?;
+
         for (txid, change_amount) in &rows {
             // Reclassify "received" → "change"
             conn.execute(
@@ -1197,7 +1424,8 @@ impl WalletDatabase {
             if total_input > 0 {
                 // Recompute net sent from authoritative source:
                 // net = total_input - change - fee
-                let fee = 10_000i64;
+                // FIX I13: Use actual fee from the sent record, fallback to 10,000
+                let fee: i64 = fee_stmt.query_row(params![txid], |row| row.get(0)).unwrap_or(10_000i64);
                 let net_sent = total_input
                     .saturating_sub(*change_amount)
                     .saturating_sub(fee);
@@ -1315,6 +1543,48 @@ impl WalletDatabase {
             },
         )
         .map_err(Into::into)
+    }
+
+    /// Get last transparent scanned height.
+    pub fn get_last_transparent_scanned(&self) -> Result<u64, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        conn.query_row(
+            "SELECT last_transparent_scanned FROM sync_state WHERE id = 1",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? as u64),
+        )
+        .map_err(Into::into)
+    }
+
+    /// Update last transparent scanned height.
+    pub fn update_last_transparent_scanned(&self, height: u64) -> Result<(), StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        conn.execute(
+            "UPDATE sync_state SET last_transparent_scanned = ?1 WHERE id = 1",
+            params![height as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Check if the transparent boost file has been applied.
+    pub fn get_tboost_applied(&self) -> Result<bool, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        conn.query_row(
+            "SELECT tboost_applied FROM sync_state WHERE id = 1",
+            [],
+            |row| Ok(row.get::<_, i64>(0)? != 0),
+        )
+        .map_err(Into::into)
+    }
+
+    /// Mark the transparent boost file as applied.
+    pub fn set_tboost_applied(&self, applied: bool) -> Result<(), StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        conn.execute(
+            "UPDATE sync_state SET tboost_applied = ?1 WHERE id = 1",
+            params![applied as i64],
+        )?;
+        Ok(())
     }
 
     /// Update last scanned height.
@@ -1441,17 +1711,22 @@ impl WalletDatabase {
         Ok(count)
     }
 
-    /// Atomically clear all notes, transaction history, and tree state.
+    /// Atomically clear all notes, transaction history, transparent UTXOs,
+    /// and tree state.
     ///
     /// Used before boost scan to start fresh with correct data.
-    /// Deletes all notes, all TX history, and resets tree state to empty.
+    /// Also resets last_scanned_height and delta_bundle_verified so the
+    /// full block scan re-processes the entire post-boost range (detecting
+    /// spends that were previously missed).
     pub fn clear_notes_and_history(&self) -> Result<(), StorageError> {
         let mut conn = recover_lock(self.conn.lock());
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM notes", [])?;
         tx.execute("DELETE FROM transaction_history", [])?;
+        tx.execute("DELETE FROM transparent_utxos", [])?;
         tx.execute(
-            "UPDATE sync_state SET tree_state = NULL, tree_height = 0 WHERE id = 1",
+            "UPDATE sync_state SET tree_state = NULL, tree_height = 0, \
+             last_scanned_height = 0, delta_bundle_verified = 0 WHERE id = 1",
             [],
         )?;
         tx.commit()?;
@@ -1472,6 +1747,10 @@ impl WalletDatabase {
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM notes", [])?;
         tx.execute("DELETE FROM transaction_history", [])?;
+        // Also clear transparent UTXOs — they will be re-discovered during scan.
+        // Without this, UTXOs incorrectly marked as spent (e.g., from a failed
+        // transparent send) remain stuck.
+        tx.execute("DELETE FROM transparent_utxos", [])?;
         tx.execute(
             "UPDATE sync_state SET tree_state = NULL, tree_height = 0, \
              last_scanned_height = 0, delta_bundle_verified = 0 WHERE id = 1",
@@ -1479,6 +1758,53 @@ impl WalletDatabase {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Restore transparent UTXOs that were incorrectly marked spent.
+    /// Only restores if the spending TX was never mined AND is older than
+    /// `expiry_secs` (to avoid undoing valid pending sends).
+    /// Returns count of restored UTXOs.
+    pub fn restore_stuck_transparent_utxos(&self, expiry_secs: i64) -> Result<usize, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        // Find transparent UTXOs marked spent where the spending TX:
+        // 1. Was never confirmed (height = 0 or missing from history)
+        // 2. Is old enough to be considered expired (timestamp check)
+        // 3. Was NOT detected during block scanning (spent_height = 0)
+        //    — if spent_height > 0, the spend was found on-chain and is real.
+        let restored = conn.execute(
+            "UPDATE transparent_utxos SET is_spent = 0, spent_in_tx = NULL, spent_height = NULL
+             WHERE is_spent = 1
+             AND spent_in_tx IS NOT NULL
+             AND (spent_height IS NULL OR spent_height = 0)
+             AND NOT EXISTS (
+                 SELECT 1 FROM transaction_history
+                 WHERE txid = transparent_utxos.spent_in_tx AND height > 0
+             )
+             AND (
+                 -- TX has a timestamp and it's expired
+                 EXISTS (
+                     SELECT 1 FROM transaction_history
+                     WHERE txid = transparent_utxos.spent_in_tx
+                     AND timestamp IS NOT NULL AND timestamp > 0
+                     AND (?1 - timestamp) > ?2
+                 )
+                 -- OR TX has no history entry at all (orphaned spend mark)
+                 OR NOT EXISTS (
+                     SELECT 1 FROM transaction_history
+                     WHERE txid = transparent_utxos.spent_in_tx
+                 )
+             )",
+            params![now, expiry_secs],
+        )?;
+        if restored > 0 {
+            eprintln!("[ZipherX] Restored {} stuck transparent UTXO(s)", restored);
+        }
+        Ok(restored)
     }
 
     /// Get delta bundle verified flag.
@@ -2421,6 +2747,74 @@ impl WalletDatabase {
         Ok(())
     }
 
+    /// Migration v16: Full rescan with last_scanned_height reset.
+    ///
+    /// ROOT CAUSE FIX: Previous migrations (v2-v15) reset tree_height = 0 to
+    /// trigger boost rescan, but left last_scanned_height at the old chain tip.
+    /// After boost scan re-inserted notes, post_boost_full_block_scan() checked
+    /// `last_scanned >= chain_tip` and SKIPPED — post-boost spends were never
+    /// re-detected, inflating the balance.
+    ///
+    /// This migration resets last_scanned_height = 0 AND delta_bundle_verified = 0
+    /// so the full block scan processes the entire post-boost range.
+    /// Also clears transparent_utxos to prevent stale data.
+    fn migrate_data_rescan_v16(conn: &rusqlite::Connection) -> Result<(), StorageError> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS _migrations (
+                name TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .map_err(|e| StorageError::SchemaFailed(format!("Create _migrations: {e}")))?;
+
+        let already_applied: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM _migrations WHERE name = 'data_rescan_v16'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if already_applied {
+            return Ok(());
+        }
+
+        let tree_height: i64 = conn
+            .query_row(
+                "SELECT tree_height FROM sync_state WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        if tree_height > 0 {
+            eprintln!(
+                "[ZipherX] Migration data_rescan_v16: FULL rescan with last_scanned_height reset \
+                 (tree_height={})",
+                tree_height,
+            );
+            conn.execute_batch(
+                "BEGIN TRANSACTION;
+                 DELETE FROM notes;
+                 DELETE FROM transaction_history;
+                 DELETE FROM transparent_utxos;
+                 UPDATE sync_state SET tree_state = NULL, tree_height = 0, \
+                    last_scanned_height = 0, delta_bundle_verified = 0 WHERE id = 1;
+                 INSERT OR IGNORE INTO _migrations (name) VALUES ('data_rescan_v16');
+                 COMMIT;",
+            )
+            .map_err(|e| StorageError::SchemaFailed(format!("data_rescan_v16: {e}")))?;
+        } else {
+            conn.execute(
+                "INSERT OR IGNORE INTO _migrations (name) VALUES ('data_rescan_v16')",
+                [],
+            )
+            .map_err(|e| StorageError::SchemaFailed(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
     // ====================================================================
     // Transparent UTXO operations
     // ====================================================================
@@ -2436,12 +2830,13 @@ impl WalletDatabase {
         value: u64,
         is_change: bool,
         child_index: u32,
+        is_imported: bool,
     ) -> Result<i64, StorageError> {
         let conn = recover_lock(self.conn.lock());
         conn.execute(
             "INSERT OR IGNORE INTO transparent_utxos
-                (account_id, height, txid, output_index, script_pubkey, address, value, is_change, child_index)
-             VALUES (0, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (account_id, height, txid, output_index, script_pubkey, address, value, is_change, child_index, is_imported)
+             VALUES (0, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 height as i64,
                 txid,
@@ -2451,6 +2846,7 @@ impl WalletDatabase {
                 value as i64,
                 is_change as i32,
                 child_index,
+                is_imported as i32,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -2460,7 +2856,7 @@ impl WalletDatabase {
     pub fn get_unspent_transparent_utxos(&self) -> Result<Vec<TransparentUtxo>, StorageError> {
         let conn = recover_lock(self.conn.lock());
         let mut stmt = conn.prepare(
-            "SELECT id, height, txid, output_index, script_pubkey, address, value, is_change, child_index
+            "SELECT id, height, txid, output_index, script_pubkey, address, value, is_change, child_index, is_imported
              FROM transparent_utxos WHERE is_spent = 0 ORDER BY height",
         )?;
         let utxos = stmt
@@ -2475,6 +2871,7 @@ impl WalletDatabase {
                     value: row.get::<_, i64>(6)? as u64,
                     is_change: row.get::<_, i32>(7)? != 0,
                     child_index: row.get::<_, i64>(8)? as u32,
+                    is_imported: row.get::<_, i32>(9)? != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -2491,7 +2888,7 @@ impl WalletDatabase {
                 |row| row.get(0),
             )
             .unwrap_or(0);
-        Ok(balance as u64)
+        Ok(balance.max(0) as u64)
     }
 
     /// Mark a transparent UTXO as spent.
@@ -2503,12 +2900,71 @@ impl WalletDatabase {
         spent_height: u64,
     ) -> Result<bool, StorageError> {
         let conn = recover_lock(self.conn.lock());
+
+        // DEBUG: Check if this prevout matches any of our UTXOs
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM transparent_utxos WHERE txid = ?1 AND output_index = ?2",
+                params![txid, output_index],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0) > 0;
+        if exists {
+            eprintln!(
+                "[ZipherX] SPEND MATCH: prevout {}..vout={} FOUND in DB (spending_tx={}.. height={})",
+                &txid[..16.min(txid.len())], output_index,
+                &spent_in_tx[..16.min(spent_in_tx.len())], spent_height,
+            );
+        }
+
         let updated = conn.execute(
             "UPDATE transparent_utxos SET is_spent = 1, spent_in_tx = ?1, spent_height = ?2
              WHERE txid = ?3 AND output_index = ?4 AND is_spent = 0",
             params![spent_in_tx, spent_height as i64, txid, output_index],
         )?;
+
+        // FIX: If UTXO was already marked spent (from send flow) with
+        // spent_height = 0, update the height now that we found it on-chain.
+        if updated == 0 && spent_height > 0 {
+            conn.execute(
+                "UPDATE transparent_utxos SET spent_height = ?1
+                 WHERE txid = ?2 AND output_index = ?3 AND is_spent = 1
+                 AND (spent_height IS NULL OR spent_height = 0)",
+                params![spent_height as i64, txid, output_index],
+            )?;
+        }
+
         Ok(updated > 0)
+    }
+
+    /// Debug: dump all transparent UTXOs for diagnostics.
+    pub fn dump_transparent_utxos(&self) -> Result<String, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let mut stmt = conn.prepare(
+            "SELECT txid, output_index, value, is_spent, height FROM transparent_utxos ORDER BY height",
+        )?;
+        let mut output = String::new();
+        let mut count = 0u32;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, bool>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?;
+        for row in rows {
+            if let Ok((txid, vout, value, spent, height)) = row {
+                output.push_str(&format!(
+                    "[ZipherX]   utxo: {}..vout={} value={} spent={} height={}\n",
+                    &txid[..16.min(txid.len())], vout, value, spent, height,
+                ));
+                count += 1;
+            }
+        }
+        let header = format!("[ZipherX] DIAG: {} total transparent UTXOs:\n", count);
+        Ok(format!("{}{}", header, output))
     }
 
     /// Mark a transparent UTXO as spent by matching prevout (txid + index).
@@ -2523,11 +2979,78 @@ impl WalletDatabase {
         self.mark_transparent_utxo_spent(prevout_txid, prevout_index, spending_txid, height)
     }
 
+    /// Backfill transaction_history from existing transparent_utxos that have no
+    /// matching history entry. This handles the case where UTXOs were stored before
+    /// history recording was added (upgrade path).
+    pub fn backfill_transparent_history(&self) -> Result<u32, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        // Aggregate by txid to handle multi-output TXs (same txid, multiple UTXOs).
+        // SUM(value) gives the total received amount per txid.
+        let count = conn.execute(
+            "INSERT OR IGNORE INTO transaction_history
+                (txid, height, timestamp, tx_type, amount, fee, address, memo, status)
+             SELECT u.txid, MAX(u.height), NULL, 'received', SUM(u.value), 0, MIN(u.address), NULL, 'confirmed'
+             FROM transparent_utxos u
+             WHERE u.is_change = 0
+               AND NOT EXISTS (
+                   SELECT 1 FROM transaction_history h
+                   WHERE h.txid = u.txid AND h.tx_type = 'received'
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM transaction_history h
+                   WHERE h.txid = u.txid AND h.tx_type = 'sent'
+               )
+             GROUP BY u.txid",
+            [],
+        )?;
+        if count > 0 {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[ZipherX] Transparent history backfill: {} entries added",
+                count
+            );
+        }
+        Ok(count as u32)
+    }
+
+    /// Get the value of a transparent UTXO by txid and output index.
+    pub fn get_transparent_utxo_value(
+        &self,
+        txid: &str,
+        output_index: u32,
+    ) -> Result<Option<u64>, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let mut stmt = conn.prepare(
+            "SELECT value FROM transparent_utxos WHERE txid = ?1 AND output_index = ?2",
+        )?;
+        let val = stmt
+            .query_row(params![txid, output_index], |row| {
+                row.get::<_, i64>(0).map(|v| v as u64)
+            })
+            .optional()?;
+        Ok(val)
+    }
+
     /// Delete all transparent UTXOs (for rescan).
     pub fn delete_all_transparent_utxos(&self) -> Result<(), StorageError> {
         let conn = recover_lock(self.conn.lock());
         conn.execute("DELETE FROM transparent_utxos", [])?;
         Ok(())
+    }
+
+    /// I2: Get the next available transparent change child_index.
+    /// Returns MAX(child_index) + 1 among change UTXOs, or 0 if none exist.
+    /// Used for change address rotation to avoid address reuse.
+    pub fn next_transparent_change_index(&self) -> Result<u32, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let next: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(child_index), -1) + 1 FROM transparent_utxos WHERE is_change = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(next as u32)
     }
 
     /// Check if the delta store should be cleared (set by migration v4).
@@ -3834,5 +4357,25 @@ mod tests {
             "Synthesized sent amount should be net, got {}",
             sent_entries[0].amount,
         );
+    }
+
+    #[test]
+    fn test_transparent_utxo_is_imported() {
+        let db = test_db();
+        db.insert_transparent_utxo(
+            100,
+            "tx_imported",
+            0,
+            &[0x76, 0xa9],
+            "t1ImportedAddr",
+            50000,
+            false,
+            0,
+            true,
+        )
+        .unwrap();
+        let utxos = db.get_unspent_transparent_utxos().unwrap();
+        assert_eq!(utxos.len(), 1);
+        assert!(utxos[0].is_imported);
     }
 }
