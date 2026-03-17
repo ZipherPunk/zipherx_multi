@@ -73,6 +73,23 @@ impl MempoolDetector {
         })
     }
 
+    /// Create a new mempool detector with a pre-built transparent address set.
+    ///
+    /// Use this when the address set has already been constructed with both
+    /// seed-derived and imported addresses.
+    pub fn new_with_address_set(
+        sk_bytes: Vec<u8>,
+        address_set: TransparentAddressSet,
+        on_tx: MempoolTxCallback,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            sk_bytes,
+            transparent_addresses: Some(address_set),
+            on_tx,
+            seen: Mutex::new(HashSet::new()),
+        })
+    }
+
     /// Build the callback closure for `peer_manager.set_on_mempool_tx_data()`.
     ///
     /// Returns an `Arc<dyn Fn(Vec<u8>) + Send + Sync>` that processes raw TX bytes.

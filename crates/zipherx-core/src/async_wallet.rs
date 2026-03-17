@@ -185,6 +185,7 @@ impl AsyncWallet {
             progress,
             Some(peer_count_ref.clone()),
             boost_cache,
+            None, // transparent_addresses — set via sync_with_transparent()
         )
         .await;
 
@@ -220,6 +221,90 @@ impl AsyncWallet {
                         );
                     }
                 }
+            });
+        }
+
+        result
+    }
+
+    /// Sync with transparent address scanning.
+    ///
+    /// Same as `sync()` but also scans for transparent UTXOs matching
+    /// addresses derived from the seed.
+    pub async fn sync_with_transparent(
+        &self,
+        sk_bytes: &[u8],
+        seed: &[u8],
+        progress: Option<SyncProgressFn>,
+    ) -> Result<u64, CoreError> {
+        use crate::scanner::TransparentAddressSet;
+
+        let peer_count_ref = self.connected_peer_count.clone();
+        let mut pm = self.peer_manager.lock().await;
+        peer_count_ref.store(pm.connected_count() as u32, Ordering::Relaxed);
+
+        let boost_cache = self
+            .core
+            .config
+            .boost_cache_dir
+            .as_ref()
+            .map(std::path::PathBuf::from);
+
+        // Pre-derive transparent addresses for scanning (gap limit = 20)
+        let mut t_address_set = TransparentAddressSet::from_seed(seed, 0, 20);
+
+        // Also include imported (WIF) transparent addresses
+        {
+            let db_clone = self.db.clone();
+            if let Ok(imported_addrs) = tokio::task::spawn_blocking(move || {
+                db_clone.get_imported_transparent_addresses()
+            })
+            .await
+            .unwrap_or(Err(zipherx_storage::types::StorageError::Other(
+                "spawn failed".into(),
+            ))) {
+                for (db_id, addr) in &imported_addrs {
+                    t_address_set.add_imported(addr.clone(), *db_id);
+                }
+            }
+        }
+
+        let result = async_sync::sync_to_tip(
+            &mut pm,
+            &self.header_store,
+            &self.delta_store,
+            self.db.clone(),
+            sk_bytes,
+            &self.core.guards,
+            progress,
+            Some(peer_count_ref.clone()),
+            boost_cache,
+            Some(&t_address_set),
+        )
+        .await;
+
+        peer_count_ref.store(pm.connected_count() as u32, Ordering::Relaxed);
+
+        if let Ok(synced_height) = &result {
+            pm.live_chain_tip.store(*synced_height, Ordering::Relaxed);
+        }
+
+        // Backfill transaction_history for any transparent UTXOs missing history entries
+        // (handles upgrade from pre-transparent versions)
+        if result.is_ok() {
+            let db_clone = self.db.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = db_clone.backfill_transparent_history();
+            })
+            .await;
+        }
+
+        if result.is_ok() && !crate::async_prover::is_prover_ready() {
+            let spend_path = self.core.config.spend_params_path.clone();
+            let output_path = self.core.config.output_params_path.clone();
+            tokio::spawn(async move {
+                let _ =
+                    crate::async_prover::ensure_prover_initialized(&spend_path, &output_path).await;
             });
         }
 
@@ -267,6 +352,48 @@ impl AsyncWallet {
         .await
     }
 
+    /// Send a transparent transaction (spending transparent UTXOs).
+    ///
+    /// Supports t→t and t→z (shielding). Requires the wallet seed for
+    /// deriving transparent private keys.
+    pub async fn send_transparent(
+        &self,
+        request: SendRequest,
+        sk_bytes: &[u8],
+        seed: &[u8],
+        progress: Option<SendProgressFn>,
+    ) -> Result<crate::send::SendResult, CoreError> {
+        // Ensure prover is initialized (needed for shielded change/output)
+        if !crate::async_prover::is_prover_ready() {
+            eprintln!("[ZipherX] Prover not initialized — downloading/loading Sapling params...");
+            crate::async_prover::ensure_prover_initialized(
+                &self.core.config.spend_params_path,
+                &self.core.config.output_params_path,
+            )
+            .await?;
+            eprintln!("[ZipherX] Sapling prover initialized successfully");
+        }
+
+        let pm = self.peer_manager.lock().await;
+        let chain_height = self
+            .header_store
+            .get_latest_height()
+            .map_err(|e| CoreError::Storage(e.to_string()))?
+            .unwrap_or(0);
+
+        async_send::send_transparent_transaction(
+            self.db.clone(),
+            &pm,
+            sk_bytes,
+            seed,
+            &request,
+            &self.core.guards,
+            progress,
+            chain_height,
+        )
+        .await
+    }
+
     /// Get the current balance.
     pub async fn get_balance(&self) -> Result<BalanceInfo, CoreError> {
         let db_clone = self.db.clone();
@@ -276,6 +403,26 @@ impl AsyncWallet {
             .map_err(|e| CoreError::Storage(e.to_string()))?;
 
         Ok(WalletCore::compute_balance(&notes))
+    }
+
+    /// Get the transparent (t-address) balance.
+    pub async fn get_transparent_balance(&self) -> Result<u64, CoreError> {
+        let db_clone = self.db.clone();
+        tokio::task::spawn_blocking(move || db_clone.get_transparent_balance())
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .map_err(|e| CoreError::Storage(e.to_string()))
+    }
+
+    /// Get all unspent transparent UTXOs.
+    pub async fn get_unspent_transparent_utxos(
+        &self,
+    ) -> Result<Vec<zipherx_storage::types::TransparentUtxo>, CoreError> {
+        let db_clone = self.db.clone();
+        tokio::task::spawn_blocking(move || db_clone.get_unspent_transparent_utxos())
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+            .map_err(|e| CoreError::Storage(e.to_string()))
     }
 
     /// Get transaction history.
@@ -364,28 +511,40 @@ impl AsyncWallet {
         let db = self.db.clone();
         let guards = self.core.guards.clone();
 
+        // Set up new-block notification channel so inv MSG_BLOCK wakes the sleep
+        let new_block_notify = Arc::new(tokio::sync::Notify::new());
+        {
+            let notify = new_block_notify.clone();
+            let mut pm_lock = pm.lock().await;
+            pm_lock.set_on_new_block(Arc::new(move || {
+                notify.notify_one();
+            }));
+        }
+
         let handle = tokio::spawn(async move {
-            // RC-2: The spending key is held in this task and used for
-            // trial decryption during background syncs. When the task is
-            // aborted via stop_background_sync(), the Vec<u8> is dropped.
-            // We add an explicit zeroize in the (unreachable) post-loop
-            // code to document the intent and satisfy static analysis.
             #[allow(unused_mut)]
             let mut sk_bytes = Zeroizing::new(sk_bytes);
 
-            // RC-21: Track consecutive failures and back off after MAX_SYNC_RETRIES.
             const MAX_SYNC_RETRIES: u32 = 10;
-            const BACKOFF_SECS: u64 = 300; // 5 minutes
+            const BACKOFF_SECS: u64 = 300;
             let mut consecutive_failures: u32 = 0;
 
             loop {
                 let sleep_secs = if consecutive_failures >= MAX_SYNC_RETRIES {
-                    // RC-21: Back off to BACKOFF_SECS after too many failures
                     BACKOFF_SECS
                 } else {
                     30
                 };
-                tokio::time::sleep(tokio::time::Duration::from_secs(sleep_secs)).await;
+
+                // Wait for either the timer OR a new-block notification (whichever first)
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_secs(sleep_secs)) => {}
+                    _ = new_block_notify.notified() => {
+                        eprintln!("[ZipherX] Background sync: inv MSG_BLOCK — immediate sync");
+                        // Small delay to let duplicate inv messages from other peers arrive
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                }
 
                 let mut pm_lock = pm.lock().await;
                 match async_sync::background_sync(
@@ -399,7 +558,11 @@ impl AsyncWallet {
                 .await
                 {
                     Ok(()) => {
-                        consecutive_failures = 0; // Reset on success
+                        consecutive_failures = 0;
+                        // Restart block listeners after sync — sync consumes readers
+                        if pm_lock.connected_count() > 0 && !pm_lock.has_active_block_listeners() {
+                            pm_lock.start_all_block_listeners().await;
+                        }
                     }
                     Err(_) => {
                         consecutive_failures = consecutive_failures.saturating_add(1);
@@ -412,7 +575,6 @@ impl AsyncWallet {
                     }
                 }
             }
-            // RC-2: Explicit zeroization — reached only if the loop somehow exits.
             #[allow(unreachable_code)]
             {
                 sk_bytes.zeroize();
