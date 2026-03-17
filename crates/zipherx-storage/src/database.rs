@@ -29,6 +29,21 @@ fn recover_lock(
     }
 }
 
+/// A transparent address with a non-zero unspent balance.
+#[derive(Debug, Clone)]
+pub struct FundedAddress {
+    /// Encoded transparent address (t1...).
+    pub address: String,
+    /// Total unspent balance in zatoshis.
+    pub balance: u64,
+    /// Whether this is a change address (internal derivation chain).
+    pub is_change: bool,
+    /// BIP-44 child index used to derive the address.
+    pub child_index: u32,
+    /// Whether this address was imported via WIF rather than derived.
+    pub is_imported: bool,
+}
+
 /// The main wallet database.
 pub struct WalletDatabase {
     conn: Mutex<rusqlite::Connection>,
@@ -3038,6 +3053,31 @@ impl WalletDatabase {
         Ok(())
     }
 
+    /// Get all transparent addresses that have unspent funds, grouped by address.
+    /// Returns addresses sorted by balance descending, for use in WIF export
+    /// (only addresses with funds need their private keys exported).
+    pub fn get_funded_transparent_addresses(&self) -> Result<Vec<FundedAddress>, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let mut stmt = conn.prepare(
+            "SELECT address, SUM(value) as total, is_change, child_index, is_imported
+             FROM transparent_utxos
+             WHERE is_spent = 0
+             GROUP BY address
+             HAVING total > 0
+             ORDER BY total DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(FundedAddress {
+                address: row.get(0)?,
+                balance: row.get::<_, i64>(1)? as u64,
+                is_change: row.get::<_, i32>(2)? != 0,
+                child_index: row.get::<_, i64>(3)? as u32,
+                is_imported: row.get::<_, i32>(4)? != 0,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     /// I2: Get the next available transparent change child_index.
     /// Returns MAX(child_index) + 1 among change UTXOs, or 0 if none exist.
     /// Used for change address rotation to avoid address reuse.
@@ -4470,5 +4510,35 @@ mod tests {
         db.store_imported_transparent_key("t1Addr2", &[1; 48])
             .unwrap();
         assert_eq!(db.get_imported_key_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_get_funded_transparent_addresses() {
+        let db = test_db();
+        // Two UTXOs for same address (should aggregate)
+        db.insert_transparent_utxo(100, "tx1", 0, &[], "t1AddrA", 10000, false, 0, false)
+            .unwrap();
+        db.insert_transparent_utxo(101, "tx2", 0, &[], "t1AddrA", 20000, false, 0, false)
+            .unwrap();
+        // Change address
+        db.insert_transparent_utxo(102, "tx3", 1, &[], "t1AddrB", 5000, true, 1, false)
+            .unwrap();
+        // Spent UTXO (should not appear)
+        db.insert_transparent_utxo(103, "tx4", 0, &[], "t1AddrC", 99999, false, 2, false)
+            .unwrap();
+        db.mark_transparent_utxo_spent("tx4", 0, "txSpend", 104)
+            .unwrap();
+
+        let funded = db.get_funded_transparent_addresses().unwrap();
+        assert_eq!(funded.len(), 2);
+
+        let a = funded.iter().find(|f| f.address == "t1AddrA").unwrap();
+        assert_eq!(a.balance, 30000);
+        assert!(!a.is_change);
+        assert!(!a.is_imported);
+
+        let b = funded.iter().find(|f| f.address == "t1AddrB").unwrap();
+        assert_eq!(b.balance, 5000);
+        assert!(b.is_change);
     }
 }
