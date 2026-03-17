@@ -48,6 +48,7 @@ pub enum SetupMode {
     Create,
     Restore,
     Import,
+    ImportSeed,
 }
 
 /// Filter for the history view.
@@ -146,6 +147,21 @@ pub struct ZipherXApp {
     pub address: Option<String>,
     pub balance: BalanceDisplay,
 
+    // -- transparent addresses --
+    pub transparent_address: Option<String>,
+    pub transparent_balance: u64,
+    pub send_from_transparent: bool,
+
+    // -- seed migration (upgrade from pre-transparent versions) --
+    /// True when SK exists but no wallet_seed stored — user needs to provide mnemonic
+    pub needs_seed_migration: bool,
+    /// Migration UI state: "banner", "enter_phrase", "generate", "backup"
+    pub seed_migration_mode: String,
+    /// Mnemonic input during migration (phrase entry)
+    pub seed_migration_input: String,
+    /// Generated companion mnemonic (backup step)
+    pub seed_migration_words: Vec<String>,
+
     // -- network --
     pub block_height: u64,
     pub peer_count: u32,
@@ -231,7 +247,37 @@ pub struct ZipherXApp {
     pub show_export_confirm: bool,
     pub export_password: String,
     pub export_key_display: String,
+    pub export_t_key_display: String,
     pub export_auto_dismiss: Option<Instant>,
+    /// Funded transparent keys: (address, wif, balance, is_change, is_imported)
+    pub export_funded_keys: Vec<(String, String, u64, bool, bool)>,
+    /// True when showing step 2 of the unified export (individual keys)
+    pub show_export_step2: bool,
+
+    // -- export mnemonic --
+    pub show_mnemonic_export: bool,
+    pub show_mnemonic_export_confirm: bool,
+    pub mnemonic_export_password: String,
+    pub export_mnemonic_display: String,
+    pub mnemonic_export_auto_dismiss: Option<Instant>,
+
+    // -- export seed --
+    pub show_seed_export: bool,
+    pub show_seed_export_confirm: bool,
+    pub seed_export_password: String,
+    pub export_seed_display: String,
+    pub seed_export_auto_dismiss: Option<Instant>,
+
+    // -- WIF import --
+    pub show_wif_import: bool,
+    pub wif_import_text: String,
+    /// WIF import validation results: (valid, address_or_error, wif_prefix)
+    pub wif_import_results: Option<Vec<(bool, String, String)>>,
+    /// Number of imported transparent keys (for balance view indicator)
+    pub imported_key_count: u32,
+
+    // -- seed import --
+    pub seed_import_input: String,
 
     // -- logo --
     pub logo_texture: Option<egui::TextureHandle>,
@@ -331,6 +377,14 @@ impl Default for ZipherXApp {
             address: None,
             balance: BalanceDisplay::default(),
 
+            transparent_address: None,
+            transparent_balance: 0,
+            send_from_transparent: false,
+            needs_seed_migration: false,
+            seed_migration_mode: "banner".to_string(),
+            seed_migration_input: String::new(),
+            seed_migration_words: Vec::new(),
+
             block_height: 0,
             peer_count: 0,
             tor_enabled: false,
@@ -405,7 +459,29 @@ impl Default for ZipherXApp {
             show_export_confirm: false,
             export_password: String::new(),
             export_key_display: String::new(),
+            export_t_key_display: String::new(),
             export_auto_dismiss: None,
+            export_funded_keys: Vec::new(),
+            show_export_step2: false,
+
+            show_mnemonic_export: false,
+            show_mnemonic_export_confirm: false,
+            mnemonic_export_password: String::new(),
+            export_mnemonic_display: String::new(),
+            mnemonic_export_auto_dismiss: None,
+
+            show_seed_export: false,
+            show_seed_export_confirm: false,
+            seed_export_password: String::new(),
+            export_seed_display: String::new(),
+            seed_export_auto_dismiss: None,
+
+            show_wif_import: false,
+            wif_import_text: String::new(),
+            wif_import_results: None,
+            imported_key_count: 0,
+
+            seed_import_input: String::new(),
 
             logo_texture: None,
 
@@ -605,6 +681,18 @@ impl Drop for ZipherXApp {
         self.reauth_password.zeroize();
         self.export_password.zeroize();
         self.export_key_display.zeroize();
+        self.export_t_key_display.zeroize();
+        self.mnemonic_export_password.zeroize();
+        self.export_mnemonic_display.zeroize();
+        self.seed_export_password.zeroize();
+        self.export_seed_display.zeroize();
+        self.seed_import_input.zeroize();
+        self.wif_import_text.zeroize();
+        // Zeroize WIF strings in funded key exports
+        for (_, ref mut wif, _, _, _) in self.export_funded_keys.iter_mut() {
+            wif.zeroize();
+        }
+        self.node_rpc_user.zeroize();
         self.node_rpc_password.zeroize();
 
         // Zeroize mnemonic words
