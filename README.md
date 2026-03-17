@@ -42,10 +42,13 @@ ZipherX Multi exists because **privacy is the default, not the option.**
 | | |
 |---|---|
 | **Sapling shielded transactions** | Full zk-SNARK privacy. Your balance and transactions are cryptographically hidden. |
+| **Transparent addresses** | BIP-44 transparent (t-address) support. Send and receive on both shielded and transparent pools. |
 | **Non-custodial** | Your keys live on YOUR device. We can't touch your funds. Nobody can. |
 | **Direct P2P** | Connects to Zclassic nodes directly. No central server to subpoena, hack, or shut down. |
 | **Tor built-in** | Optional onion routing. Hide your IP from the network itself. |
 | **Boost sync** | Fast initial sync from commitment tree snapshots. No waiting days for a full chain download. |
+| **Unified backup/export** | Export recovery phrase (recommended), individual shielded key, or all funded transparent WIF keys. |
+| **WIF import** | Import transparent private keys (WIF format) from other wallets. Paste multiple keys at once. |
 | **Biometric auth** | Face ID / Touch ID / fingerprint to protect key export and dangerous operations. |
 | **Hardware-backed encryption** | Keys stored in Secure Enclave (Apple), StrongBox Keystore (Android), or encrypted file (Desktop). |
 | **Screenshot protection** | Optional screen capture blocking on mobile. |

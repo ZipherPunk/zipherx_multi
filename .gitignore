@@ -34,8 +34,9 @@ platforms/android/src/main/jniLibs/
 platforms/desktop/build/
 platforms/desktop/.gradle/
 
-# Docs — keep README, disclaimer, user guide; ignore plans
+# Docs — keep README, disclaimer, user guide; ignore internal plans/specs/audits
 docs/plans/
+docs/superpowers/
 
 # Compiled native libraries
 *.dylib

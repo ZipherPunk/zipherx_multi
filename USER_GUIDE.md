@@ -21,7 +21,9 @@ Welcome to ZipherX Multi. This guide will get you from zero to private in minute
 - [Settings & Security](#settings--security)
 - [Backup -- Read This or Cry Later](#backup----read-this-or-cry-later)
 - [Peer Management](#peer-management)
-- [Export Private Key](#export-private-key)
+- [Transparent Addresses](#transparent-addresses)
+- [Backup & Export](#backup--export)
+- [Import WIF Keys](#import-wif-keys)
 - [Delete Everything](#delete-everything)
 - [CLI Mode](#cli-mode)
 - [Troubleshooting](#troubleshooting)
@@ -116,26 +118,33 @@ After you send a transaction, ZipherX Multi automatically syncs every 30 seconds
 ## Receiving ZCL
 
 1. Go to the **Balance** or **Receive** screen
-2. Your **shielded address** (starts with `zs1...`) is displayed
-3. Tap/click to copy it
+2. Your **shielded address** (starts with `zs1...`) is displayed, and your **transparent address** (starts with `t1...`) if available
+3. Tap/click to copy either address
 4. Share it with whoever is sending you ZCL
 
-That's it. When someone sends ZCL to your address, it'll appear after the next sync.
+**Shielded (zs1...):** Nobody can see your balance or transaction history. This is the recommended way to receive.
 
-**Pro tip:** Your shielded address is safe to share publicly. Unlike transparent addresses, nobody can look up your balance or transaction history from it. That's the whole point.
+**Transparent (t1...):** Visible on the blockchain like Bitcoin. Use only when the sender can't send to shielded addresses.
+
+When someone sends ZCL to either address, it'll appear after the next sync.
 
 ---
 
 ## Sending ZCL
 
 1. Go to the **Send** screen
-2. Enter the recipient's shielded address (`zs1...`)
-3. Enter the amount (tap **MAX** to send everything minus the fee)
-4. The network fee is 10,000 zatoshis (0.0001 ZCL) -- displayed automatically
-5. Review the details
-6. Hit **Send**
+2. Choose your source: **SHIELDED** or **TRANSPARENT** (toggle appears if you have transparent funds)
+3. Enter the recipient's address -- shielded (`zs1...`) or transparent (`t1...`)
+4. Enter the amount (tap **MAX** to send everything minus the fee)
+5. The network fee is 10,000 zatoshis (0.0001 ZCL) -- displayed automatically
+6. Review the details
+7. Hit **Send**
 
-The first send of each session loads the Sapling prover parameters (~50MB, cached on disk after first download). After that, sends are instant.
+**Shielded send:** Private. Uses zk-SNARK proofs. The first send of each session loads Sapling prover parameters (~50MB, cached after first download).
+
+**Transparent send:** Visible on-chain. Faster (no proof generation). Change goes to a transparent change address automatically.
+
+**Cross-pool:** You can send from transparent to shielded (shielding) or shielded to transparent (de-shielding). The wallet handles the routing.
 
 **Sending is IRREVERSIBLE.** Double-check the address. Triple-check it. There is no undo button. There is no customer support. There is no chargeback. If you send to the wrong address, those coins are gone.
 
@@ -257,18 +266,90 @@ Banned peers show their ban duration (permanent or time-remaining).
 
 ---
 
-## Export Private Key
+## Transparent Addresses
 
-Need your raw private key (spending key)?
+ZipherX supports both **shielded** (private) and **transparent** (public) addresses.
 
-1. Go to **Settings > Security > Export Private Key**
-2. Authenticate with biometrics (Face ID / Touch ID / fingerprint)
-3. The key is displayed in encoded form (truncated for safety)
-4. Tap **Copy** to copy the full key
-5. **The clipboard auto-clears after 30 seconds**
-6. The key display auto-dismisses after 60 seconds
+### How they work
 
-**WARNING:** Your private key is equivalent to your 24-word recovery phrase. Anyone who has it controls your funds. Handle with extreme care.
+- **Shielded (zs1...):** Transactions are encrypted on-chain using zk-SNARKs. Nobody can see your balance or history. This is the default and recommended way to use ZipherX.
+- **Transparent (t1...):** Like Bitcoin -- transactions are publicly visible on the blockchain. Use when interacting with services that only support transparent addresses.
+
+### Balance display
+
+Your wallet shows both balances separately:
+
+```
+TOTAL BALANCE: 0.58 ZCL
+SHIELDED: 0.31 ZCL (4/4 spendable notes)
+TRANSPARENT: 0.27 ZCL
+```
+
+### Address derivation
+
+When you create or restore a wallet from a recovery phrase, transparent addresses are automatically derived using BIP-44 (`m/44'/147'/0'/0/i`). You don't need to do anything extra.
+
+If you imported only a private key (no recovery phrase), you can add transparent addresses by:
+- Entering your recovery phrase (if you have it)
+- Generating a new phrase (creates unrelated transparent addresses)
+- Importing WIF keys from another wallet
+
+---
+
+## Backup & Export
+
+### The recommended backup: Recovery Phrase
+
+Your **24-word recovery phrase** is the master backup. It restores everything -- shielded funds, transparent addresses, transaction history. One backup, all funds.
+
+### Exporting keys
+
+Go to **Settings > BACKUP / EXPORT**:
+
+1. Enter your password
+2. **Step 1 (Recommended):** Export your recovery phrase
+3. **Step 2 (Advanced):** View individual keys:
+   - **Shielded private key** -- controls all shielded funds
+   - **Transparent WIF keys** -- one per funded transparent address, with balance shown
+   - **COPY ALL KEYS** -- copies everything to clipboard in a formatted block
+
+All exported keys auto-dismiss after 60 seconds. Clipboard auto-clears after 30 seconds.
+
+### What backs up what?
+
+| Backup method | Shielded funds | Transparent funds | Transaction history |
+|--------------|---------------|------------------|-------------------|
+| **Recovery phrase** | All | All (derived from same seed) | Rebuilt on rescan |
+| **Shielded private key** | All | None | Rebuilt on rescan |
+| **WIF keys** | None | Only that address | None |
+
+**Bottom line:** Your recovery phrase backs up everything. Individual keys are for advanced users or importing into other wallets.
+
+---
+
+## Import WIF Keys
+
+Have transparent private keys (WIF format) from another wallet? You can import them.
+
+### How to import
+
+1. Go to **Settings > IMPORT WIF KEYS**
+2. Paste one or more WIF keys (one per line). WIF keys start with `L` or `K`.
+3. Click **VALIDATE** -- the app verifies each key and shows the corresponding address
+4. Review the results (green checkmark = valid, red cross = invalid)
+5. Click **IMPORT** -- keys are stored and a full blockchain rescan starts automatically
+
+### Important warnings
+
+- **Imported keys are NOT covered by your recovery phrase.** If you restore from your phrase, imported addresses will not appear. Keep a separate backup of your WIF keys.
+- **The rescan takes a few minutes.** The wallet needs to scan the entire blockchain to find transactions for the newly imported addresses. Progress is shown on the balance screen.
+- **You can import multiple keys at once.** Paste them all in the text area, one per line.
+
+### When to use WIF import
+
+- Migrating from another Zclassic wallet
+- Importing a paper wallet
+- Using a private key exported from ZipherX on a PK-only wallet (no recovery phrase)
 
 ---
 
@@ -330,10 +411,12 @@ The CLI provides the same core functionality as the GUI: create wallet, restore,
 | Term | Meaning |
 |------|---------|
 | **Shielded address** | A `zs1...` address. Transactions to/from it are private (encrypted on-chain). |
+| **Transparent address** | A `t1...` address. Transactions are publicly visible on the blockchain, like Bitcoin. |
+| **WIF** | Wallet Import Format. A standard encoding for transparent private keys (starts with `L` or `K`). |
 | **Sapling** | The privacy protocol used by Zclassic. Uses zk-SNARKs (zero-knowledge proofs). |
 | **zk-SNARK** | Zero-Knowledge Succinct Non-Interactive Argument of Knowledge. Proves you own funds without revealing which funds. Math magic. |
-| **Recovery phrase** | 24 words that encode your wallet. Back it up. Seriously. |
-| **Spending key** | The cryptographic key that authorizes transactions. Derived from your recovery phrase. |
+| **Recovery phrase** | 24 words that encode your wallet. Backs up ALL funds (shielded + transparent). Back it up. Seriously. |
+| **Spending key** | The cryptographic key that authorizes shielded transactions. Derived from your recovery phrase. |
 | **Viewing key** | A key that can see your transactions but NOT spend your funds. Useful for watch-only wallets. |
 | **Non-custodial** | You hold your own keys. No third party can access or freeze your funds. |
 | **Boost sync** | Fast initial sync using a pre-computed commitment tree snapshot. |
@@ -342,6 +425,9 @@ The CLI provides the same core functionality as the GUI: create wallet, restore,
 | **Witness** | A Merkle path proving your note exists in the commitment tree. Required for spending. |
 | **Tor** | The Onion Router. Routes your traffic through multiple relays to hide your IP address. |
 | **Zatoshi** | The smallest unit of ZCL. 1 ZCL = 100,000,000 zatoshis. Like satoshis for Bitcoin. |
+| **BIP-44** | The standard for deriving transparent addresses from a seed. Path: `m/44'/147'/0'/chain/index`. |
+| **Shielding** | Moving funds from a transparent address to a shielded address (t-to-z). Increases privacy. |
+| **De-shielding** | Moving funds from a shielded address to a transparent address (z-to-t). Reduces privacy. |
 
 ---
 
