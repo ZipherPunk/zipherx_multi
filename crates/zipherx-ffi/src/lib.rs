@@ -1471,7 +1471,13 @@ fn send_transparent_with_progress(
     runtime::spawn(async move {
         let _guard = SendGuard;
         match wallet
-            .send_transparent(request, &sk_bytes, &seed_secure, Some(progress_fn))
+            .send_transparent(
+                request,
+                &sk_bytes,
+                &seed_secure,
+                Some(progress_fn),
+                |_| Err("No imported keys available via FFI yet".to_string()),
+            )
             .await
         {
             Ok(result) => cb_complete.on_complete(result.txid, result.amount, result.fee),

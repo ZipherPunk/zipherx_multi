@@ -355,13 +355,15 @@ impl AsyncWallet {
     /// Send a transparent transaction (spending transparent UTXOs).
     ///
     /// Supports t→t and t→z (shielding). Requires the wallet seed for
-    /// deriving transparent private keys.
+    /// deriving transparent private keys. For imported UTXOs, `decrypt_fn`
+    /// is used to decrypt the stored secret key.
     pub async fn send_transparent(
         &self,
         request: SendRequest,
         sk_bytes: &[u8],
         seed: &[u8],
         progress: Option<SendProgressFn>,
+        decrypt_fn: impl Fn(&[u8]) -> Result<Zeroizing<Vec<u8>>, String> + Send + 'static,
     ) -> Result<crate::send::SendResult, CoreError> {
         // Ensure prover is initialized (needed for shielded change/output)
         if !crate::async_prover::is_prover_ready() {
@@ -390,6 +392,7 @@ impl AsyncWallet {
             &self.core.guards,
             progress,
             chain_height,
+            decrypt_fn,
         )
         .await
     }

@@ -19,12 +19,13 @@ use crate::async_prover;
 use crate::send::{self, SendRequest, SendResult, SpendableNote};
 use crate::sync::SyncGuards;
 use crate::CoreError;
-use zipherx_crypto::transaction::SpendInfo;
+use zipherx_crypto::transaction::{SpendInfo, TransparentSpendInfo};
 use zipherx_crypto::util::double_sha256;
 use zipherx_network::peer_manager::PeerManager;
 use zipherx_storage::database::WalletDatabase;
 use zipherx_storage::delta_cmu::DeltaCMUStore;
 use zipherx_storage::header_store_impl::SqliteHeaderStore;
+use zipherx_storage::types::TxType;
 
 /// Progress callback for send operations.
 pub type SendProgressFn = Arc<dyn Fn(SendPhase) + Send + Sync>;
@@ -175,13 +176,6 @@ pub async fn send_transaction(
     let change =
         send::calculate_change(total_value, request.amount_zatoshis, request.fee_zatoshis)?;
 
-    // Decode destination address
-    let to_address_bytes = zipherx_crypto::address::decode_address(&request.to_address)
-        .map_err(|e| CoreError::Crypto(e.to_string()))?;
-    let to_address: [u8; 43] = to_address_bytes
-        .try_into()
-        .map_err(|_| CoreError::Crypto("Invalid address length".into()))?;
-
     // Convert SpendableNote → SpendInfo for crypto layer
     let spend_infos: Vec<SpendInfo> = selected
         .iter()
@@ -194,22 +188,46 @@ pub async fn send_transaction(
         })
         .collect();
 
-    let memo_bytes = request.memo.as_ref().map(|m| m.as_bytes().to_vec());
-
     // Build the actual transaction (Groth16 proofs)
     // RC-25: Wrap sk_bytes in Zeroizing so it is securely zeroed on drop,
     // even if the task is cancelled between deserialization and completion.
     let sk_owned = Zeroizing::new(sk_bytes.to_vec());
-    let tx_result = async_prover::build_transaction_async(
-        sk_owned.to_vec(),
-        to_address,
-        request.amount_zatoshis,
-        memo_bytes,
-        spend_infos,
-        chain_height,
-        None,
-    )
-    .await?;
+
+    // Detect if destination is a transparent address (t1...)
+    let is_transparent_dest = request.to_address.starts_with("t1")
+        || request.to_address.starts_with("t3");
+
+    let tx_result = if is_transparent_dest {
+        // Deshielding: z → t
+        async_prover::build_deshield_transaction_async(
+            sk_owned.to_vec(),
+            request.to_address.clone(),
+            request.amount_zatoshis,
+            spend_infos,
+            chain_height,
+        )
+        .await?
+    } else {
+        // Shielded: z → z
+        let to_address_bytes = zipherx_crypto::address::decode_address(&request.to_address)
+            .map_err(|e| CoreError::Crypto(e.to_string()))?;
+        let to_address: [u8; 43] = to_address_bytes
+            .try_into()
+            .map_err(|_| CoreError::Crypto("Invalid address length".into()))?;
+
+        let memo_bytes = request.memo.as_ref().map(|m| m.as_bytes().to_vec());
+
+        async_prover::build_transaction_async(
+            sk_owned.to_vec(),
+            to_address,
+            request.amount_zatoshis,
+            memo_bytes,
+            spend_infos,
+            chain_height,
+            None,
+        )
+        .await?
+    };
     drop(sk_owned); // RC-25: Explicit drop triggers zeroization
 
     // Compute txid: double-SHA256 of serialized TX bytes, reversed
@@ -344,6 +362,397 @@ fn report_progress(progress: &Option<SendProgressFn>, phase: SendPhase) {
     if let Some(ref p) = progress {
         p(phase);
     }
+}
+
+// ============================================================================
+// Transparent Send Transaction
+// ============================================================================
+
+/// Execute a full transparent send flow: UTXO selection → key derivation → build → broadcast → record.
+///
+/// Spends transparent UTXOs from the wallet. Supports sending to either
+/// shielded (t→z, "shielding") or transparent (t→t) destinations.
+///
+/// Requires both the seed (for transparent key derivation) and the spending key
+/// (for Sapling change output / OVK).
+pub async fn send_transparent_transaction(
+    db: Arc<WalletDatabase>,
+    peer_manager: &PeerManager,
+    sk_bytes: &[u8],
+    seed: &[u8],
+    request: &SendRequest,
+    guards: &SyncGuards,
+    progress: Option<SendProgressFn>,
+    chain_height: u64,
+    decrypt_fn: impl Fn(&[u8]) -> Result<Zeroizing<Vec<u8>>, String> + Send + 'static,
+) -> Result<SendResult, CoreError> {
+    // Step 1: Check guards
+    if guards.is_syncing.load(Ordering::SeqCst) {
+        return Err(CoreError::SyncInProgress);
+    }
+    if guards.is_gap_filling.load(Ordering::SeqCst) {
+        return Err(CoreError::GapFillInProgress);
+    }
+    if guards.is_repairing.load(Ordering::SeqCst) {
+        return Err(CoreError::RepairInProgress);
+    }
+    if guards.is_broadcasting.load(Ordering::SeqCst) {
+        return Err(CoreError::BroadcastFailed(
+            "Another broadcast is already in progress".into(),
+        ));
+    }
+
+    // Step 2: Validate request
+    report_progress(&progress, SendPhase::Validating);
+    send::validate_send_request(request)?;
+
+    // Step 3: Broadcasting guard
+    let _broadcast_guard = BroadcastGuard::new(guards)?;
+
+    // Step 4: Load unspent transparent UTXOs
+    report_progress(
+        &progress,
+        SendPhase::NoteSelection {
+            count: 0,
+            total_value: 0,
+        },
+    );
+
+    let db_c = db.clone();
+    let utxos = tokio::task::spawn_blocking(move || db_c.get_unspent_transparent_utxos())
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+        .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+    if utxos.is_empty() {
+        return Err(CoreError::InsufficientBalance { have: 0, need: request.total_needed() });
+    }
+
+    // Step 5: Select UTXOs (largest first to minimize inputs)
+    let mut sorted = utxos.clone();
+    sorted.sort_by(|a, b| b.value.cmp(&a.value));
+
+    // C3: Use checked arithmetic to prevent silent overflow
+    let total_needed = request.amount_zatoshis
+        .checked_add(request.fee_zatoshis)
+        .ok_or(CoreError::Crypto("amount + fee overflow".into()))?;
+    let mut selected = Vec::new();
+    let mut selected_total: u64 = 0;
+    for utxo in &sorted {
+        selected.push(utxo.clone());
+        selected_total = selected_total
+            .checked_add(utxo.value)
+            .ok_or(CoreError::Crypto("UTXO accumulation overflow".into()))?;
+        if selected_total >= total_needed {
+            break;
+        }
+    }
+
+    if selected_total < total_needed {
+        return Err(CoreError::InsufficientBalance {
+            have: selected_total,
+            need: total_needed,
+        });
+    }
+
+    report_progress(
+        &progress,
+        SendPhase::NoteSelection {
+            count: selected.len(),
+            total_value: selected_total,
+        },
+    );
+
+    eprintln!(
+        "[ZipherX] Transparent send: {} UTXOs selected, total={}, need={}",
+        selected.len(), selected_total, total_needed,
+    );
+
+    // Step 6: Derive secret keys and build TransparentSpendInfo
+    let seed_owned = Zeroizing::new(seed.to_vec());
+    let mut spend_infos: Vec<TransparentSpendInfo> = Vec::with_capacity(selected.len());
+
+    // Pre-load any imported keys we need (DB access before spawn_blocking loop)
+    let has_imported = selected.iter().any(|u| u.is_imported);
+    let imported_keys: std::collections::HashMap<String, Vec<u8>> = if has_imported {
+        let db_for_keys = db.clone();
+        let imported_addrs: Vec<String> = selected
+            .iter()
+            .filter(|u| u.is_imported)
+            .map(|u| u.address.clone())
+            .collect();
+        tokio::task::spawn_blocking(move || {
+            let mut map = std::collections::HashMap::new();
+            for addr in &imported_addrs {
+                if let Ok(Some(encrypted)) = db_for_keys.get_imported_transparent_secret(addr) {
+                    map.insert(addr.clone(), encrypted);
+                }
+            }
+            map
+        })
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    for (i, utxo) in selected.iter().enumerate() {
+        let sk = if utxo.is_imported {
+            // Imported key: decrypt from DB
+            let encrypted_sk = imported_keys.get(&utxo.address).ok_or_else(|| {
+                CoreError::Crypto(format!(
+                    "Imported key not found for address {}",
+                    utxo.address
+                ))
+            })?;
+            decrypt_fn(encrypted_sk).map_err(|e| {
+                CoreError::Crypto(format!("Failed to decrypt imported key: {e}"))
+            })?
+        } else {
+            // Seed-derived key
+            let derived = zipherx_crypto::transparent::derive_transparent_secret_key(
+                &seed_owned,
+                0,
+                utxo.child_index,
+                utxo.is_change,
+            )
+            .map_err(|e| {
+                CoreError::Crypto(format!(
+                    "Failed to derive key for UTXO {i} (child={}, change={}): {e}",
+                    utxo.child_index, utxo.is_change
+                ))
+            })?;
+
+            // Verify derived address matches UTXO address
+            let derived_addr = if utxo.is_change {
+                zipherx_crypto::transparent::derive_transparent_change_address(
+                    &seed_owned,
+                    0,
+                    utxo.child_index,
+                )
+            } else {
+                zipherx_crypto::transparent::derive_transparent_address(
+                    &seed_owned,
+                    0,
+                    utxo.child_index,
+                )
+            }
+            .map_err(|e| {
+                CoreError::Crypto(format!("Address derivation failed for UTXO {i}: {e}"))
+            })?;
+
+            if derived_addr != utxo.address {
+                return Err(CoreError::Crypto(format!(
+                    "UTXO {i} address mismatch: expected {}, derived {}",
+                    utxo.address, derived_addr
+                )));
+            }
+
+            derived
+        };
+
+        // Convert txid from hex display format to internal byte order
+        let txid_hex = &utxo.txid;
+        let txid_display_bytes = hex::decode(txid_hex)
+            .map_err(|e| CoreError::Crypto(format!("Invalid UTXO txid hex: {e}")))?;
+        if txid_display_bytes.len() != 32 {
+            return Err(CoreError::Crypto(format!(
+                "Invalid UTXO txid length: {}",
+                txid_display_bytes.len()
+            )));
+        }
+        // Wire format is reversed display format
+        let mut txid_bytes = [0u8; 32];
+        for (j, b) in txid_display_bytes.iter().rev().enumerate() {
+            txid_bytes[j] = *b;
+        }
+
+        spend_infos.push(TransparentSpendInfo {
+            secret_key: sk.to_vec(),
+            prevout_txid: txid_bytes,
+            prevout_index: utxo.output_index,
+            script_pubkey: utxo.script_pubkey.clone(),
+            value: utxo.value,
+        });
+    }
+
+    // Step 7: Determine change address
+    // Change always goes back to a transparent change address.
+    // For t→t: change stays in transparent pool.
+    // For t→z: only the exact user amount goes to shielded, change stays transparent.
+    // This ensures the user controls exactly how much is shielded.
+    let t_change_addr = {
+        // I2: Rotate change address — use next available child_index to avoid reuse.
+        let db_for_idx = db.clone();
+        let next_change_idx = tokio::task::spawn_blocking(move || {
+            db_for_idx.next_transparent_change_index()
+        })
+        .await
+        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+        .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+        Some(
+            zipherx_crypto::transparent::derive_transparent_change_address(&seed_owned, 0, next_change_idx)
+                .map_err(|e| CoreError::Crypto(format!("Change address derivation failed: {e}")))?,
+        )
+    };
+
+    // Step 8: Build transaction (prover must already be initialized by caller)
+    report_progress(
+        &progress,
+        SendPhase::Building {
+            spend_index: 0,
+            total_spends: selected.len() as u32,
+        },
+    );
+
+    let sk_owned = Zeroizing::new(sk_bytes.to_vec());
+    let to_address = request.to_address.clone();
+    let amount = request.amount_zatoshis;
+    let memo_bytes = request.memo.as_ref().map(|m| m.as_bytes().to_vec());
+    let t_change = t_change_addr.clone();
+
+    let tx_result = tokio::task::spawn_blocking(move || {
+        let result = zipherx_crypto::transaction::build_transparent_spend_transaction(
+            &sk_owned,
+            &to_address,
+            amount,
+            memo_bytes.as_deref(),
+            &spend_infos,
+            chain_height,
+            t_change.as_deref(),
+        );
+        // C2: Explicit zeroization of spend_infos (contains secret keys).
+        // ZeroizeOnDrop handles this automatically, but drop(spend_infos) here
+        // ensures keys are cleared before the closure returns its result.
+        drop(spend_infos);
+        result
+    })
+    .await
+    .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+    .map_err(|e| CoreError::Crypto(e.to_string()))?;
+
+    // Compute txid
+    let hash = double_sha256(&tx_result.tx_bytes);
+    let mut txid_bytes = hash;
+    txid_bytes.reverse();
+    let txid = hex::encode(txid_bytes);
+
+    // Step 9: Broadcast
+    report_progress(&progress, SendPhase::Broadcasting);
+    eprintln!(
+        "[ZipherX] Broadcasting transparent TX {}...",
+        &txid[..16.min(txid.len())]
+    );
+
+    let broadcast_result = peer_manager
+        .broadcast_transaction(&tx_result.tx_bytes, &txid)
+        .await
+        .map_err(|e| {
+            eprintln!("[ZipherX] Broadcast FAILED: {e}");
+            CoreError::BroadcastFailed(e.to_string())
+        })?;
+
+    let accepted = broadcast_result.total_accepted() as u32;
+    let rejected = broadcast_result.rejected_by.len() as u32;
+    let total = broadcast_result.total_attempted() as u32;
+
+    report_progress(
+        &progress,
+        SendPhase::PeerResponse {
+            accepted,
+            rejected,
+            total,
+        },
+    );
+
+    if !broadcast_result.rejected_by.is_empty() {
+        let reasons: Vec<String> = broadcast_result
+            .rejected_by
+            .iter()
+            .map(|(peer, reason)| format!("{}: {}", peer, reason))
+            .collect();
+        let msg = format!(
+            "TX rejected by {} peer(s): {}",
+            rejected,
+            reasons.join(", ")
+        );
+        eprintln!("[ZipherX] {}", msg);
+        return Err(CoreError::BroadcastFailed(msg));
+    }
+
+    if accepted == 0 {
+        return Err(CoreError::BroadcastFailed(format!(
+            "0/{total} peers accepted the transaction"
+        )));
+    }
+
+    eprintln!("[ZipherX] TX accepted by {}/{} peers", accepted, total);
+
+    // Step 10: Record in DB
+    report_progress(&progress, SendPhase::Recording);
+
+    let txid_clone = txid.clone();
+    let db_clone = db.clone();
+    let selected_clone = selected.clone();
+    let address = request.to_address.clone();
+    let memo = request.memo.clone();
+    let fee = request.fee_zatoshis;
+    let change = selected_total.saturating_sub(total_needed);
+
+    tokio::task::spawn_blocking(move || {
+        // Mark selected UTXOs as spent
+        for utxo in &selected_clone {
+            let _ = db_clone.mark_transparent_spent_by_prevout(
+                &utxo.txid,
+                utxo.output_index,
+                &txid_clone,
+                0, // unconfirmed
+            );
+        }
+
+        // Record transaction in history
+        let tx_type = if address.starts_with("zs") {
+            TxType::SelfT2Z
+        } else {
+            TxType::Sent
+        };
+
+        db_clone.insert_transaction(
+            &txid_clone,
+            0, // height: unconfirmed
+            None,
+            tx_type,
+            amount,
+            fee,
+            Some(&address),
+            memo.as_deref(),
+            zipherx_storage::types::TxStatus::Pending,
+        )?;
+
+        Ok::<(), zipherx_storage::types::StorageError>(())
+    })
+    .await
+    .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+    .map_err(|e| CoreError::Storage(e.to_string()))?;
+
+    eprintln!(
+        "[ZipherX] Transparent TX {} recorded successfully",
+        &txid[..16.min(txid.len())]
+    );
+
+    let result = SendResult {
+        txid: txid.clone(),
+        amount: request.amount_zatoshis,
+        fee: request.fee_zatoshis,
+        change_value: change,
+        notes_used: selected.len(),
+        spent_nullifiers: vec![], // no shielded spends
+    };
+
+    report_progress(&progress, SendPhase::Complete { txid });
+
+    Ok(result)
 }
 
 // ============================================================================
