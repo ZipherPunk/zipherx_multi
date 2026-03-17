@@ -3076,6 +3076,66 @@ impl WalletDatabase {
             Ok(false)
         }
     }
+
+    // ====================================================================
+    // Imported transparent key operations (WIF import)
+    // ====================================================================
+
+    /// Store an imported transparent private key (encrypted).
+    pub fn store_imported_transparent_key(
+        &self,
+        address: &str,
+        encrypted_sk: &[u8],
+    ) -> Result<(), StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        conn.execute(
+            "INSERT OR REPLACE INTO imported_transparent_keys (address, encrypted_secret_key)
+             VALUES (?1, ?2)",
+            params![address, encrypted_sk],
+        )?;
+        Ok(())
+    }
+
+    /// Get all imported transparent addresses with their database IDs.
+    pub fn get_imported_transparent_addresses(&self) -> Result<Vec<(i64, String)>, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let mut stmt = conn.prepare(
+            "SELECT id, address FROM imported_transparent_keys ORDER BY imported_at",
+        )?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Get the encrypted secret key for an imported transparent address.
+    pub fn get_imported_transparent_secret(
+        &self,
+        address: &str,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let result = conn
+            .query_row(
+                "SELECT encrypted_secret_key FROM imported_transparent_keys WHERE address = ?1",
+                params![address],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(result)
+    }
+
+    /// Get the count of imported transparent keys.
+    pub fn get_imported_key_count(&self) -> Result<u32, StorageError> {
+        let conn = recover_lock(self.conn.lock());
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM imported_transparent_keys",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(count as u32)
+    }
 }
 
 /// SHA-256 hash a nullifier for privacy storage (VUL-009).
@@ -4377,5 +4437,38 @@ mod tests {
         let utxos = db.get_unspent_transparent_utxos().unwrap();
         assert_eq!(utxos.len(), 1);
         assert!(utxos[0].is_imported);
+    }
+
+    #[test]
+    fn test_store_and_load_imported_transparent_key() {
+        let db = test_db();
+        let fake_encrypted = vec![0xAA; 48];
+        db.store_imported_transparent_key("t1TestAddr123", &fake_encrypted)
+            .unwrap();
+
+        let addrs = db.get_imported_transparent_addresses().unwrap();
+        assert_eq!(addrs.len(), 1);
+        assert_eq!(addrs[0].1, "t1TestAddr123");
+
+        let loaded = db
+            .get_imported_transparent_secret("t1TestAddr123")
+            .unwrap();
+        assert_eq!(loaded, Some(fake_encrypted));
+
+        let missing = db
+            .get_imported_transparent_secret("t1NoSuchAddr")
+            .unwrap();
+        assert_eq!(missing, None);
+    }
+
+    #[test]
+    fn test_imported_key_count() {
+        let db = test_db();
+        assert_eq!(db.get_imported_key_count().unwrap(), 0);
+        db.store_imported_transparent_key("t1Addr1", &[0; 48])
+            .unwrap();
+        db.store_imported_transparent_key("t1Addr2", &[1; 48])
+            .unwrap();
+        assert_eq!(db.get_imported_key_count().unwrap(), 2);
     }
 }

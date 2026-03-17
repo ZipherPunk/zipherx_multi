@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS sapling_roots (
     root_reversed BLOB NOT NULL
 )";
 
+/// Create the imported transparent keys table (WIF import storage).
+pub const CREATE_IMPORTED_TRANSPARENT_KEYS_TABLE: &str = "
+CREATE TABLE IF NOT EXISTS imported_transparent_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    address TEXT NOT NULL UNIQUE,
+    encrypted_secret_key BLOB NOT NULL,
+    label TEXT,
+    imported_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+)";
+
 /// Create indexes for fast lookups.
 pub const CREATE_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_notes_nullifier ON notes(nullifier)",
@@ -140,6 +150,7 @@ pub fn all_create_statements() -> Vec<&'static str> {
         CREATE_DELTA_MANIFEST_TABLE,
         CREATE_SAPLING_ROOTS_TABLE,
         CREATE_TRANSPARENT_UTXOS_TABLE,
+        CREATE_IMPORTED_TRANSPARENT_KEYS_TABLE,
     ];
     stmts.extend_from_slice(CREATE_INDEXES);
     stmts
