@@ -141,6 +141,17 @@ namespace zipherx {
         SendProgressCallback callback
     );
 
+    [Throws=WalletError]
+    void send_transparent_with_progress(
+        string to_address,
+        u64 amount,
+        u64 fee,
+        string? memo,
+        sequence<u8> sk_bytes,
+        sequence<u8> seed,
+        SendProgressCallback callback
+    );
+
     // ==================================================================
     // Repair (Phase 9)
     // ==================================================================
@@ -204,6 +215,42 @@ namespace zipherx {
     // Platform Storage (Phase 9)
     // ==================================================================
     void set_platform_storage(PlatformStorageCallback storage);
+
+    // ==================================================================
+    // Transparent Addresses (t-addresses)
+    // ==================================================================
+    [Throws=WalletError]
+    string derive_transparent_address(sequence<u8> seed, u32 account_index, u32 child_index);
+
+    [Throws=WalletError]
+    string derive_transparent_change_address(sequence<u8> seed, u32 account_index, u32 child_index);
+
+    /// Export transparent private key in WIF format (for import into other wallets).
+    [Throws=WalletError]
+    string export_transparent_wif(sequence<u8> seed, u32 account_index, u32 child_index);
+
+    boolean validate_transparent_address(string address);
+
+    [Throws=WalletError]
+    u64 get_transparent_balance();
+
+    [Throws=WalletError]
+    sequence<TransparentUtxoFFI> get_transparent_utxos();
+
+    // ==================================================================
+    // Funded Transparent Key Export & WIF Import
+    // ==================================================================
+    [Throws=WalletError]
+    sequence<FundedTransparentKeyFFI> export_funded_transparent_wifs();
+
+    [Throws=WalletError]
+    sequence<WifValidationResultFFI> validate_wif_keys(sequence<string> wifs);
+
+    [Throws=WalletError]
+    WifImportResultFFI import_wif_keys(sequence<sequence<u8>> encrypted_keys, sequence<string> addresses);
+
+    [Throws=WalletError]
+    u32 get_imported_key_count();
 };
 
 // ======================================================================
@@ -347,4 +394,46 @@ dictionary BannedPeerInfoFFI {
     string reason;
     boolean is_permanent;
     u64 remaining_seconds;
+};
+
+dictionary TransparentUtxoFFI {
+    string txid;
+    u32 output_index;
+    string address;
+    u64 value;
+    u64 height;
+    boolean is_change;
+};
+
+// ======================================================================
+// Data Types — Funded Transparent Key Export & WIF Import
+// ======================================================================
+
+dictionary FundedTransparentKeyFFI {
+    string address;
+    string wif;
+    u64 balance;
+    boolean is_change;
+    boolean is_imported;
+};
+
+dictionary WifValidationResultFFI {
+    boolean valid;
+    string address;
+    string error_message;
+};
+
+dictionary WifImportEntryFFI {
+    string address;
+};
+
+dictionary WifImportErrorFFI {
+    string address;
+    string error_message;
+};
+
+dictionary WifImportResultFFI {
+    sequence<WifImportEntryFFI> imported;
+    sequence<WifImportErrorFFI> errors;
+    sequence<string> duplicates;
 };

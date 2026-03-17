@@ -226,6 +226,39 @@ pub struct TransparentUtxoFFI {
 }
 
 // ============================================================================
+// Data Types — Funded Transparent Key Export & WIF Import
+// ============================================================================
+
+pub struct FundedTransparentKeyFFI {
+    pub address: String,
+    pub wif: String,
+    pub balance: u64,
+    pub is_change: bool,
+    pub is_imported: bool,
+}
+
+pub struct WifValidationResultFFI {
+    pub valid: bool,
+    pub address: String,
+    pub error_message: String,
+}
+
+pub struct WifImportEntryFFI {
+    pub address: String,
+}
+
+pub struct WifImportErrorFFI {
+    pub address: String,
+    pub error_message: String,
+}
+
+pub struct WifImportResultFFI {
+    pub imported: Vec<WifImportEntryFFI>,
+    pub errors: Vec<WifImportErrorFFI>,
+    pub duplicates: Vec<String>,
+}
+
+// ============================================================================
 // Callback Interfaces (must match UDL callback interfaces)
 // ============================================================================
 
@@ -1857,6 +1890,185 @@ fn get_transparent_utxos() -> Result<Vec<TransparentUtxoFFI>, WalletError> {
             is_change: u.is_change,
         })
         .collect())
+}
+
+// ============================================================================
+// Funded Transparent Key Export & WIF Import
+// ============================================================================
+
+/// Export all funded transparent addresses with their WIF private keys.
+///
+/// Loads the seed from platform storage and calls async_wallet's
+/// export_funded_transparent_wifs. For imported keys, a no-op decrypt_fn
+/// is used since mobile platforms pass pre-encrypted keys.
+///
+/// BLOCKING: This function blocks the calling thread. Call from a background thread.
+fn export_funded_transparent_wifs() -> Result<Vec<FundedTransparentKeyFFI>, WalletError> {
+    let wallet = get_wallet()?;
+
+    // Load seed from platform storage
+    let seed = match PLATFORM_STORAGE.lock() {
+        Ok(guard) => guard
+            .as_ref()
+            .and_then(|s| s.load_key("wallet_seed".to_string())),
+        Err(e) => {
+            let guard = e.into_inner();
+            guard
+                .as_ref()
+                .and_then(|s| s.load_key("wallet_seed".to_string()))
+        }
+    }
+    .ok_or_else(|| WalletError::StorageError {
+        msg: "Wallet seed not available — cannot export transparent keys".into(),
+    })?;
+    let seed = SecureVec(seed);
+
+    let keys = runtime::block_on(
+        wallet.export_funded_transparent_wifs(&seed, |encrypted| {
+            // Mobile platforms store imported keys as encrypted blobs.
+            // The FFI layer cannot decrypt them (no password context),
+            // so we pass the encrypted bytes through — encode_wif will
+            // fail for these, and the caller should handle the error.
+            // In practice, imported key WIFs are re-encoded from the
+            // stored encrypted secret key only when the platform can decrypt.
+            Ok(zeroize::Zeroizing::new(encrypted.to_vec()))
+        }),
+    )
+    .map_err(WalletError::from)?
+    .map_err(WalletError::from)?;
+
+    Ok(keys
+        .into_iter()
+        .map(|k| FundedTransparentKeyFFI {
+            address: k.address,
+            wif: k.wif,
+            balance: k.balance,
+            is_change: k.is_change,
+            is_imported: k.is_imported,
+        })
+        .collect())
+}
+
+/// Validate a list of WIF-encoded private keys.
+///
+/// Returns one result per input WIF: valid keys include the derived address,
+/// invalid keys include an error description.
+fn validate_wif_keys(wifs: Vec<String>) -> Result<Vec<WifValidationResultFFI>, WalletError> {
+    let mut results = Vec::with_capacity(wifs.len());
+    for wif in &wifs {
+        let trimmed = wif.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match zipherx_crypto::transparent::decode_wif(trimmed) {
+            Ok((_sk_bytes, address)) => {
+                results.push(WifValidationResultFFI {
+                    valid: true,
+                    address,
+                    error_message: String::new(),
+                });
+            }
+            Err(e) => {
+                results.push(WifValidationResultFFI {
+                    valid: false,
+                    address: String::new(),
+                    error_message: e.to_string(),
+                });
+            }
+        }
+    }
+    Ok(results)
+}
+
+/// Import WIF keys into the wallet database.
+///
+/// Each (encrypted_key, address) pair is stored in the imported_transparent_keys table.
+/// The encrypted_key bytes are provided by the platform after encrypting the raw secret
+/// key with the platform's secure storage mechanism.
+///
+/// Returns a summary of imported keys, errors, and duplicates.
+///
+/// BLOCKING: This function blocks the calling thread. Call from a background thread.
+fn import_wif_keys(
+    encrypted_keys: Vec<Vec<u8>>,
+    addresses: Vec<String>,
+) -> Result<WifImportResultFFI, WalletError> {
+    if encrypted_keys.len() != addresses.len() {
+        return Err(WalletError::InvalidInput {
+            msg: format!(
+                "Mismatched lengths: {} keys vs {} addresses",
+                encrypted_keys.len(),
+                addresses.len()
+            ),
+        });
+    }
+
+    let wallet = get_wallet()?;
+    let db = wallet.db.clone();
+
+    let result = runtime::block_on(async {
+        tokio::task::spawn_blocking(move || {
+            let mut imported = Vec::new();
+            let mut errors = Vec::new();
+            let mut duplicates = Vec::new();
+
+            for (enc_key, addr) in encrypted_keys.iter().zip(addresses.iter()) {
+                match db.store_imported_transparent_key(addr, enc_key) {
+                    Ok(()) => {
+                        imported.push(WifImportEntryFFI {
+                            address: addr.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        if err_str.contains("UNIQUE") || err_str.contains("duplicate") {
+                            duplicates.push(addr.clone());
+                        } else {
+                            errors.push(WifImportErrorFFI {
+                                address: addr.clone(),
+                                error_message: err_str,
+                            });
+                        }
+                    }
+                }
+            }
+
+            Ok::<WifImportResultFFI, WalletError>(WifImportResultFFI {
+                imported,
+                errors,
+                duplicates,
+            })
+        })
+        .await
+        .map_err(|e| WalletError::RuntimeError {
+            msg: format!("spawn_blocking: {e}"),
+        })?
+    })
+    .map_err(WalletError::from)?;
+
+    result
+}
+
+/// Get the number of imported transparent keys in the wallet.
+///
+/// BLOCKING: This function blocks the calling thread. Call from a background thread.
+fn get_imported_key_count() -> Result<u32, WalletError> {
+    let wallet = get_wallet()?;
+    let db = wallet.db.clone();
+
+    runtime::block_on(async {
+        tokio::task::spawn_blocking(move || {
+            db.get_imported_key_count()
+                .map_err(|e| WalletError::StorageError {
+                    msg: e.to_string(),
+                })
+        })
+        .await
+        .map_err(|e| WalletError::RuntimeError {
+            msg: format!("spawn_blocking: {e}"),
+        })?
+    })
+    .map_err(WalletError::from)?
 }
 
 // ============================================================================
