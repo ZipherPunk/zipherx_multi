@@ -669,6 +669,81 @@ impl AsyncWallet {
 
         result
     }
+
+    /// Export WIF private keys for all transparent addresses that have unspent funds.
+    ///
+    /// For seed-derived addresses, the WIF is derived from the seed.
+    /// For imported addresses, the encrypted secret key is decrypted via `decrypt_fn`.
+    /// Returns a list of funded addresses with their WIF keys.
+    pub async fn export_funded_transparent_wifs(
+        &self,
+        seed: &[u8],
+        decrypt_fn: impl Fn(&[u8]) -> Result<Zeroizing<Vec<u8>>, String> + Send + 'static,
+    ) -> Result<Vec<FundedTransparentKey>, CoreError> {
+        let db = self.db.clone();
+        let seed = seed.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let funded = db
+                .get_funded_transparent_addresses()
+                .map_err(|e| CoreError::Storage(e.to_string()))?;
+            let mut keys = Vec::new();
+            for f in funded {
+                let wif = if f.is_imported {
+                    let encrypted_sk =
+                        db.get_imported_transparent_secret(&f.address)
+                            .map_err(|e| CoreError::Storage(e.to_string()))?
+                            .ok_or_else(|| {
+                                CoreError::Crypto(format!(
+                                    "Imported key not found: {}",
+                                    f.address
+                                ))
+                            })?;
+                    let sk_bytes = decrypt_fn(&encrypted_sk).map_err(|e| {
+                        CoreError::Crypto(format!("Decrypt failed: {e}"))
+                    })?;
+                    let wif_str =
+                        zipherx_crypto::transparent::encode_wif(&sk_bytes)
+                            .map_err(|e| CoreError::Crypto(e.to_string()))?;
+                    (*wif_str).clone()
+                } else {
+                    let wif_str =
+                        zipherx_crypto::transparent::export_transparent_wif(
+                            &seed,
+                            0,
+                            f.child_index,
+                            f.is_change,
+                        )
+                        .map_err(|e| CoreError::Crypto(e.to_string()))?;
+                    (*wif_str).clone()
+                };
+                keys.push(FundedTransparentKey {
+                    address: f.address,
+                    wif,
+                    balance: f.balance,
+                    is_change: f.is_change,
+                    is_imported: f.is_imported,
+                });
+            }
+            Ok(keys)
+        })
+        .await
+        .map_err(|e| CoreError::RuntimeError(format!("spawn_blocking: {e}")))?
+    }
+}
+
+/// A funded transparent address with its WIF private key.
+#[derive(Debug, Clone)]
+pub struct FundedTransparentKey {
+    /// Encoded transparent address (t1...).
+    pub address: String,
+    /// WIF-encoded private key. Caller should zeroize after use.
+    pub wif: String,
+    /// Total unspent balance in zatoshis.
+    pub balance: u64,
+    /// Whether this is a change address (internal derivation chain).
+    pub is_change: bool,
+    /// Whether this address was imported via WIF rather than derived.
+    pub is_imported: bool,
 }
 
 // ============================================================================
