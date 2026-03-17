@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 use zipherx_platform::{PlatformInfo, SecureStorage};
 
 use crate::effects::confetti::Particle;
@@ -143,7 +143,7 @@ pub struct ZipherXApp {
     pub setup_error: Option<String>,
 
     // -- wallet --
-    pub sk_bytes: Option<Vec<u8>>,
+    pub sk_bytes: Option<Zeroizing<Vec<u8>>>,
     pub address: Option<String>,
     pub balance: BalanceDisplay,
 

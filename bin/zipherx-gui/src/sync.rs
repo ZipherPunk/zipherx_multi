@@ -112,14 +112,14 @@ pub struct SendResultInfo {
 /// Commands the UI can send to the sync thread.
 pub enum SyncCommand {
     StartSync {
-        sk_bytes: Vec<u8>,
+        sk_bytes: Zeroizing<Vec<u8>>,
     },
     Send {
         to_address: String,
         amount: u64,
         fee: u64,
         memo: Option<String>,
-        sk_bytes: Vec<u8>,
+        sk_bytes: Zeroizing<Vec<u8>>,
     },
     TransparentSend {
         to_address: String,
@@ -388,9 +388,9 @@ fn wallet_thread_main(
 
         match cmd {
             Some(SyncCommand::StartSync { mut sk_bytes }) => {
-                // Cache sk_bytes for autonomous background sync (I3: Zeroizing wrapper)
+                // Cache sk_bytes for autonomous background sync
                 if cached_sk.is_none() {
-                    cached_sk = Some(Zeroizing::new(sk_bytes.clone()));
+                    cached_sk = Some(sk_bytes.clone());
                 }
                 // Cache seed for transparent address scanning (I3: Zeroizing wrapper)
                 if cached_seed.is_none() {

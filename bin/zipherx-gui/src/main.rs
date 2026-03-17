@@ -13,7 +13,7 @@ mod views;
 mod widgets;
 
 use app::{Phase, Tab, ZipherXApp};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 fn load_window_icon() -> Option<egui::IconData> {
     let bytes = include_bytes!("../../../assets/zipherpunk_logo.png");
@@ -544,7 +544,7 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         if should_resync {
             if let Ok(mut s) = state.lock() {
                 s.command = Some(sync::SyncCommand::StartSync {
-                    sk_bytes: app.sk_bytes.as_ref().cloned().unwrap_or_default(),
+                    sk_bytes: app.sk_bytes.clone().unwrap_or_else(|| Zeroizing::new(Vec::new())),
                 });
             }
             app.is_syncing = true;
@@ -574,7 +574,7 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         if should_resync {
             if let Ok(mut s) = state.lock() {
                 s.command = Some(sync::SyncCommand::StartSync {
-                    sk_bytes: app.sk_bytes.as_ref().cloned().unwrap_or_default(),
+                    sk_bytes: app.sk_bytes.clone().unwrap_or_else(|| Zeroizing::new(Vec::new())),
                 });
             }
             app.is_syncing = true;

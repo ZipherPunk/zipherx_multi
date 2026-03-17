@@ -1,6 +1,6 @@
 //! Unlock screen — password entry, create/restore/import wallet.
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 use zipherx_platform::SecureStorage;
 
 use crate::app::{Phase, SetupMode, ZipherXApp};
@@ -414,7 +414,7 @@ fn handle_unlock(app: &mut ZipherXApp) {
                     app.seed_migration_mode = "banner".to_string();
                 }
             }
-            app.sk_bytes = Some(sk);
+            app.sk_bytes = Some(Zeroizing::new(sk));
             app.password_error = None;
             app.password_input.zeroize();
             app.password_confirm.zeroize();
@@ -514,7 +514,7 @@ fn handle_password_then_setup(app: &mut ZipherXApp, mode: SetupMode) {
                                     let _ = app.storage.store_key("wallet_seed", &seed);
                                     // Store mnemonic for future export
                                     let _ = app.storage.store_key("wallet_mnemonic", phrase.as_bytes());
-                                    app.sk_bytes = Some(sk.to_vec());
+                                    app.sk_bytes = Some(Zeroizing::new(sk.to_vec()));
                                     app.mnemonic_words =
                                         phrase.split_whitespace().map(|w| w.to_string()).collect();
                                     app.setup_mode = Some(SetupMode::Create);
@@ -570,7 +570,7 @@ fn handle_restore(app: &mut ZipherXApp) {
                 let _ = app.storage.store_key("wallet_seed", &seed);
                 // Store mnemonic for future export
                 let _ = app.storage.store_key("wallet_mnemonic", phrase.as_bytes());
-                app.sk_bytes = Some(sk.to_vec());
+                app.sk_bytes = Some(Zeroizing::new(sk.to_vec()));
                 app.mnemonic_input.zeroize();
                 finalize_wallet(app);
             }
@@ -603,7 +603,7 @@ fn handle_import(app: &mut ZipherXApp) {
                 app.setup_error = Some(format!("Failed to store key: {}", e));
                 return;
             }
-            app.sk_bytes = Some(sk);
+            app.sk_bytes = Some(Zeroizing::new(sk));
             app.import_key_input.zeroize();
             finalize_wallet(app);
         }
@@ -714,7 +714,7 @@ fn handle_import_seed(app: &mut ZipherXApp) {
                     // Store seed for transparent address derivation
                     let _ = app.storage.store_key("wallet_seed", &seed);
                     // NOTE: No mnemonic stored — seed import has no BIP39 phrase
-                    app.sk_bytes = Some(sk.to_vec());
+                    app.sk_bytes = Some(Zeroizing::new(sk.to_vec()));
                     app.seed_import_input.zeroize();
                     finalize_wallet(app);
                 }
