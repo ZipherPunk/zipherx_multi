@@ -825,6 +825,27 @@ fn show_security_section(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Co
     if app.show_wif_import {
         show_wif_import(app, ui, ctx);
     }
+
+    // Show import status message
+    if let Some((ref msg, is_success)) = app.wif_import_status {
+        ui.add_space(5.0);
+        let color = if is_success { theme::GREEN } else { theme::RED };
+        ui.label(
+            egui::RichText::new(msg)
+                .font(theme::mono(10.0))
+                .color(color),
+        );
+        if app.wif_rescan_in_progress {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Sync progress: {}%",
+                    (app.overall_progress * 100.0) as u32
+                ))
+                .font(theme::mono(9.0))
+                .color(theme::MUTED),
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2176,6 +2197,16 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                         }
                         if imported > 0 {
                             app.imported_key_count += imported;
+                            app.wif_import_status = Some((
+                                format!("{} key(s) imported! Rescanning blockchain for funds...", imported),
+                                true,
+                            ));
+                            app.wif_rescan_in_progress = true;
+                        } else {
+                            app.wif_import_status = Some((
+                                "No valid keys to import.".to_string(),
+                                false,
+                            ));
                         }
                         app.wif_import_text.zeroize();
                         app.wif_import_results = None;

@@ -405,9 +405,14 @@ fn handle_unlock(app: &mut ZipherXApp) {
                 }
                 app.needs_seed_migration = false;
             } else {
-                // SK exists but no seed — user needs to migrate for transparent support
-                app.needs_seed_migration = true;
-                app.seed_migration_mode = "banner".to_string();
+                // SK exists but no seed — check if user already dismissed the migration
+                let dismissed = app.data_dir.join(".migration_dismissed").exists();
+                if dismissed {
+                    app.needs_seed_migration = false;
+                } else {
+                    app.needs_seed_migration = true;
+                    app.seed_migration_mode = "banner".to_string();
+                }
             }
             app.sk_bytes = Some(sk);
             app.password_error = None;

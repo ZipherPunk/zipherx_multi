@@ -216,6 +216,17 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         .color(theme::MUTED),
                     );
                 }
+                // WIF rescan progress
+                if app.wif_rescan_in_progress {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "\u{21BB} Scanning blockchain for imported addresses... {}%",
+                            (app.overall_progress * 100.0) as u32
+                        ))
+                        .font(theme::mono(9.0))
+                        .color(theme::CYAN),
+                    );
+                }
             }
         }
 
@@ -963,6 +974,20 @@ fn show_seed_migration(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                         ui.add_space(8.0);
                         if ui
                             .button(
+                                egui::RichText::new("IMPORT WIF")
+                                    .font(theme::mono(11.0))
+                                    .color(egui::Color32::BLACK),
+                            )
+                            .clicked()
+                        {
+                            app.needs_seed_migration = false;
+                            let _ = std::fs::write(app.data_dir.join(".migration_dismissed"), b"1");
+                            app.show_wif_import = true;
+                            app.tab = crate::app::Tab::Settings;
+                        }
+                        ui.add_space(8.0);
+                        if ui
+                            .button(
                                 egui::RichText::new("SKIP")
                                     .font(theme::mono(10.0))
                                     .color(theme::MUTED),
@@ -970,6 +995,7 @@ fn show_seed_migration(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                             .clicked()
                         {
                             app.needs_seed_migration = false;
+                            let _ = std::fs::write(app.data_dir.join(".migration_dismissed"), b"1");
                         }
                     });
                 }

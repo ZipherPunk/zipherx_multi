@@ -317,6 +317,14 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
             app.sync_tasks.clear();
             app.overall_progress = 0.0;
             app.sync_start_time = None;
+            // Clear WIF rescan indicator
+            if app.wif_rescan_in_progress {
+                app.wif_rescan_in_progress = false;
+                app.wif_import_status = Some((
+                    "Import complete! Transparent funds detected.".to_string(),
+                    true,
+                ));
+            }
         }
 
         if let Some(ref err) = s.sync_error {
