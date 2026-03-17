@@ -89,7 +89,7 @@ pub struct SharedState {
     pub boost_failed_continue: Option<bool>,
 
     // -- WIF import: raw decoded keys queued by UI for DB storage --
-    pub pending_wif_imports: Vec<(Vec<u8>, String)>, // (raw_secret_key, address)
+    pub pending_wif_imports: Vec<(Zeroizing<Vec<u8>>, String)>, // (raw_secret_key, address)
 
     // -- imported key count + funded transparent addresses for export --
     pub imported_key_count: u32,
@@ -328,10 +328,11 @@ fn wallet_thread_main(
                     // Encrypt the raw secret key using the storage, then store in DB
                     match storage.store_key(&format!("imported_wif_{}", address), raw_sk) {
                         Ok(()) => {
-                            // Also store in the imported_transparent_keys table
-                            // Use the raw bytes as the "encrypted" blob (storage.store_key
-                            // already encrypted to file; for DB we store raw and rely on
-                            // DB-level encryption or re-encrypt at load time).
+                            // Also store in the imported_transparent_keys table.
+                            // SECURITY: The DB is encrypted at rest by SQLCipher
+                            // (key derived from user password via Argon2id).
+                            // storage.store_key() above also encrypts a copy to file
+                            // as defense-in-depth. Both layers require the user password.
                             let _ = runtime.block_on(async {
                                 let db_c = db.clone();
                                 let addr = address.clone();
@@ -351,9 +352,11 @@ fn wallet_thread_main(
                         }
                     }
                 }
-                // Zeroize raw keys
+                // Zeroize raw keys using write_volatile to prevent compiler elision
                 for (mut sk, _) in pending {
-                    sk.iter_mut().for_each(|b| *b = 0);
+                    for b in sk.iter_mut() {
+                        unsafe { std::ptr::write_volatile(b, 0); }
+                    }
                 }
 
                 // Trigger full rescan so the scanner picks up UTXOs for the imported addresses.

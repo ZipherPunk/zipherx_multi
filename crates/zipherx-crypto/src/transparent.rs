@@ -164,6 +164,11 @@ pub fn decode_wif(wif: &str) -> Result<(Zeroizing<Vec<u8>>, String), CryptoError
     if decoded.len() < 6 {
         return Err(CryptoError::InvalidData("WIF too short".into()));
     }
+    // Valid compressed WIF is exactly 38 bytes (1 version + 32 key + 1 flag + 4 checksum).
+    // Reject anything longer to prevent oversized input from reaching key derivation.
+    if decoded.len() > 38 {
+        return Err(CryptoError::InvalidData("WIF too long".into()));
+    }
 
     // Verify checksum (last 4 bytes)
     let (payload, checksum) = decoded.split_at(decoded.len() - 4);

@@ -1,6 +1,6 @@
 //! Settings view — sync, network, Tor, peers, maintenance, security, danger zone.
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::app::ZipherXApp;
 use crate::sync::SyncCommand;
@@ -804,7 +804,7 @@ fn show_security_section(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Co
     ui.add_space(10.0);
     ui.separator();
     ui.add_space(5.0);
-    if !app.show_wif_import {
+    if !app.show_wif_import && !app.show_wif_import_confirm {
         if ui
             .add(egui::Button::new(
                 egui::RichText::new("[ IMPORT WIF KEYS ]")
@@ -813,13 +813,79 @@ fn show_security_section(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Co
             ))
             .clicked()
         {
-            app.show_wif_import = true;
+            app.show_wif_import_confirm = true;
         }
         ui.label(
             egui::RichText::new("Import transparent private keys (WIF format).")
                 .font(theme::mono(10.0))
                 .color(theme::MUTED),
         );
+    }
+
+    // Password confirmation gate before WIF import
+    if app.show_wif_import_confirm && !app.show_wif_import {
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(25, 20, 10))
+            .inner_margin(12.0)
+            .rounding(4.0)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("ENTER PASSWORD TO IMPORT KEYS")
+                        .font(theme::mono(12.0))
+                        .color(theme::YELLOW),
+                );
+                ui.add_space(5.0);
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut app.wif_import_password)
+                        .password(true)
+                        .hint_text("Password")
+                        .font(theme::mono(12.0))
+                        .desired_width(350.0),
+                );
+                ui.add_space(5.0);
+                let enter =
+                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("[ CONFIRM ]")
+                                .font(theme::mono(12.0))
+                                .color(theme::GREEN),
+                        ))
+                        .clicked()
+                        || enter
+                    {
+                        if app.storage.verify_password(&app.wif_import_password) {
+                            app.show_wif_import = true;
+                            app.show_wif_import_confirm = false;
+                            app.password_error = None;
+                        } else {
+                            app.password_error = Some("Wrong password".into());
+                        }
+                        app.wif_import_password.zeroize();
+                    }
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new("[ CANCEL ]")
+                                .font(theme::mono(12.0))
+                                .color(theme::MUTED),
+                        ))
+                        .clicked()
+                    {
+                        app.wif_import_password.zeroize();
+                        app.show_wif_import_confirm = false;
+                    }
+                });
+                if let Some(ref err) = app.password_error {
+                    if err != "CONFIRM_DELETE" {
+                        ui.label(
+                            egui::RichText::new(err)
+                                .font(theme::mono(10.0))
+                                .color(theme::RED),
+                        );
+                    }
+                }
+            });
     }
 
     if app.show_wif_import {
@@ -2035,7 +2101,8 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                     .font(theme::mono(10.0))
                     .desired_rows(4)
                     .desired_width(f32::INFINITY)
-                    .hint_text("5K... or L... or K... (one per line)"),
+                    .hint_text("5K... or L... or K... (one per line)")
+                    .char_limit(10_000),
             );
 
             ui.add_space(6.0);
@@ -2189,7 +2256,7 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                                 // Queue raw key + address for the wallet thread to encrypt & store
                                 if let Some(ref state) = app.shared_state {
                                     if let Ok(mut s) = state.lock() {
-                                        s.pending_wif_imports.push((sk_bytes.to_vec(), address));
+                                        s.pending_wif_imports.push((Zeroizing::new(sk_bytes.to_vec()), address));
                                     }
                                 }
                                 imported += 1;

@@ -1902,6 +1902,12 @@ fn get_transparent_utxos() -> Result<Vec<TransparentUtxoFFI>, WalletError> {
 /// export_funded_transparent_wifs. For imported keys, a no-op decrypt_fn
 /// is used since mobile platforms pass pre-encrypted keys.
 ///
+/// SECURITY: This function returns raw private keys in WIF format.
+/// Callers MUST enforce biometric or password authentication before
+/// invoking this function. The FFI layer does not gate access —
+/// authentication is the caller's responsibility (Android: biometric
+/// prompt in WalletViewModel, iOS: FaceID/TouchID in SettingsView).
+///
 /// BLOCKING: This function blocks the calling thread. Call from a background thread.
 fn export_funded_transparent_wifs() -> Result<Vec<FundedTransparentKeyFFI>, WalletError> {
     let wallet = get_wallet()?;
@@ -1943,7 +1949,7 @@ fn export_funded_transparent_wifs() -> Result<Vec<FundedTransparentKeyFFI>, Wall
         .into_iter()
         .map(|k| FundedTransparentKeyFFI {
             address: k.address,
-            wif: k.wif,
+            wif: (*k.wif).clone(), // Extract from Zeroizing; original zeroed on drop
             balance: k.balance,
             is_change: k.is_change,
             is_imported: k.is_imported,
@@ -1956,6 +1962,11 @@ fn export_funded_transparent_wifs() -> Result<Vec<FundedTransparentKeyFFI>, Wall
 /// Returns one result per input WIF: valid keys include the derived address,
 /// invalid keys include an error description.
 fn validate_wif_keys(wifs: Vec<String>) -> Result<Vec<WifValidationResultFFI>, WalletError> {
+    if wifs.len() > 100 {
+        return Err(WalletError::InvalidInput {
+            msg: "Maximum 100 WIF keys per import".into(),
+        });
+    }
     let mut results = Vec::with_capacity(wifs.len());
     for wif in &wifs {
         let trimmed = wif.trim();

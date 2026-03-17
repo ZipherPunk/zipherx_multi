@@ -271,6 +271,8 @@ pub struct ZipherXApp {
     pub seed_export_auto_dismiss: Option<Instant>,
 
     // -- WIF import --
+    pub show_wif_import_confirm: bool,
+    pub wif_import_password: String,
     pub show_wif_import: bool,
     pub wif_import_text: String,
     /// WIF import validation results: (valid, address_or_error, wif_prefix)
@@ -482,6 +484,8 @@ impl Default for ZipherXApp {
             export_seed_display: String::new(),
             seed_export_auto_dismiss: None,
 
+            show_wif_import_confirm: false,
+            wif_import_password: String::new(),
             show_wif_import: false,
             wif_import_text: String::new(),
             wif_import_results: None,

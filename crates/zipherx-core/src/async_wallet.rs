@@ -721,7 +721,7 @@ impl AsyncWallet {
                     let wif_str =
                         zipherx_crypto::transparent::encode_wif(&sk_bytes)
                             .map_err(|e| CoreError::Crypto(e.to_string()))?;
-                    (*wif_str).clone()
+                    Zeroizing::new((*wif_str).clone())
                 } else {
                     let wif_str =
                         zipherx_crypto::transparent::export_transparent_wif(
@@ -731,7 +731,7 @@ impl AsyncWallet {
                             f.is_change,
                         )
                         .map_err(|e| CoreError::Crypto(e.to_string()))?;
-                    (*wif_str).clone()
+                    Zeroizing::new((*wif_str).clone())
                 };
                 keys.push(FundedTransparentKey {
                     address: f.address,
@@ -749,12 +749,15 @@ impl AsyncWallet {
 }
 
 /// A funded transparent address with its WIF private key.
-#[derive(Debug, Clone)]
+///
+/// Does not implement `Clone` to avoid accidental copies of the WIF secret.
+/// The `wif` field is wrapped in `Zeroizing` for automatic secure zeroing on drop.
+#[derive(Debug)]
 pub struct FundedTransparentKey {
     /// Encoded transparent address (t1...).
     pub address: String,
-    /// WIF-encoded private key. Caller should zeroize after use.
-    pub wif: String,
+    /// WIF-encoded private key. Automatically zeroed on drop.
+    pub wif: Zeroizing<String>,
     /// Total unspent balance in zatoshis.
     pub balance: u64,
     /// Whether this is a change address (internal derivation chain).
