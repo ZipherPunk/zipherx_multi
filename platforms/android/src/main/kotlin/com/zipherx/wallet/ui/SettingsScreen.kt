@@ -106,9 +106,16 @@ fun SettingsScreen(
 
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var showExportKeyDialog by remember { mutableStateOf(false) }
-    var exportedKey by remember { mutableStateOf<CharArray?>(null) }
+    var exportedShieldedKey by remember { mutableStateOf<CharArray?>(null) }
+    var exportedTransparentKey by remember { mutableStateOf<CharArray?>(null) }
+    var showRecoveryPhraseDialog by remember { mutableStateOf(false) }
+    var recoveryPhraseChars by remember { mutableStateOf<CharArray?>(null) }
     var showSecurityAuditDialog by remember { mutableStateOf(false) }
     var showRescanConfirmDialog by remember { mutableStateOf(false) }
+    // WIF import state
+    var showWifImportDialog by remember { mutableStateOf(false) }
+    var wifImportText by remember { mutableStateOf("") }
+    var wifImportResults by remember { mutableStateOf<List<Triple<Boolean, String, String>>?>(null) }
 
     // Peer management state
     var peerList by remember { mutableStateOf<List<ConnectedPeerInfo>>(emptyList()) }
@@ -777,8 +784,9 @@ fun SettingsScreen(
                             checked = isAuthRequired,
                             onCheckedChange = { newValue ->
                                 scope.launch {
-                                    // Always require biometric to toggle this setting
-                                    val authed = viewModel.authenticateBiometric(
+                                    // Require authentication to toggle — falls back to
+                                    // PIN/pattern if no biometrics enrolled
+                                    val authed = viewModel.authenticateStrict(
                                         if (newValue) "Authenticate to enable biometric lock"
                                         else "Authenticate to disable biometric lock"
                                     )
@@ -831,9 +839,9 @@ fun SettingsScreen(
                     HorizontalDivider(color = ZColors.primaryDim.copy(alpha = 0.3f))
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Export Spending Key
+                    // Export Private Keys
                     Text(
-                        text = "EXPORT SPENDING KEY",
+                        text = "EXPORT PRIVATE KEYS",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -842,23 +850,25 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Export your private spending key. Anyone with this key can spend your funds.",
+                        text = "Anyone with these keys can spend your funds. Keep them safe.",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
                         color = ZColors.primaryDim,
                     )
                     Spacer(modifier = Modifier.height(12.dp))
+
                     OutlinedButton(
                         onClick = {
                             scope.launch {
-                                val authed = viewModel.authenticateBiometricOrSkip(
-                                    "Authenticate to export spending key"
+                                val authed = viewModel.authenticateStrict(
+                                    "Authenticate to export private keys"
                                 )
                                 if (authed) {
-                                    exportedKey = viewModel.getSpendingKeyHex()
-                                    showExportKeyDialog = exportedKey != null
-                                    if (exportedKey == null) {
-                                        snackbarHostState.showSnackbar("No spending key found")
+                                    exportedShieldedKey = viewModel.getSpendingKeyHex()
+                                    exportedTransparentKey = viewModel.getTransparentKeyWif()
+                                    showExportKeyDialog = exportedShieldedKey != null
+                                    if (exportedShieldedKey == null) {
+                                        snackbarHostState.showSnackbar("No private key found")
                                     }
                                 }
                             }
@@ -870,7 +880,60 @@ fun SettingsScreen(
                         ),
                     ) {
                         Text(
-                            text = "EXPORT KEY",
+                            text = "EXPORT PRIVATE KEYS",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            letterSpacing = 1.sp,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = ZColors.primaryDim.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Export Recovery Phrase
+                    Text(
+                        text = "RECOVERY PHRASE (24 WORDS)",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ZColors.primary,
+                        letterSpacing = 1.sp,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Export your 24-word mnemonic recovery phrase. Not available for seed/key imports.",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = ZColors.primaryDim,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                val authed = viewModel.authenticateStrict(
+                                    "Authenticate to export recovery phrase"
+                                )
+                                if (authed) {
+                                    val phrase = viewModel.getRecoveryPhrase()
+                                    if (phrase != null) {
+                                        recoveryPhraseChars = phrase
+                                        showRecoveryPhraseDialog = true
+                                    } else {
+                                        snackbarHostState.showSnackbar("No recovery phrase stored (wallet imported from key/seed)")
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(2.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = ZColors.primary,
+                        ),
+                    ) {
+                        Text(
+                            text = "EXPORT RECOVERY PHRASE",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                             letterSpacing = 1.sp,
@@ -911,6 +974,44 @@ fun SettingsScreen(
                     ) {
                         Text(
                             text = "RUN AUDIT",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            letterSpacing = 1.sp,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = ZColors.primaryDim.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Import WIF Keys
+                    Text(
+                        text = "IMPORT TRANSPARENT KEYS",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = ZColors.primary,
+                        letterSpacing = 1.sp,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Import transparent private keys in WIF format. These are NOT covered by your recovery phrase.",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = ZColors.primaryDim,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = { showWifImportDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(2.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = ZColors.primary,
+                        ),
+                    ) {
+                        Text(
+                            text = "IMPORT WIF KEYS",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 11.sp,
                             letterSpacing = 1.sp,
@@ -1170,92 +1271,381 @@ fun SettingsScreen(
         // DIALOGS
         // ==================================================================
 
-        // Export Key Dialog (KD-5: exportedKey is CharArray, zeroed after use)
-        if (showExportKeyDialog && exportedKey != null) {
+        // Export Key Dialog — matches egui design: both keys in one dialog
+        if (showExportKeyDialog && exportedShieldedKey != null) {
             // KD-1: Auto-dismiss after 60 seconds to limit on-screen exposure
             LaunchedEffect(showExportKeyDialog) {
                 kotlinx.coroutines.delay(60_000)
-                exportedKey?.fill('\u0000')
-                exportedKey = null
+                exportedShieldedKey?.fill('\u0000')
+                exportedShieldedKey = null
+                exportedTransparentKey?.fill('\u0000')
+                exportedTransparentKey = null
                 showExportKeyDialog = false
             }
             AlertDialog(
                 onDismissRequest = {
                     showExportKeyDialog = false
-                    exportedKey?.fill('\u0000')
-                    exportedKey = null
+                    exportedShieldedKey?.fill('\u0000')
+                    exportedShieldedKey = null
+                    exportedTransparentKey?.fill('\u0000')
+                    exportedTransparentKey = null
                 },
-                containerColor = ZColors.surface,
+                containerColor = Color(0xFF1A0808),
                 shape = RoundedCornerShape(2.dp),
                 title = {
                     Text(
-                        text = "SPENDING KEY",
+                        text = "PRIVATE KEYS \u2014 KEEP SECRET",
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
+                        fontSize = 13.sp,
                         letterSpacing = 2.sp,
                         color = ZColors.error,
                     )
                 },
                 text = {
                     Column {
+                        // Shielded key section
                         Text(
-                            text = "WARNING: Anyone with this key can spend all your funds. Never share it.",
+                            text = "SHIELDED (z-address)",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
-                            color = ZColors.error,
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = String(exportedKey!!),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 9.sp,
-                            lineHeight = 14.sp,
+                            fontWeight = FontWeight.Bold,
                             color = ZColors.primary,
                         )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        exportedKey?.let { key ->
-                            val keyString = String(key)
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            val clipData = ClipData.newPlainText("spending_key", keyString)
-                            // Mark as sensitive so Android 13+ hides the content in clipboard previews
-                            if (Build.VERSION.SDK_INT >= 33) {
-                                clipData.description.extras = PersistableBundle().apply {
-                                    putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
-                                }
-                            }
-                            clipboard.setPrimaryClip(clipData)
-                            // KD-11: Use viewModel scope for auto-clear so it survives composable disposal
-                            viewModel.viewModelScope.launch {
-                                kotlinx.coroutines.delay(5_000)
-                                clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
-                            }
-                            // Zero the CharArray after copying to clipboard
-                            key.fill('\u0000')
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = String(exportedShieldedKey!!),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 8.sp,
+                            lineHeight = 12.sp,
+                            color = ZColors.warning,
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedButton(
+                            onClick = {
+                                copyToClipboardSecure(context, viewModel, "shielded_key", String(exportedShieldedKey!!))
+                                scope.launch { snackbarHostState.showSnackbar("Shielded key copied (auto-clears in 5s)") }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(0.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.primary),
+                        ) {
+                            Text("[ COPY SHIELDED KEY ]", fontFamily = FontFamily.Monospace, fontSize = 9.sp)
                         }
-                        showExportKeyDialog = false
-                        exportedKey = null
-                        scope.launch { snackbarHostState.showSnackbar("Key copied (auto-clears in 5s)") }
-                    }) {
-                        Text(
-                            text = "COPY & CLOSE",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = ZColors.primary,
-                        )
+
+                        // Transparent key section (if available)
+                        if (exportedTransparentKey != null) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "TRANSPARENT (t-address, WIF)",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZColors.warning,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = String(exportedTransparentKey!!),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 8.sp,
+                                lineHeight = 12.sp,
+                                color = ZColors.warning,
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    copyToClipboardSecure(context, viewModel, "transparent_key", String(exportedTransparentKey!!))
+                                    scope.launch { snackbarHostState.showSnackbar("Transparent key copied (auto-clears in 5s)") }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(0.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.warning),
+                            ) {
+                                Text("[ COPY TRANSPARENT KEY ]", fontFamily = FontFamily.Monospace, fontSize = 9.sp)
+                            }
+                        }
                     }
                 },
+                confirmButton = {},
                 dismissButton = {
                     TextButton(onClick = {
                         showExportKeyDialog = false
-                        exportedKey?.fill('\u0000')
-                        exportedKey = null
+                        exportedShieldedKey?.fill('\u0000')
+                        exportedShieldedKey = null
+                        exportedTransparentKey?.fill('\u0000')
+                        exportedTransparentKey = null
                     }) {
                         Text(
-                            text = "CLOSE",
+                            text = "[ DISMISS ]",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = ZColors.primaryDim,
+                        )
+                    }
+                },
+            )
+        }
+
+        // Recovery Phrase Dialog
+        if (showRecoveryPhraseDialog && recoveryPhraseChars != null) {
+            // Auto-dismiss after 60 seconds to limit on-screen exposure
+            LaunchedEffect(showRecoveryPhraseDialog) {
+                kotlinx.coroutines.delay(60_000)
+                recoveryPhraseChars?.fill('\u0000')
+                recoveryPhraseChars = null
+                showRecoveryPhraseDialog = false
+            }
+            AlertDialog(
+                onDismissRequest = {
+                    showRecoveryPhraseDialog = false
+                    recoveryPhraseChars?.fill('\u0000')
+                    recoveryPhraseChars = null
+                },
+                containerColor = Color(0xFF1A0808),
+                shape = RoundedCornerShape(2.dp),
+                title = {
+                    Text(
+                        text = "RECOVERY PHRASE (24 WORDS)",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        letterSpacing = 2.sp,
+                        color = ZColors.warning,
+                    )
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "WRITE THESE DOWN AND KEEP THEM SAFE!",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ZColors.error,
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        // Display words in a numbered grid
+                        val words = String(recoveryPhraseChars!!).split(" ")
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, ZColors.glow, RoundedCornerShape(2.dp))
+                                .padding(12.dp),
+                        ) {
+                            words.chunked(3).forEachIndexed { rowIdx, row ->
+                                Row(modifier = Modifier.fillMaxWidth()) {
+                                    row.forEachIndexed { colIdx, word ->
+                                        val num = rowIdx * 3 + colIdx + 1
+                                        Text(
+                                            text = "${num.toString().padStart(2)}. $word",
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = ZColors.primary,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = {
+                                copyToClipboardSecure(context, viewModel, "recovery_phrase", String(recoveryPhraseChars!!))
+                                scope.launch { snackbarHostState.showSnackbar("Recovery phrase copied (auto-clears in 5s)") }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(0.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.primary),
+                        ) {
+                            Text("[ COPY PHRASE ]", fontFamily = FontFamily.Monospace, fontSize = 9.sp)
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = {
+                        showRecoveryPhraseDialog = false
+                        recoveryPhraseChars?.fill('\u0000')
+                        recoveryPhraseChars = null
+                    }) {
+                        Text(
+                            text = "[ DISMISS ]",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = ZColors.primaryDim,
+                        )
+                    }
+                },
+            )
+        }
+
+        // WIF Import Dialog
+        if (showWifImportDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showWifImportDialog = false
+                    wifImportText = ""
+                    wifImportResults = null
+                },
+                containerColor = ZColors.surface,
+                shape = RoundedCornerShape(2.dp),
+                title = {
+                    Text(
+                        text = "IMPORT TRANSPARENT KEYS",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        letterSpacing = 2.sp,
+                        color = ZColors.primary,
+                    )
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "Paste WIF private keys (one per line):",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = ZColors.primaryDim,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = wifImportText,
+                            onValueChange = { wifImportText = it },
+                            modifier = Modifier.fillMaxWidth().height(120.dp),
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = ZColors.primary,
+                            ),
+                            placeholder = {
+                                Text(
+                                    "5K... or L... or K...",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    color = ZColors.primaryDim.copy(alpha = 0.5f),
+                                )
+                            },
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Validate button
+                        OutlinedButton(
+                            onClick = {
+                                val lines = wifImportText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                                val results = mutableListOf<Triple<Boolean, String, String>>()
+                                for (line in lines) {
+                                    try {
+                                        val validationResults = uniffi.zipherx.validateWifKeys(listOf(line))
+                                        if (validationResults.isNotEmpty() && validationResults[0].valid) {
+                                            val prefix = if (line.length > 8) "${line.substring(0, 8)}..." else line
+                                            results.add(Triple(true, validationResults[0].address, prefix))
+                                        } else {
+                                            val prefix = if (line.length > 8) "${line.substring(0, 8)}..." else line
+                                            val errMsg = validationResults.firstOrNull()?.errorMessage ?: "Invalid WIF"
+                                            results.add(Triple(false, errMsg, prefix))
+                                        }
+                                    } catch (e: Exception) {
+                                        val prefix = if (line.length > 8) "${line.substring(0, 8)}..." else line
+                                        results.add(Triple(false, e.message ?: "Error", prefix))
+                                    }
+                                }
+                                wifImportResults = results
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(2.dp),
+                        ) {
+                            Text("VALIDATE", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = ZColors.primary)
+                        }
+
+                        // Results
+                        val results = wifImportResults
+                        if (results != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            val validCount = results.count { it.first }
+                            for ((valid, addrOrErr, prefix) in results) {
+                                Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                                    Text(
+                                        text = if (valid) "[OK]" else "[X]",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        color = if (valid) ZColors.success else ZColors.error,
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "$prefix -> $addrOrErr",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        color = if (valid) ZColors.primary else ZColors.error,
+                                        maxLines = 1,
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "WARNING: Imported keys are NOT covered by your recovery phrase. Back up WIF keys separately.",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 9.sp,
+                                color = ZColors.warning,
+                            )
+
+                            if (validCount > 0) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = {
+                                        // Import valid keys via FFI
+                                        scope.launch {
+                                            try {
+                                                val lines = wifImportText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                                                val validResults = uniffi.zipherx.validateWifKeys(lines)
+                                                val encKeys = mutableListOf<List<UByte>>()
+                                                val addrs = mutableListOf<String>()
+                                                for ((i, r) in validResults.withIndex()) {
+                                                    if (r.valid) {
+                                                        // Store the WIF itself as encrypted key placeholder
+                                                        // (mobile platforms encrypt via AndroidSecureStorage)
+                                                        encKeys.add(lines[i].toByteArray().map { it.toUByte() })
+                                                        addrs.add(r.address)
+                                                    }
+                                                }
+                                                if (encKeys.isNotEmpty()) {
+                                                    uniffi.zipherx.importWifKeys(encKeys, addrs)
+                                                    snackbarHostState.showSnackbar("Imported ${encKeys.size} key(s)")
+                                                }
+                                            } catch (e: Exception) {
+                                                snackbarHostState.showSnackbar("Import error: ${e.message}")
+                                            }
+                                            wifImportText = ""
+                                            wifImportResults = null
+                                            showWifImportDialog = false
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(2.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = ZColors.primary.copy(alpha = 0.2f),
+                                        contentColor = ZColors.primary,
+                                    ),
+                                ) {
+                                    Text(
+                                        text = "IMPORT $validCount KEY(S)",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 11.sp,
+                                        letterSpacing = 1.sp,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = {
+                        showWifImportDialog = false
+                        wifImportText = ""
+                        wifImportResults = null
+                    }) {
+                        Text(
+                            text = "[ CANCEL ]",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
                             color = ZColors.primaryDim,
@@ -1513,6 +1903,30 @@ fun SettingsScreen(
 }
 
 // ==========================================================================
+// Helper Functions
+// ==========================================================================
+
+/** Copy sensitive text to clipboard with auto-clear after 5 seconds. */
+private fun copyToClipboardSecure(
+    context: Context,
+    viewModel: WalletViewModel,
+    label: String,
+    text: String,
+) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val clipData = ClipData.newPlainText(label, text)
+    if (Build.VERSION.SDK_INT >= 33) {
+        clipData.description.extras = PersistableBundle().apply {
+            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+        }
+    }
+    clipboard.setPrimaryClip(clipData)
+    viewModel.viewModelScope.launch {
+        kotlinx.coroutines.delay(5_000)
+        clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+    }
+}
+
 // Helper Composables
 // ==========================================================================
 

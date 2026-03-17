@@ -146,6 +146,12 @@ class WalletViewModel : ViewModel() {
     private val _torEnabled = MutableStateFlow(false)
     val torEnabled: StateFlow<Boolean> = _torEnabled.asStateFlow()
 
+    private val _transparentBalance = MutableStateFlow(0L)
+    val transparentBalance: StateFlow<Long> = _transparentBalance.asStateFlow()
+
+    private val _transparentAddress = MutableStateFlow<String?>(null)
+    val transparentAddress: StateFlow<String?> = _transparentAddress.asStateFlow()
+
     private val _isAuthRequired = MutableStateFlow(false)
     val isAuthRequired: StateFlow<Boolean> = _isAuthRequired.asStateFlow()
 
@@ -286,6 +292,122 @@ class WalletViewModel : ViewModel() {
         storeSettingBoolean("screenshot_protection", enabled)
     }
 
+    // -----------------------------------------------------------------------
+    // Seed Migration (upgrade from pre-transparent-address versions)
+    // -----------------------------------------------------------------------
+
+    /**
+     * True when the wallet has a spending key but no seed stored.
+     * Users upgrading from pre-transparent versions need to provide their
+     * mnemonic (or generate a new one) to enable transparent address scanning.
+     */
+    private val _needsSeedMigration = MutableStateFlow(false)
+    val needsSeedMigration: StateFlow<Boolean> = _needsSeedMigration.asStateFlow()
+
+    /** Mnemonic words shown during companion seed generation (user must back up). */
+    private val _migrationMnemonic = MutableStateFlow<List<String>>(emptyList())
+    val migrationMnemonic: StateFlow<List<String>> = _migrationMnemonic.asStateFlow()
+
+    /**
+     * Option A: User has their original mnemonic.
+     * Derive seed, verify it matches existing SK, store it.
+     */
+    fun migrateSeedFromPhrase(words: List<String>) {
+        viewModelScope.launch {
+            try {
+                val phrase = words.joinToString(" ")
+                val seed = withContext(Dispatchers.IO) { uniffi.zipherx.mnemonicToSeed(phrase) }
+
+                // Verify the seed produces the same spending key
+                val derivedSk = withContext(Dispatchers.IO) {
+                    uniffi.zipherx.deriveSpendingKey(seed, 0u)
+                }
+                val currentSk = ZipherXWrapper.platformStorage?.loadKey("spending_key")
+                if (currentSk != null && derivedSk != currentSk) {
+                    _errorMessage.value = "This phrase does not match the current wallet. Please enter the correct 24-word recovery phrase."
+                    return@launch
+                }
+
+                finishSeedMigration(seed)
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e(TAG, "Seed migration (phrase) failed: ${e.message}")
+                _errorMessage.value = "Migration failed: ${e.message}"
+            }
+        }
+    }
+
+    /**
+     * Option B: User lost their mnemonic or imported via private key.
+     * Generate a NEW companion mnemonic for transparent addresses only.
+     * The shielded wallet (existing private key) stays untouched.
+     * User MUST back up this new phrase — it controls their t-address funds.
+     */
+    fun generateCompanionSeed() {
+        viewModelScope.launch {
+            try {
+                // Generate a fresh 24-word mnemonic
+                val words = withContext(Dispatchers.IO) { uniffi.zipherx.createWalletNew() }
+                _migrationMnemonic.value = words
+                // Don't store yet — user must confirm backup first
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e(TAG, "Companion seed generation failed: ${e.message}")
+                _errorMessage.value = "Failed to generate recovery phrase: ${e.message}"
+            }
+        }
+    }
+
+    /**
+     * Confirm companion seed backup — user has written down the phrase.
+     * Now derive the seed from the shown mnemonic and store it.
+     */
+    fun confirmCompanionSeedBackup() {
+        viewModelScope.launch {
+            try {
+                val words = _migrationMnemonic.value
+                if (words.size != 24) {
+                    _errorMessage.value = "No mnemonic to confirm."
+                    return@launch
+                }
+                val phrase = words.joinToString(" ")
+                val seed = withContext(Dispatchers.IO) { uniffi.zipherx.mnemonicToSeed(phrase) }
+
+                finishSeedMigration(seed)
+                _migrationMnemonic.value = emptyList()
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e(TAG, "Companion seed confirmation failed: ${e.message}")
+                _errorMessage.value = "Migration failed: ${e.message}"
+            }
+        }
+    }
+
+    /** Shared finalization: store seed, derive t-address, restart sync. */
+    private suspend fun finishSeedMigration(seed: List<UByte>) {
+        ZipherXWrapper.platformStorage?.storeKey("wallet_seed", seed)
+        if (BuildConfig.DEBUG) Log.i(TAG, "Seed migration: stored ${seed.size} bytes")
+
+        // Derive and store transparent address
+        try {
+            val tAddr = withContext(Dispatchers.IO) {
+                ZipherXWrapper.deriveTransparentAddress(seed, 0u, 0u)
+            }
+            _transparentAddress.value = tAddr
+            val tAddrBytes = tAddr.toByteArray(Charsets.UTF_8).map { it.toUByte() }
+            ZipherXWrapper.platformStorage?.storeKey("transparent_address", tAddrBytes)
+            if (BuildConfig.DEBUG) Log.i(TAG, "Seed migration: t-address=$tAddr")
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.e(TAG, "Seed migration: t-address derivation failed: ${e.message}")
+        }
+
+        _needsSeedMigration.value = false
+
+        // Restart sync to pick up transparent scanning
+        if (_isSyncing.value) {
+            withContext(Dispatchers.IO) { uniffi.zipherx.stopSync() }
+            _isSyncing.value = false
+        }
+        startSync()
+    }
+
     /** Track known txids so we can detect newly received ones after sync. */
     private var knownTxids: Set<String> = emptySet()
 
@@ -377,14 +499,31 @@ class WalletViewModel : ViewModel() {
      * (PIN/pattern/password). Never skips — always requires proof of identity.
      * Use for security-critical actions (sending funds).
      */
-    suspend fun authenticateStrict(reason: String): Boolean {
+    /**
+     * Authenticate the user for a security-critical action.
+     *
+     * @param reason User-visible prompt text
+     * @param allowBypassIfNoCredential If true (default: false), allow access when no
+     *   device credential (PIN/pattern/biometric) is configured. Used for app unlock
+     *   on devices that never set a screen lock. When false, DENIES access and shows
+     *   an error — used for sending funds and exporting keys where auth is mandatory.
+     */
+    suspend fun authenticateStrict(
+        reason: String,
+        allowBypassIfNoCredential: Boolean = false,
+    ): Boolean {
         val activity = activityRef?.get() ?: return false  // Deny if no activity
         val bioAuth = com.zipherx.wallet.platform.AndroidBiometricAuth(activity)
         if (!bioAuth.hasDeviceCredential) {
-            // No screen lock configured — skip auth. The confirmation dialog
-            // already verified user intent. Log a warning for audit trail.
-            if (BuildConfig.DEBUG) Log.w(TAG, "No device credential configured — skipping auth for: $reason")
-            return true
+            if (allowBypassIfNoCredential) {
+                // App unlock: allow through (user hasn't set up a screen lock)
+                if (BuildConfig.DEBUG) Log.w(TAG, "No device credential — allowing bypass for: $reason")
+                return true
+            }
+            // Sending/exporting: DENY. A device credential is mandatory.
+            if (BuildConfig.DEBUG) Log.w(TAG, "No device credential configured — DENYING auth for: $reason")
+            _errorMessage.value = "A screen lock (PIN, pattern, or biometric) is required for this action. Enable one in device Settings."
+            return false
         }
         return withContext(Dispatchers.IO) {
             bioAuth.authenticateStrict(reason, activity)
@@ -472,6 +611,18 @@ class WalletViewModel : ViewModel() {
 
                 _walletAddress.value = address
 
+                // Load transparent address from secure storage
+                try {
+                    val tAddrBytes = withContext(Dispatchers.IO) {
+                        ZipherXWrapper.platformStorage?.loadKey("transparent_address")
+                    }
+                    if (tAddrBytes != null && tAddrBytes.isNotEmpty()) {
+                        _transparentAddress.value = String(ByteArray(tAddrBytes.size) { tAddrBytes[it].toByte() }, Charsets.UTF_8)
+                    }
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e(TAG, "Load transparent address failed: ${e.message}")
+                }
+
                 if (address == null && skBytes == null) {
                     if (BuildConfig.DEBUG) Log.i(TAG, "No address and no SK — showing onboarding")
                     _walletState.value = "uninitialized"
@@ -480,6 +631,20 @@ class WalletViewModel : ViewModel() {
 
                 _walletState.value = "ready"
                 _isWalletActive.value = true
+
+                // Detect upgrade from pre-transparent version: SK exists but no seed.
+                // Without the seed, transparent address scanning is disabled.
+                if (skBytes != null) {
+                    val hasSeed = withContext(Dispatchers.IO) {
+                        val seedBytes = ZipherXWrapper.platformStorage?.loadKey("wallet_seed")
+                        seedBytes != null && seedBytes.isNotEmpty()
+                    }
+                    if (!hasSeed) {
+                        if (BuildConfig.DEBUG) Log.w(TAG, "Seed migration needed: SK exists but no wallet_seed stored")
+                        _needsSeedMigration.value = true
+                    }
+                }
+
                 // KA-4: Clear mnemonic words from memory once the user has
                 // navigated past the mnemonic display to the main wallet UI.
                 if (_mnemonicWords.value.isNotEmpty()) {
@@ -530,6 +695,27 @@ class WalletViewModel : ViewModel() {
                 if (BuildConfig.DEBUG) Log.i(TAG, "Wallet created successfully")
                 _mnemonicWords.value = words
                 skBytes = sk.toByteArraySecure()
+
+                // Store mnemonic phrase in secure storage for future export
+                try {
+                    val mnemonicBytes = words.joinToString(" ").toByteArray(Charsets.UTF_8).map { it.toUByte() }
+                    ZipherXWrapper.platformStorage?.storeKey("wallet_mnemonic", mnemonicBytes)
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e(TAG, "Failed to store mnemonic: ${e.message}")
+                }
+
+                // Derive and persist transparent address
+                try {
+                    val phrase = words.joinToString(" ")
+                    val seed = withContext(Dispatchers.IO) { uniffi.zipherx.mnemonicToSeed(phrase) }
+                    val tAddr = withContext(Dispatchers.IO) { ZipherXWrapper.deriveTransparentAddress(seed, 0u, 0u) }
+                    _transparentAddress.value = tAddr
+                    val tAddrBytes = tAddr.toByteArray(Charsets.UTF_8).map { it.toUByte() }
+                    ZipherXWrapper.platformStorage?.storeKey("transparent_address", tAddrBytes)
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e(TAG, "deriveTransparentAddress failed: ${e.message}")
+                }
+
                 _walletState.value = "created"
                 loadWallet()
             } catch (e: Exception) {
@@ -553,6 +739,27 @@ class WalletViewModel : ViewModel() {
                 }
                 if (BuildConfig.DEBUG) Log.i(TAG, "Wallet restored successfully")
                 skBytes = sk.toByteArraySecure()
+
+                // Store mnemonic phrase in secure storage for future export
+                try {
+                    val mnemonicBytes = words.joinToString(" ").toByteArray(Charsets.UTF_8).map { it.toUByte() }
+                    ZipherXWrapper.platformStorage?.storeKey("wallet_mnemonic", mnemonicBytes)
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e(TAG, "Failed to store mnemonic: ${e.message}")
+                }
+
+                // Derive and persist transparent address
+                try {
+                    val phrase = words.joinToString(" ")
+                    val seed = withContext(Dispatchers.IO) { uniffi.zipherx.mnemonicToSeed(phrase) }
+                    val tAddr = withContext(Dispatchers.IO) { ZipherXWrapper.deriveTransparentAddress(seed, 0u, 0u) }
+                    _transparentAddress.value = tAddr
+                    val tAddrBytes = tAddr.toByteArray(Charsets.UTF_8).map { it.toUByte() }
+                    ZipherXWrapper.platformStorage?.storeKey("transparent_address", tAddrBytes)
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e(TAG, "deriveTransparentAddress failed: ${e.message}")
+                }
+
                 _walletState.value = "ready"
                 loadWallet()
             } catch (e: Exception) {
@@ -814,15 +1021,16 @@ class WalletViewModel : ViewModel() {
     // -----------------------------------------------------------------------
 
     /**
-     * Send a shielded transaction.
+     * Send a transaction. Automatically detects whether to use shielded or
+     * transparent send based on available balances.
      *
-     * @param to Destination shielded address.
+     * @param to Destination address (z or t).
      * @param amount Amount in zatoshis.
      * @param fee Fee in zatoshis.
      * @param memo Optional memo string.
-     * @param skBytes Spending key bytes.
+     * @param fromTransparent If true, spend transparent UTXOs instead of shielded notes.
      */
-    fun send(to: String, amount: Long, fee: Long, memo: String?) {
+    fun send(to: String, amount: Long, fee: Long, memo: String?, fromTransparent: Boolean = false) {
         if (_isSending.value) return
         if (amount <= 0L) {
             _errorMessage.value = "Insufficient spendable balance"
@@ -833,7 +1041,7 @@ class WalletViewModel : ViewModel() {
             _errorMessage.value = "Spending key not available"
             return
         }
-        if (BuildConfig.DEBUG) Log.d(TAG, "send() called")
+        if (BuildConfig.DEBUG) Log.d(TAG, "send() called fromTransparent=$fromTransparent")
         // Snapshot current balance before send — will be displayed until confirmation
         preSendBalance = _balance.value
         viewModelScope.launch {
@@ -849,9 +1057,35 @@ class WalletViewModel : ViewModel() {
 
                 withContext(Dispatchers.IO) {
                     val callback = SendCallback()
-                    uniffi.zipherx.sendWithProgress(
-                        to, amount.toULong(), fee.toULong(), memo, skArray.toUByteList(), callback
-                    )
+                    // Copy skArray so we can zeroize the copy after use
+                    val skCopy = skArray.copyOf()
+                    try {
+                        if (fromTransparent) {
+                            // Load seed from secure storage for transparent key derivation
+                            val seedList = ZipherXWrapper.platformStorage?.loadKey("wallet_seed")
+                            if (seedList == null || seedList.isEmpty()) {
+                                throw Exception("Wallet seed not available for transparent send")
+                            }
+                            // Convert List<UByte> to ByteArray for zeroization support,
+                            // then pass as List<UByte> to FFI via toUByteList()
+                            val seedArray = ByteArray(seedList.size) { seedList[it].toByte() }
+                            try {
+                                uniffi.zipherx.sendTransparentWithProgress(
+                                    to, amount.toULong(), fee.toULong(), memo,
+                                    skCopy.toUByteList(), seedArray.toUByteList(), callback
+                                )
+                            } finally {
+                                seedArray.fill(0)
+                            }
+                        } else {
+                            uniffi.zipherx.sendWithProgress(
+                                to, amount.toULong(), fee.toULong(), memo,
+                                skCopy.toUByteList(), callback
+                            )
+                        }
+                    } finally {
+                        skCopy.fill(0)
+                    }
                 }
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e(TAG, "send() FAILED: ${e.message}", e)
@@ -895,6 +1129,14 @@ class WalletViewModel : ViewModel() {
             } catch (e: Exception) {
                 _errorMessage.value = e.message ?: "Failed to refresh balance"
             }
+            try {
+                val tBal = withContext(Dispatchers.IO) {
+                    ZipherXWrapper.getTransparentBalance()
+                }
+                _transparentBalance.value = tBal
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e(TAG, "getTransparentBalance failed: ${e.message}")
+            }
         }
     }
 
@@ -925,13 +1167,24 @@ class WalletViewModel : ViewModel() {
             for (tx in rawHistory) {
                 if (tx.txid in processedTxids) continue
                 val group = txidTypes[tx.txid] ?: listOf(tx)
-                val hasSent = group.any { it.txType == "sent" || it.txType == "alpha" }
+                val sentTypes = setOf("sent", "alpha", "self_z2t", "self_t2z")
+                val hasSent = group.any { it.txType in sentTypes }
                 val hasReceived = group.any { it.txType == "received" || it.txType == "beta" }
 
                 if (hasSent && hasReceived) {
-                    // Self-send: merge into a single "self" entry
-                    val sentTx = group.first { it.txType == "sent" || it.txType == "alpha" }
-                    history.add(sentTx.copy(txType = "self"))
+                    // Self-send: merge into a single entry, preserving the original send type
+                    val sentTx = group.first { it.txType in sentTypes }
+                    val mergedType = when (sentTx.txType) {
+                        "self_z2t" -> "self_z2t"
+                        "self_t2z" -> "self_t2z"
+                        else -> "self"
+                    }
+                    history.add(sentTx.copy(txType = mergedType))
+                    processedTxids.add(tx.txid)
+                } else if (hasSent && !hasReceived) {
+                    // Sent without matching received — keep original type
+                    val sentTx = group.first { it.txType in sentTypes }
+                    history.add(sentTx)
                     processedTxids.add(tx.txid)
                 } else {
                     history.add(tx)
@@ -976,6 +1229,15 @@ class WalletViewModel : ViewModel() {
      */
     fun clearError() {
         _errorMessage.value = null
+    }
+
+    fun showError(message: String) {
+        _errorMessage.value = message
+    }
+
+    /** Dismiss the seed migration banner (user chose shielded-only). */
+    fun dismissSeedMigration() {
+        _needsSeedMigration.value = false
     }
 
     // -----------------------------------------------------------------------
@@ -1172,8 +1434,9 @@ class WalletViewModel : ViewModel() {
             uniffi.zipherx.setPendingTxFastPoll(true)
 
             // Snapshot confirmed sent/self count for fallback detection
+            // Include transparent types (self_z2t, self_t2z) for cross-pool sends
             confirmedSentCountAtSend = _transactions.value.count {
-                it.confirmations > 0 && (it.txType == "sent" || it.txType == "self")
+                it.confirmations > 0 && it.txType in setOf("sent", "self", "self_z2t", "self_t2z")
             }
 
             // Show clearing (mempool) celebration
@@ -1198,13 +1461,26 @@ class WalletViewModel : ViewModel() {
             viewModelScope.launch {
                 delay(360_000) // 6 minutes
                 if (_pendingConfirmationTxid.value != null) {
-                    if (BuildConfig.DEBUG) Log.w(TAG, "Safety: auto-clearing pending TX after timeout")
-                    _pendingConfirmationTxid.value = null
-                    uniffi.zipherx.setPendingTxFastPoll(false)
-                    preSendBalance = null
-                    _mempoolAccepted.value = false
-                    _mempoolPeerStatus.value = null
-                    refreshBalance()  // Show real balance now
+                    if (BuildConfig.DEBUG) Log.w(TAG, "Safety timeout: attempting final confirmation check")
+                    // Final attempt: refresh history and check one more time before giving up.
+                    // The background sync may have updated the DB even if on_complete didn't
+                    // fire (e.g., sync error swallowed, or height didn't change).
+                    refreshHistoryInternal()
+                    checkForTxConfirmation()
+                    checkForIncomingTxConfirmation()
+
+                    // If the final check found confirmation, pending is already cleared
+                    // and settlement celebration is showing. Nothing else to do.
+                    if (_pendingConfirmationTxid.value != null) {
+                        if (BuildConfig.DEBUG) Log.w(TAG, "Safety: auto-clearing pending TX after timeout (not confirmed)")
+                        _pendingConfirmationTxid.value = null
+                        uniffi.zipherx.setPendingTxFastPoll(false)
+                        preSendBalance = null
+                        _mempoolAccepted.value = false
+                        _mempoolPeerStatus.value = null
+                        refreshBalance()
+                        refreshHistoryInternal()  // Also refresh history so UI shows current state
+                    }
                 }
             }
         }
@@ -1239,15 +1515,11 @@ class WalletViewModel : ViewModel() {
         val pendingTxid = _pendingConfirmationTxid.value ?: return
         val txList = _transactions.value
 
-        // Strategy 1: exact txid match
-        val matchedByTxid = txList.any { it.txid == pendingTxid && it.confirmations > 0 }
-        // Strategy 2: count confirmed sent/self TXs — if more than at send time, our TX confirmed
-        val currentConfirmedCount = txList.count {
-            it.confirmations > 0 && (it.txType == "sent" || it.txType == "self")
-        }
-        val matchedByCount = currentConfirmedCount > confirmedSentCountAtSend
+        // Only use exact txid match — Sapling transactions are not malleable,
+        // so the txid never changes after broadcast.
+        val confirmed = txList.any { it.txid == pendingTxid && it.confirmations > 0 }
 
-        if (matchedByTxid || matchedByCount) {
+        if (confirmed) {
             // Settlement detected — show celebration
             val elapsed = if (_sendTimestamp.value > 0) {
                 (System.currentTimeMillis() - _sendTimestamp.value) / 1000
@@ -1255,9 +1527,7 @@ class WalletViewModel : ViewModel() {
                 0L
             }
             val durationStr = if (elapsed > 0) "${elapsed}s" else ""
-            // Find the confirmed TX (prefer exact match, fallback to newest)
             val confirmedTx = txList.firstOrNull { it.txid == pendingTxid && it.confirmations > 0 }
-                ?: txList.firstOrNull { it.confirmations > 0 && (it.txType == "sent" || it.txType == "self") }
             _settlementTxid.value = confirmedTx?.txid ?: pendingTxid
             _settlementCelebration.value = randomSettlementMessage()
             _settlementDuration.value = durationStr
@@ -1267,10 +1537,9 @@ class WalletViewModel : ViewModel() {
             // Clear mempool status — TX is now confirmed in a block
             _mempoolAccepted.value = false
             _mempoolPeerStatus.value = null
-            // Force real balance refresh now that TX is confirmed
+            // Force real balance + history refresh now that TX is confirmed
             refreshBalance()
-            // Post-settlement: the FFI background loop will rebuild witnesses
-            // on the next sync cycle (within 30s).
+            refreshHistory()
         }
     }
 
@@ -1303,6 +1572,10 @@ class WalletViewModel : ViewModel() {
     fun clearSendStatus() {
         _mempoolAccepted.value = false
         _mempoolPeerStatus.value = null
+    }
+
+    fun clearSendTxid() {
+        _sendTxid.value = null
     }
 
     fun dismissConfirmation() {
@@ -1469,13 +1742,141 @@ class WalletViewModel : ViewModel() {
      */
     fun getSpendingKeyHex(): CharArray? {
         val sk = skBytes ?: return null
-        val chars = CharArray(sk.size * 2)
-        for (i in sk.indices) {
-            val hex = "%02x".format(sk[i])
-            chars[i * 2] = hex[0]
-            chars[i * 2 + 1] = hex[1]
+        return try {
+            // Encode as Bech32 "secret-extended-key-main1..." format
+            val encoded = uniffi.zipherx.encodeSpendingKey(sk.toUByteList())
+            encoded.toCharArray()
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.e(TAG, "encodeSpendingKey failed: ${e.message}")
+            // Fallback to raw hex if encoding fails
+            val chars = CharArray(sk.size * 2)
+            for (i in sk.indices) {
+                val hex = "%02x".format(sk[i])
+                chars[i * 2] = hex[0]
+                chars[i * 2 + 1] = hex[1]
+            }
+            chars
         }
-        return chars
+    }
+
+    /**
+     * Export transparent private key in WIF format.
+     * Requires the wallet seed to be stored (seed migration must be complete).
+     * Returns null if seed is not available.
+     */
+    fun getTransparentKeyWif(): CharArray? {
+        return try {
+            val seedList = ZipherXWrapper.platformStorage?.loadKey("wallet_seed") ?: return null
+            if (seedList.isEmpty()) return null
+            val wif = uniffi.zipherx.exportTransparentWif(seedList, 0u, 0u)
+            wif.toCharArray()
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.e(TAG, "getTransparentKeyWif failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Load the recovery phrase (mnemonic) from secure storage.
+     * Returns the 24 words as a CharArray for export display.
+     * Caller MUST zero the CharArray after use to minimize exposure. (KD-7)
+     * Returns null if no mnemonic stored (e.g., wallet imported from seed/key).
+     */
+    fun getRecoveryPhrase(): CharArray? {
+        return try {
+            val mnemonicBytes = ZipherXWrapper.platformStorage?.loadKey("wallet_mnemonic") ?: return null
+            if (mnemonicBytes.isEmpty()) return null
+            val bytes = ByteArray(mnemonicBytes.size) { mnemonicBytes[it].toByte() }
+            val phrase = String(bytes, Charsets.UTF_8)
+            bytes.fill(0) // zero the intermediate byte array
+            phrase.toCharArray()
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.e(TAG, "getRecoveryPhrase failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Export all funded transparent addresses with their WIF keys.
+     * Calls the Rust FFI export_funded_transparent_wifs function.
+     */
+    fun exportFundedTransparentWifs(): List<uniffi.zipherx.FundedTransparentKeyFfi> {
+        return try {
+            uniffi.zipherx.exportFundedTransparentWifs()
+        } catch (e: Exception) {
+            if (BuildConfig.DEBUG) Log.e(TAG, "exportFundedTransparentWifs failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Get the count of imported transparent keys.
+     */
+    fun getImportedKeyCount(): UInt {
+        return try {
+            uniffi.zipherx.getImportedKeyCount()
+        } catch (e: Exception) {
+            0u
+        }
+    }
+
+    /**
+     * Import wallet from a raw 64-byte seed (128-char hex string).
+     * This is an advanced import method — no mnemonic is stored since
+     * a raw seed has no corresponding BIP39 phrase.
+     */
+    fun importFromSeed(seedHex: String) {
+        if (BuildConfig.DEBUG) Log.i(TAG, "importFromSeed() called, hex length=${seedHex.length}")
+        viewModelScope.launch {
+            try {
+                _walletState.value = "importing"
+
+                // Validate hex format: exactly 128 hex characters = 64 bytes
+                val cleanHex = seedHex.trim().lowercase()
+                if (cleanHex.length != 128 || !cleanHex.all { it in "0123456789abcdef" }) {
+                    _errorMessage.value = "Invalid seed: expected 128 hex characters (64 bytes)"
+                    _walletState.value = "uninitialized"
+                    return@launch
+                }
+
+                // Convert hex to UByte list (64 bytes)
+                val seed = cleanHex.chunked(2).map { it.toUByte(16) }
+
+                // Derive spending key from seed
+                val sk = withContext(Dispatchers.IO) {
+                    uniffi.zipherx.deriveSpendingKey(seed, 0u)
+                }
+
+                // Store SK and seed in secure storage
+                withContext(Dispatchers.IO) {
+                    ZipherXWrapper.platformStorage?.storeKey("spending_key", sk)
+                    ZipherXWrapper.platformStorage?.storeKey("wallet_seed", seed)
+                }
+                // NOTE: No mnemonic stored — seed import has no BIP39 phrase
+
+                skBytes = sk.toByteArraySecure()
+
+                // Derive and persist transparent address
+                try {
+                    val tAddr = withContext(Dispatchers.IO) {
+                        ZipherXWrapper.deriveTransparentAddress(seed, 0u, 0u)
+                    }
+                    _transparentAddress.value = tAddr
+                    val tAddrBytes = tAddr.toByteArray(Charsets.UTF_8).map { it.toUByte() }
+                    ZipherXWrapper.platformStorage?.storeKey("transparent_address", tAddrBytes)
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e(TAG, "deriveTransparentAddress (seed import) failed: ${e.message}")
+                }
+
+                if (BuildConfig.DEBUG) Log.i(TAG, "Seed imported successfully")
+                _walletState.value = "ready"
+                loadWallet()
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e(TAG, "importFromSeed() FAILED: ${e.message}", e)
+                _errorMessage.value = e.message ?: "Failed to import from seed"
+                _walletState.value = "uninitialized"
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1497,12 +1898,56 @@ class WalletViewModel : ViewModel() {
             }
             _isSyncing.value = false
 
-            // Delete spending key from secure storage
+            // Delete ALL keys from secure storage (SK, seed, transparent address)
+            withContext(Dispatchers.IO) {
+                val storage = ZipherXWrapper.platformStorage
+                for (key in listOf("spending_key", "wallet_seed", "transparent_address", "wallet_mnemonic")) {
+                    try {
+                        storage?.deleteKey(key)
+                    } catch (e: Exception) {
+                        if (BuildConfig.DEBUG) Log.e(TAG, "Failed to delete $key: ${e.message}")
+                    }
+                }
+            }
+
+            // Delete the wallet database file
             withContext(Dispatchers.IO) {
                 try {
-                    ZipherXWrapper.platformStorage?.deleteKey("spending_key")
+                    val activity = activityRef?.get()
+                    val filesDir = activity?.filesDir
+                    if (filesDir != null) {
+                        // Delete wallet.db and any WAL/SHM files
+                        for (name in listOf("wallet.db", "wallet.db-wal", "wallet.db-shm",
+                                            "headers.db", "headers.db-wal", "headers.db-shm")) {
+                            val f = java.io.File(filesDir, name)
+                            if (f.exists()) {
+                                f.delete()
+                                if (BuildConfig.DEBUG) Log.i(TAG, "Deleted: ${f.name}")
+                            }
+                        }
+                        // Delete delta store directory
+                        val deltaDir = java.io.File(filesDir, "delta_store")
+                        if (deltaDir.exists()) {
+                            deltaDir.deleteRecursively()
+                            if (BuildConfig.DEBUG) Log.i(TAG, "Deleted delta_store")
+                        }
+                    }
                 } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) Log.e(TAG, "Failed to delete SK from storage: ${e.message}")
+                    if (BuildConfig.DEBUG) Log.e(TAG, "DB cleanup failed: ${e.message}")
+                }
+            }
+
+            // Delete boost cache (can be 2+ GB)
+            withContext(Dispatchers.IO) {
+                try {
+                    val activity = activityRef?.get()
+                    val boostDir = activity?.getExternalFilesDir(null)?.resolve("BoostCache")
+                    if (boostDir?.exists() == true) {
+                        boostDir.deleteRecursively()
+                        if (BuildConfig.DEBUG) Log.i(TAG, "Boost cache deleted")
+                    }
+                } catch (e: Exception) {
+                    if (BuildConfig.DEBUG) Log.e(TAG, "Failed to delete boost cache: ${e.message}")
                 }
             }
 
@@ -1520,6 +1965,8 @@ class WalletViewModel : ViewModel() {
             _transactions.value = emptyList()
             _walletState.value = "uninitialized"
             _walletAddress.value = null
+            _transparentBalance.value = 0L
+            _transparentAddress.value = null
             _syncPhase.value = "idle"
             _syncProgress.value = 0.0
             _overallProgress.value = 0f
@@ -1544,7 +1991,11 @@ class WalletViewModel : ViewModel() {
             _mnemonicWords.value = emptyList()
             _errorMessage.value = null
 
-            if (BuildConfig.DEBUG) Log.i(TAG, "All data deleted. Wallet reset to onboarding state.")
+            if (BuildConfig.DEBUG) Log.i(TAG, "All data deleted. Closing app for clean restart.")
+
+            // Force-exit the app so the Rust FFI singleton is destroyed.
+            // On next launch, everything initializes fresh with no stale cache.
+            android.os.Process.killProcess(android.os.Process.myPid())
         }
     }
 
