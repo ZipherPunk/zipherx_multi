@@ -121,6 +121,112 @@ pub fn derive_transparent_secret_key(
     Ok(Zeroizing::new(sk.secret_bytes().to_vec()))
 }
 
+/// Encode a transparent secret key as WIF (Wallet Import Format).
+///
+/// WIF format: base58check( version_byte + 32_secret_bytes + 0x01_compressed_flag )
+/// Zclassic uses version byte 0x80 (same as Bitcoin mainnet).
+/// Returns a compressed WIF string starting with "L" or "K".
+pub fn encode_wif(secret_key_bytes: &[u8]) -> Result<Zeroizing<String>, CryptoError> {
+    if secret_key_bytes.len() != 32 {
+        return Err(CryptoError::InvalidData(format!(
+            "Secret key must be 32 bytes, got {}",
+            secret_key_bytes.len()
+        )));
+    }
+
+    // version(1) + key(32) + compressed_flag(1) = 34 bytes + 4 checksum = 38
+    let mut payload = Vec::with_capacity(38);
+    payload.push(0x80); // WIF version byte
+    payload.extend_from_slice(secret_key_bytes);
+    payload.push(0x01); // compressed public key flag
+
+    let checksum = double_sha256(&payload);
+    payload.extend_from_slice(&checksum[..4]);
+
+    let wif = bs58::encode(&payload).into_string();
+
+    // Zeroize the payload buffer
+    for b in payload.iter_mut() {
+        *b = 0;
+    }
+
+    Ok(Zeroizing::new(wif))
+}
+
+/// Decode a WIF-encoded private key. Returns (secret_key_bytes, t-address).
+/// Validates: Base58Check checksum, version byte 0x80, compression flag 0x01.
+/// Rejects uncompressed WIF keys (start with '5').
+pub fn decode_wif(wif: &str) -> Result<(Zeroizing<Vec<u8>>, String), CryptoError> {
+    let decoded = bs58::decode(wif)
+        .into_vec()
+        .map_err(|e| CryptoError::InvalidData(format!("Invalid Base58: {}", e)))?;
+
+    if decoded.len() < 6 {
+        return Err(CryptoError::InvalidData("WIF too short".into()));
+    }
+
+    // Verify checksum (last 4 bytes)
+    let (payload, checksum) = decoded.split_at(decoded.len() - 4);
+    let expected_checksum = double_sha256(payload);
+    if &expected_checksum[..4] != checksum {
+        return Err(CryptoError::InvalidData("WIF checksum mismatch".into()));
+    }
+
+    // Version byte must be 0x80 (mainnet)
+    if payload[0] != 0x80 {
+        return Err(CryptoError::InvalidData(format!(
+            "Invalid WIF version byte: 0x{:02x} (expected 0x80)",
+            payload[0]
+        )));
+    }
+
+    let key_data = &payload[1..]; // strip version byte
+
+    // Compressed WIF: 33 bytes (32-byte key + 0x01 flag)
+    // Uncompressed WIF: 32 bytes (no flag)
+    if key_data.len() == 32 {
+        return Err(CryptoError::InvalidData(
+            "Uncompressed WIF keys are not supported. Use a compressed key (starts with L or K)."
+                .into(),
+        ));
+    }
+    if key_data.len() != 33 || key_data[32] != 0x01 {
+        return Err(CryptoError::InvalidData(format!(
+            "Invalid WIF key length: {} bytes",
+            key_data.len()
+        )));
+    }
+
+    let sk_bytes = Zeroizing::new(key_data[..32].to_vec());
+
+    // Derive the t-address from the secret key
+    let secp = secp256k1::Secp256k1::new();
+    let secret_key = secp256k1::SecretKey::from_slice(&sk_bytes)
+        .map_err(|e| CryptoError::InvalidData(format!("Invalid secret key: {}", e)))?;
+    let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
+    let pub_bytes = public_key.serialize(); // compressed
+    let pub_hash = hash160(&pub_bytes);
+    let address = TransparentAddress::PublicKey(pub_hash);
+    let encoded = encode_transparent_address(&address)?;
+
+    Ok((sk_bytes, encoded))
+}
+
+/// Validate a WIF string without returning the secret key.
+pub fn validate_wif(wif: &str) -> bool {
+    decode_wif(wif).is_ok()
+}
+
+/// Derive and export the transparent private key as WIF from seed.
+pub fn export_transparent_wif(
+    seed: &[u8],
+    account: u32,
+    child_index: u32,
+) -> Result<Zeroizing<String>, CryptoError> {
+    let sk_bytes = derive_transparent_secret_key(seed, account, child_index, false)?;
+    encode_wif(&sk_bytes)
+}
+
 /// Encode a TransparentAddress to base58check string.
 ///
 /// Zclassic P2PKH: prefix [0x1C, 0xB8] → "t1..."
@@ -332,5 +438,47 @@ mod tests {
     fn test_invalid_seed_length() {
         let result = derive_transparent_address(&[0u8; 16], 0, 0);
         assert!(matches!(result, Err(CryptoError::InvalidSeed(16))));
+    }
+
+    #[test]
+    fn test_decode_wif_roundtrip() {
+        let seed = test_seed();
+        let sk = derive_transparent_secret_key(&seed, 0, 0, false).unwrap();
+        let wif = encode_wif(&sk).unwrap();
+        let (decoded_sk, decoded_addr) = decode_wif(&wif).unwrap();
+        assert_eq!(&*decoded_sk, &*sk);
+        let expected_addr = derive_transparent_address(&seed, 0, 0).unwrap();
+        assert_eq!(decoded_addr, expected_addr);
+    }
+
+    #[test]
+    fn test_decode_wif_rejects_uncompressed() {
+        use sha2::{Digest, Sha256};
+        let fake_key = [0x42u8; 32];
+        let mut payload = vec![0x80];
+        payload.extend_from_slice(&fake_key);
+        // No compression flag — uncompressed WIF
+        let hash1 = Sha256::digest(&payload);
+        let hash2 = Sha256::digest(&hash1);
+        payload.extend_from_slice(&hash2[..4]);
+        let wif = bs58::encode(&payload).into_string();
+        assert!(wif.starts_with('5'));
+        let result = decode_wif(&wif);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .to_lowercase()
+            .contains("ncompressed"));
+    }
+
+    #[test]
+    fn test_validate_wif() {
+        let seed = test_seed();
+        let sk = derive_transparent_secret_key(&seed, 0, 0, false).unwrap();
+        let wif = encode_wif(&sk).unwrap();
+        assert!(validate_wif(&wif));
+        assert!(!validate_wif("not_a_wif"));
+        assert!(!validate_wif(""));
     }
 }
