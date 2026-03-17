@@ -4208,7 +4208,7 @@ async fn transparent_only_scan(
                     utxo.value,
                     utxo.is_change,
                     utxo.child_index,
-                    false,
+                    utxo.is_imported,
                 )
                 .map_err(|e| CoreError::Storage(e.to_string()))?;
             if !utxo.is_change {
@@ -4838,7 +4838,7 @@ async fn post_boost_full_block_scan(
                                     utxo.value,
                                     utxo.is_change,
                                     utxo.child_index,
-                                    false,
+                                    utxo.is_imported,
                                 )
                                 .map_err(|e| CoreError::Storage(e.to_string()))?;
                             // Record in transaction history

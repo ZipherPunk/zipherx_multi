@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use zipherx_crypto::{
     notes::{self, DecryptedNote},
+    transparent,
     types::{ENC_CIPHERTEXT_LEN, SPENDING_KEY_LENGTH},
 };
 use zipherx_network::block_fetcher::CompactBlock;
@@ -79,8 +80,8 @@ pub struct DiscoveredNote {
 pub struct ScanResult {
     /// New notes found for this wallet.
     pub new_notes: Vec<DiscoveredNote>,
-    /// Nullifiers found in block spends, paired with their txid.
-    pub spent_nullifiers: Vec<([u8; 32], [u8; 32])>,
+    /// Nullifiers found in block spends, paired with their txid and block height.
+    pub spent_nullifiers: Vec<([u8; 32], [u8; 32], u64)>,
     /// Last block height successfully scanned.
     pub last_scanned_height: u64,
     /// Sapling roots from scanned blocks (height, root).
@@ -89,9 +90,159 @@ pub struct ScanResult {
     pub cmus_appended: u64,
 }
 
+/// A transparent UTXO discovered during block scanning.
+#[derive(Debug, Clone)]
+pub struct DiscoveredUtxo {
+    /// Block height where this UTXO was found.
+    pub height: u64,
+    /// Transaction ID (internal byte order).
+    pub txid: [u8; 32],
+    /// Output index within the transaction.
+    pub output_index: u32,
+    /// Raw scriptPubKey bytes.
+    pub script_pubkey: Vec<u8>,
+    /// Encoded transparent address (t1...).
+    pub address: String,
+    /// Value in zatoshis.
+    pub value: u64,
+    /// Whether this is a change address (internal chain).
+    pub is_change: bool,
+    /// BIP-44 child index.
+    pub child_index: u32,
+    /// Whether this UTXO belongs to an imported (WIF) key rather than a derived key.
+    pub is_imported: bool,
+}
+
+/// A transparent spend detected during block scanning.
+#[derive(Debug, Clone)]
+pub struct DetectedTransparentSpend {
+    /// Block height where the spend was found.
+    pub height: u64,
+    /// Transaction ID of the spending transaction.
+    pub spending_txid: [u8; 32],
+    /// Previous output txid being spent.
+    pub prevout_txid: [u8; 32],
+    /// Previous output index being spent.
+    pub prevout_index: u32,
+}
+
+/// Set of transparent addresses derived from a seed for scanning.
+///
+/// Pre-derives a gap of addresses on both external and internal chains
+/// to match against block outputs. Also holds imported (WIF) addresses.
+#[derive(Debug, Clone)]
+pub struct TransparentAddressSet {
+    /// BIP-44 derived: (address, is_change, child_index)
+    addresses: Vec<(String, bool, u32)>,
+    /// Imported WIF: (address, db_id)
+    imported: Vec<(String, i64)>,
+}
+
+impl TransparentAddressSet {
+    /// Derive addresses for scanning. Uses a gap limit to cover
+    /// addresses that may have been used.
+    pub fn from_seed(seed: &[u8], account: u32, gap_limit: u32) -> Self {
+        let mut addresses = Vec::new();
+
+        // External chain (receiving addresses)
+        for i in 0..gap_limit {
+            if let Ok(addr) = transparent::derive_transparent_address(seed, account, i) {
+                addresses.push((addr, false, i));
+            }
+        }
+
+        // Internal chain (change addresses)
+        for i in 0..gap_limit {
+            if let Ok(addr) = transparent::derive_transparent_change_address(seed, account, i) {
+                addresses.push((addr, true, i));
+            }
+        }
+
+        Self {
+            addresses,
+            imported: Vec::new(),
+        }
+    }
+
+    /// Get the derived addresses.
+    pub fn addresses(&self) -> &[(String, bool, u32)] {
+        &self.addresses
+    }
+
+    /// Add an imported (WIF) transparent address for scanning.
+    pub fn add_imported(&mut self, address: String, db_id: i64) {
+        self.imported.push((address, db_id));
+    }
+
+    /// Get the imported addresses.
+    pub fn imported_addresses(&self) -> &[(String, i64)] {
+        &self.imported
+    }
+
+    /// Check if a scriptPubKey matches any of our derived or imported addresses.
+    /// Returns (address, is_change, child_index, is_imported) if matched.
+    pub fn match_script(&self, script: &[u8]) -> Option<(&str, bool, u32, bool)> {
+        let addr = transparent::extract_address_from_script(script)?;
+        let encoded = transparent::encode_transparent_address(&addr).ok()?;
+        // Check seed-derived first
+        for (a, is_change, idx) in &self.addresses {
+            if *a == encoded {
+                return Some((a.as_str(), *is_change, *idx, false));
+            }
+        }
+        // Check imported
+        for (a, _db_id) in &self.imported {
+            if *a == encoded {
+                return Some((a.as_str(), false, 0, true));
+            }
+        }
+        None
+    }
+}
+
 // ============================================================================
 // Scanner
 // ============================================================================
+
+/// Scan a block for transparent UTXOs and spends matching our addresses.
+pub fn scan_block_transparent(
+    block: &CompactBlock,
+    address_set: &TransparentAddressSet,
+) -> (Vec<DiscoveredUtxo>, Vec<DetectedTransparentSpend>) {
+    let mut utxos = Vec::new();
+    let mut spends = Vec::new();
+
+    // Check transparent outputs for matches
+    for output in &block.transparent_outputs {
+        if let Some((addr, is_change, child_index, is_imported)) =
+            address_set.match_script(&output.script_pubkey)
+        {
+            utxos.push(DiscoveredUtxo {
+                height: block.height,
+                txid: output.txid,
+                output_index: output.output_index,
+                script_pubkey: output.script_pubkey.clone(),
+                address: addr.to_string(),
+                value: output.value,
+                is_change,
+                child_index,
+                is_imported,
+            });
+        }
+    }
+
+    // Record all transparent inputs — the caller checks against known UTXOs
+    for input in &block.transparent_inputs {
+        spends.push(DetectedTransparentSpend {
+            height: block.height,
+            spending_txid: input.spending_txid,
+            prevout_txid: input.prevout_txid,
+            prevout_index: input.prevout_index,
+        });
+    }
+
+    (utxos, spends)
+}
 
 /// Process a single compact block for note discovery.
 ///
@@ -101,7 +252,7 @@ pub fn process_block(
     block: &CompactBlock,
     sk_bytes: &[u8],
     tree_position: u64,
-) -> Result<(Vec<DiscoveredNote>, Vec<([u8; 32], [u8; 32])>), CoreError> {
+) -> Result<(Vec<DiscoveredNote>, Vec<([u8; 32], [u8; 32], u64)>), CoreError> {
     if sk_bytes.len() != SPENDING_KEY_LENGTH {
         return Err(CoreError::Crypto("Invalid spending key length".into()));
     }
@@ -110,9 +261,9 @@ pub fn process_block(
     let mut spent_nullifiers = Vec::new();
     let mut position = tree_position;
 
-    // Collect nullifiers from spends
+    // Collect nullifiers from spends (with block height for confirmation tracking)
     for spend in &block.spends {
-        spent_nullifiers.push((spend.nullifier, spend.txid));
+        spent_nullifiers.push((spend.nullifier, spend.txid, block.height));
     }
 
     // Try to decrypt each shielded output

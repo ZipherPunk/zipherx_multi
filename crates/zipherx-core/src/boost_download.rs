@@ -1615,7 +1615,9 @@ pub fn apply_transparent_boost(
         };
 
         // Check if this UTXO's scriptPubKey matches any of our addresses
-        if let Some((address, is_change, child_index)) = address_set.match_script(&entry.script) {
+        if let Some((address, is_change, child_index, is_imported)) =
+            address_set.match_script(&entry.script)
+        {
             // Convert txid bytes to display hex (reverse for display format)
             let txid_display: String = entry
                 .txid
@@ -1634,7 +1636,7 @@ pub fn apply_transparent_boost(
                 entry.value,
                 is_change,
                 child_index,
-                false,
+                is_imported,
             ) {
                 Ok(_) => {
                     matched_utxos += 1;
