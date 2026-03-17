@@ -117,42 +117,60 @@ fn show_password_create(app: &mut ZipherXApp, ui: &mut egui::Ui) {
         );
     }
 
-    ui.add_space(20.0);
+    ui.add_space(15.0);
 
-    ui.horizontal(|ui| {
-        if ui
-            .add(egui::Button::new(
-                egui::RichText::new("[ CREATE NEW WALLET ]")
-                    .font(theme::mono(13.0))
-                    .color(theme::GREEN),
-            ))
-            .clicked()
-        {
-            handle_password_then_setup(app, SetupMode::Create);
-        }
-        ui.add_space(10.0);
-        if ui
-            .add(egui::Button::new(
-                egui::RichText::new("[ RESTORE ]")
-                    .font(theme::mono(13.0))
-                    .color(theme::CYAN),
-            ))
-            .clicked()
-        {
-            handle_password_then_setup(app, SetupMode::Restore);
-        }
-        ui.add_space(10.0);
-        if ui
-            .add(egui::Button::new(
-                egui::RichText::new("[ IMPORT KEY ]")
-                    .font(theme::mono(13.0))
-                    .color(theme::CYAN),
-            ))
-            .clicked()
-        {
-            handle_password_then_setup(app, SetupMode::Import);
-        }
-    });
+    // Vertical layout — fits any window size
+    let btn_width = 280.0;
+
+    if ui
+        .add_sized([btn_width, 32.0], egui::Button::new(
+            egui::RichText::new("CREATE NEW WALLET")
+                .font(theme::mono(13.0))
+                .color(egui::Color32::BLACK),
+        ).fill(theme::GREEN))
+        .clicked()
+    {
+        handle_password_then_setup(app, SetupMode::Create);
+    }
+
+    ui.add_space(6.0);
+
+    if ui
+        .add_sized([btn_width, 32.0], egui::Button::new(
+            egui::RichText::new("RESTORE FROM MNEMONIC")
+                .font(theme::mono(13.0))
+                .color(egui::Color32::BLACK),
+        ).fill(theme::CYAN))
+        .clicked()
+    {
+        handle_password_then_setup(app, SetupMode::Restore);
+    }
+
+    ui.add_space(6.0);
+
+    if ui
+        .add_sized([btn_width, 28.0], egui::Button::new(
+            egui::RichText::new("IMPORT PRIVATE KEY")
+                .font(theme::mono(11.0))
+                .color(theme::MUTED),
+        ))
+        .clicked()
+    {
+        handle_password_then_setup(app, SetupMode::Import);
+    }
+
+    ui.add_space(4.0);
+
+    if ui
+        .add_sized([btn_width, 28.0], egui::Button::new(
+            egui::RichText::new("IMPORT SEED (ADVANCED)")
+                .font(theme::mono(11.0))
+                .color(theme::MUTED),
+        ))
+        .clicked()
+    {
+        handle_password_then_setup(app, SetupMode::ImportSeed);
+    }
 }
 
 /// Setup flow after password is created.
@@ -161,6 +179,7 @@ fn show_setup_flow(app: &mut ZipherXApp, ui: &mut egui::Ui, mode: SetupMode) {
         SetupMode::Create => show_create_result(app, ui),
         SetupMode::Restore => show_restore_flow(app, ui),
         SetupMode::Import => show_import_flow(app, ui),
+        SetupMode::ImportSeed => show_import_seed_flow(app, ui),
     }
 }
 
@@ -306,6 +325,17 @@ fn show_import_flow(app: &mut ZipherXApp, ui: &mut egui::Ui) {
             .desired_width((ui.available_width() - 20.0).min(450.0)),
     );
 
+    ui.add_space(5.0);
+    ui.label(
+        egui::RichText::new(
+            "\u{26A0} Importing a private key creates a shielded-only wallet.\n\
+             There is no recovery phrase \u{2014} you MUST keep a backup of this key.\n\
+             Transparent addresses can be added later via WIF import in Settings."
+        )
+        .font(theme::mono(9.0))
+        .color(theme::YELLOW),
+    );
+
     if let Some(ref err) = app.setup_error {
         ui.add_space(5.0);
         ui.label(
@@ -357,7 +387,7 @@ fn handle_unlock(app: &mut ZipherXApp) {
     // Try to load spending key to verify password
     match app.storage.load_key("spending_key") {
         Ok(sk) => {
-            // Derive address
+            // Derive shielded address
             match zipherx_crypto::keys::derive_address(&sk, 0) {
                 Ok((addr_bytes, _)) => {
                     if let Ok(addr) = zipherx_crypto::address::encode_address(&addr_bytes) {
@@ -365,6 +395,19 @@ fn handle_unlock(app: &mut ZipherXApp) {
                     }
                 }
                 Err(_) => {}
+            }
+            // Derive transparent address (if seed stored)
+            if let Ok(seed) = app.storage.load_key("wallet_seed") {
+                if let Ok(t_addr) =
+                    zipherx_crypto::transparent::derive_transparent_address(&seed, 0, 0)
+                {
+                    app.transparent_address = Some(t_addr);
+                }
+                app.needs_seed_migration = false;
+            } else {
+                // SK exists but no seed — user needs to migrate for transparent support
+                app.needs_seed_migration = true;
+                app.seed_migration_mode = "banner".to_string();
             }
             app.sk_bytes = Some(sk);
             app.password_error = None;
@@ -462,6 +505,10 @@ fn handle_password_then_setup(app: &mut ZipherXApp, mode: SetupMode) {
                                             Some(format!("Failed to store key: {}", e));
                                         return;
                                     }
+                                    // Store seed for transparent address derivation
+                                    let _ = app.storage.store_key("wallet_seed", &seed);
+                                    // Store mnemonic for future export
+                                    let _ = app.storage.store_key("wallet_mnemonic", phrase.as_bytes());
                                     app.sk_bytes = Some(sk.to_vec());
                                     app.mnemonic_words =
                                         phrase.split_whitespace().map(|w| w.to_string()).collect();
@@ -488,6 +535,9 @@ fn handle_password_then_setup(app: &mut ZipherXApp, mode: SetupMode) {
         SetupMode::Import => {
             app.setup_mode = Some(SetupMode::Import);
         }
+        SetupMode::ImportSeed => {
+            app.setup_mode = Some(SetupMode::ImportSeed);
+        }
     }
 }
 
@@ -511,6 +561,10 @@ fn handle_restore(app: &mut ZipherXApp) {
                     app.setup_error = Some(format!("Failed to store key: {}", e));
                     return;
                 }
+                // Store seed for transparent address derivation
+                let _ = app.storage.store_key("wallet_seed", &seed);
+                // Store mnemonic for future export
+                let _ = app.storage.store_key("wallet_mnemonic", phrase.as_bytes());
                 app.sk_bytes = Some(sk.to_vec());
                 app.mnemonic_input.zeroize();
                 finalize_wallet(app);
@@ -554,8 +608,124 @@ fn handle_import(app: &mut ZipherXApp) {
     }
 }
 
+/// Import from raw 64-byte seed (128 hex chars).
+fn show_import_seed_flow(app: &mut ZipherXApp, ui: &mut egui::Ui) {
+    ui.label(
+        egui::RichText::new("Enter raw 64-byte seed (128 hex characters)")
+            .font(theme::mono(14.0))
+            .color(theme::MUTED),
+    );
+    ui.label(
+        egui::RichText::new("WARNING: No recovery phrase will be stored for seed imports.")
+            .font(theme::mono(11.0))
+            .color(theme::YELLOW),
+    );
+    ui.add_space(10.0);
+
+    ui.add(
+        egui::TextEdit::multiline(&mut app.seed_import_input)
+            .password(true)
+            .hint_text("128 hex characters")
+            .font(theme::mono(12.0))
+            .desired_width((ui.available_width() - 20.0).min(450.0))
+            .desired_rows(2),
+    );
+
+    // Character count
+    let clean = app.seed_import_input.trim().to_lowercase();
+    let count = clean.len();
+    let valid_hex = count == 128 && clean.chars().all(|c| c.is_ascii_hexdigit());
+    let count_color = if valid_hex { theme::GREEN } else { theme::MUTED };
+    ui.label(
+        egui::RichText::new(format!("{}/128 hex characters", count))
+            .font(theme::mono(10.0))
+            .color(count_color),
+    );
+
+    if let Some(ref err) = app.setup_error {
+        ui.add_space(5.0);
+        ui.label(
+            egui::RichText::new(err)
+                .font(theme::mono(11.0))
+                .color(theme::RED),
+        );
+    }
+
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new("[ IMPORT SEED ]")
+                    .font(theme::mono(14.0))
+                    .color(theme::GREEN),
+            ))
+            .clicked()
+        {
+            handle_import_seed(app);
+        }
+        if ui
+            .add(egui::Button::new(
+                egui::RichText::new("[ BACK ]")
+                    .font(theme::mono(14.0))
+                    .color(theme::MUTED),
+            ))
+            .clicked()
+        {
+            app.setup_mode = None;
+            app.seed_import_input.zeroize();
+            app.setup_error = None;
+        }
+    });
+}
+
+fn handle_import_seed(app: &mut ZipherXApp) {
+    let hex_str = app.seed_import_input.trim().to_lowercase();
+
+    if hex_str.len() != 128 {
+        app.setup_error = Some(format!(
+            "Seed must be exactly 128 hex characters (got {})",
+            hex_str.len()
+        ));
+        return;
+    }
+
+    if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+        app.setup_error = Some("Seed must contain only hex characters (0-9, a-f)".into());
+        return;
+    }
+
+    match hex::decode(&hex_str) {
+        Ok(seed) => {
+            if seed.len() != 64 {
+                app.setup_error = Some(format!("Expected 64 bytes, got {}", seed.len()));
+                return;
+            }
+            match zipherx_crypto::keys::derive_spending_key(&seed, 0) {
+                Ok(sk) => {
+                    if let Err(e) = app.storage.store_key("spending_key", &sk) {
+                        app.setup_error = Some(format!("Failed to store key: {}", e));
+                        return;
+                    }
+                    // Store seed for transparent address derivation
+                    let _ = app.storage.store_key("wallet_seed", &seed);
+                    // NOTE: No mnemonic stored — seed import has no BIP39 phrase
+                    app.sk_bytes = Some(sk.to_vec());
+                    app.seed_import_input.zeroize();
+                    finalize_wallet(app);
+                }
+                Err(e) => {
+                    app.setup_error = Some(format!("Key derivation failed: {}", e));
+                }
+            }
+        }
+        Err(e) => {
+            app.setup_error = Some(format!("Invalid hex: {}", e));
+        }
+    }
+}
+
 fn finalize_wallet(app: &mut ZipherXApp) {
-    // Derive address
+    // Derive shielded address
     if let Some(ref sk) = app.sk_bytes {
         match zipherx_crypto::keys::derive_address(sk, 0) {
             Ok((addr_bytes, _)) => {
@@ -564,6 +734,12 @@ fn finalize_wallet(app: &mut ZipherXApp) {
                 }
             }
             Err(_) => {}
+        }
+    }
+    // Derive transparent address (if seed stored)
+    if let Ok(seed) = app.storage.load_key("wallet_seed") {
+        if let Ok(t_addr) = zipherx_crypto::transparent::derive_transparent_address(&seed, 0, 0) {
+            app.transparent_address = Some(t_addr);
         }
     }
 

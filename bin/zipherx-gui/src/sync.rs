@@ -90,6 +90,11 @@ pub struct SharedState {
     // -- WIF import: raw decoded keys queued by UI for DB storage --
     pub pending_wif_imports: Vec<(Vec<u8>, String)>, // (raw_secret_key, address)
 
+    // -- imported key count + funded transparent addresses for export --
+    pub imported_key_count: u32,
+    /// (address, balance, is_change, child_index, is_imported)
+    pub funded_transparent_keys: Vec<(String, u64, bool, u32, bool)>,
+
     // -- commands from UI -> sync thread --
     pub command: Option<SyncCommand>,
 }
@@ -172,6 +177,8 @@ impl Default for SharedState {
             boost_failed_continue: None,
 
             pending_wif_imports: Vec::new(),
+            imported_key_count: 0,
+            funded_transparent_keys: Vec::new(),
             command: None,
         }
     }
@@ -306,6 +313,45 @@ fn wallet_thread_main(
 
     // Main loop: process commands from the UI
     loop {
+        // Process pending WIF imports (queued by UI)
+        {
+            let pending = if let Ok(mut s) = state.lock() {
+                std::mem::take(&mut s.pending_wif_imports)
+            } else {
+                Vec::new()
+            };
+            if !pending.is_empty() {
+                let db = wallet.db.clone();
+                for (raw_sk, address) in &pending {
+                    // Encrypt the raw secret key using the storage, then store in DB
+                    match storage.store_key(&format!("imported_wif_{}", address), raw_sk) {
+                        Ok(()) => {
+                            // Also store in the imported_transparent_keys table
+                            // Use the raw bytes as the "encrypted" blob (storage.store_key
+                            // already encrypted to file; for DB we store raw and rely on
+                            // DB-level encryption or re-encrypt at load time).
+                            let _ = runtime.block_on(async {
+                                let db_c = db.clone();
+                                let addr = address.clone();
+                                let sk = raw_sk.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    db_c.store_imported_transparent_key(&addr, &sk)
+                                }).await
+                            });
+                            eprintln!("[ZipherX] Imported WIF key for {}", address);
+                        }
+                        Err(e) => {
+                            eprintln!("[ZipherX] Failed to import WIF for {}: {}", address, e);
+                        }
+                    }
+                }
+                // Zeroize raw keys
+                for (mut sk, _) in pending {
+                    sk.iter_mut().for_each(|b| *b = 0);
+                }
+            }
+        }
+
         let cmd = {
             if let Ok(mut s) = state.lock() {
                 s.peer_count = wallet.get_connected_peer_count();
@@ -1376,6 +1422,32 @@ fn refresh_balance_and_history(
     if let Ok(t_balance) = runtime.block_on(wallet.get_transparent_balance()) {
         if let Ok(mut s) = state.lock() {
             s.transparent_balance = t_balance;
+        }
+    }
+
+    // Imported key count + funded transparent addresses (for export UI)
+    {
+        let db = wallet.db.clone();
+        if let Ok(count) = db.get_imported_key_count() {
+            if let Ok(mut s) = state.lock() {
+                s.imported_key_count = count;
+            }
+        }
+        if let Ok(funded) = db.get_funded_transparent_addresses() {
+            if let Ok(mut s) = state.lock() {
+                s.funded_transparent_keys = funded
+                    .iter()
+                    .map(|f| {
+                        (
+                            f.address.clone(),
+                            f.balance,
+                            f.is_change,
+                            f.child_index,
+                            f.is_imported,
+                        )
+                    })
+                    .collect();
+            }
         }
     }
 

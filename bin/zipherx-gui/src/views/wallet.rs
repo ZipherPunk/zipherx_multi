@@ -900,17 +900,39 @@ fn show_seed_migration(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                 "banner" => {
                     ui.label(
                         egui::RichText::new(
-                            "Transparent address (t-address) support is available. \
-                             Provide your recovery phrase or generate a new one.",
+                            "Your wallet was imported from a private key (shielded only).\n\
+                             Transparent addresses require a recovery phrase (seed).",
                         )
                         .font(theme::mono(10.0))
+                        .color(theme::MUTED),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "The private key CANNOT be used to create transparent addresses.",
+                        )
+                        .font(theme::mono(9.0))
+                        .color(theme::YELLOW),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Options:\n\
+                             \u{2022} ENTER MY PHRASE \u{2014} if you have the original 24-word phrase\n  \
+                               that created this key, it will restore matching t-addresses\n\
+                             \u{2022} GENERATE NEW \u{2014} creates a new phrase with NEW transparent\n  \
+                               addresses (unrelated to your shielded funds)\n\
+                             \u{2022} IMPORT WIF \u{2014} add transparent keys in Settings\n\
+                             \u{2022} SKIP \u{2014} shielded only, no transparent addresses",
+                        )
+                        .font(theme::mono(9.0))
                         .color(theme::MUTED),
                     );
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui
                             .button(
-                                egui::RichText::new("I HAVE MY PHRASE")
+                                egui::RichText::new("ENTER MY PHRASE")
                                     .font(theme::mono(11.0))
                                     .color(egui::Color32::BLACK),
                             )

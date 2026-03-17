@@ -1305,10 +1305,56 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Con
                     .clicked()
                 {
                     // Load funded transparent keys for export display.
-                    // The egui app calls Rust core directly — use the primary
-                    // t-address WIF that was already loaded during password verify.
+                    // For seed-derived keys: derive WIF from seed + child_index.
+                    // For imported keys: show address + message (user must keep backup).
                     app.export_funded_keys.clear();
-                    if !app.export_t_key_display.is_empty() {
+
+                    // Read funded transparent addresses from shared state
+                    let funded_keys: Vec<(String, u64, bool, u32, bool)> =
+                        if let Some(ref st) = app.shared_state {
+                            if let Ok(s) = st.lock() {
+                                s.funded_transparent_keys.clone()
+                            } else {
+                                Vec::new()
+                            }
+                        } else {
+                            Vec::new()
+                        };
+
+                    // Try to load seed for deriving WIFs of seed-derived keys
+                    let seed_opt = app.storage.load_key("wallet_seed").ok();
+
+                    for (addr, balance, is_change, child_index, is_imported) in &funded_keys {
+                        if *is_imported {
+                            // Imported key — WIF not derivable from seed
+                            app.export_funded_keys.push((
+                                addr.clone(),
+                                "IMPORTED \u{2014} keep your original WIF backup".to_string(),
+                                *balance,
+                                *is_change,
+                                true,
+                            ));
+                        } else if let Some(ref seed) = seed_opt {
+                            // Seed-derived key — derive WIF
+                            if let Ok(wif) = zipherx_crypto::transparent::export_transparent_wif(
+                                seed,
+                                0,
+                                *child_index,
+                                *is_change,
+                            ) {
+                                app.export_funded_keys.push((
+                                    addr.clone(),
+                                    (*wif).clone(),
+                                    *balance,
+                                    *is_change,
+                                    false,
+                                ));
+                            }
+                        }
+                    }
+
+                    // Fallback: if no funded keys from shared state, use primary t-addr WIF
+                    if app.export_funded_keys.is_empty() && !app.export_t_key_display.is_empty() {
                         if let Some(ref t_addr) = app.transparent_address {
                             app.export_funded_keys.push((
                                 t_addr.clone(),
@@ -1319,6 +1365,7 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Con
                             ));
                         }
                     }
+
                     app.show_export_step2 = true;
                     app.show_export = true;
                     app.show_export_confirm = false;

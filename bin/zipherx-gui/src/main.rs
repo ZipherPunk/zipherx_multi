@@ -96,6 +96,7 @@ impl eframe::App for ZipherXApp {
             self.sk_bytes = None;
             self.password_input.zeroize();
             self.export_key_display.zeroize();
+            self.export_t_key_display.zeroize();
             self.export_password.zeroize();
             self.reauth_password.zeroize();
             self.send_address.zeroize();
@@ -356,6 +357,8 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
             app.balance.note_count = s.note_count;
             app.balance.spendable_note_count = s.spendable_note_count;
         }
+        app.transparent_balance = s.transparent_balance;
+        app.imported_key_count = s.imported_key_count;
 
         // Network
         app.peer_count = s.peer_count;
@@ -374,11 +377,13 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
             match result {
                 Ok(info) => {
                     app.pending_confirmation_txid = Some(info.txid.clone());
+                    s.pending_confirmation = true;
+                    let sent_types = ["sent", "self", "self_z2t", "self_t2z"];
                     app.confirmed_sent_count_at_send = app
                         .transactions
                         .iter()
                         .filter(|t| {
-                            t.confirmations > 0 && (t.tx_type == "sent" || t.tx_type == "self")
+                            t.confirmations > 0 && sent_types.contains(&t.tx_type.as_str())
                         })
                         .count();
 
@@ -481,6 +486,26 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
     // Check pending confirmation (sent TX)
     check_pending_confirmation(app, ctx);
 
+    // Safety timeout: if TX hasn't been confirmed after 10 minutes, clear pending state
+    // gracefully. The wallet thread's autonomous sync will still keep syncing, so
+    // balance and history will update as soon as the TX appears on-chain.
+    if app.pending_confirmation_txid.is_some() {
+        if let Some(ts) = app.send_timestamp {
+            if ts.elapsed().as_secs() >= 600 {
+                eprintln!("[ZipherX] Safety timeout: clearing pending TX after 10 minutes");
+                app.pending_confirmation_txid = None;
+                app.pending_settlement_message = None;
+                app.mempool_accepted = false;
+                app.mempool_peer_status = None;
+                if let Some(ref state) = app.shared_state {
+                    if let Ok(mut s) = state.lock() {
+                        s.pending_confirmation = false;
+                    }
+                }
+            }
+        }
+    }
+
     // Check pending incoming TX confirmation
     check_incoming_confirmation(app, ctx);
 
@@ -551,7 +576,15 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         app.pending_resync_count = 0;
     }
 
-    // Background sync (inv MSG_BLOCK + periodic 90s) is handled autonomously
+    // Sync pending_confirmation flag to wallet thread so it uses faster polling (15s).
+    if let Some(ref state) = app.shared_state {
+        if let Ok(mut s) = state.lock() {
+            s.pending_confirmation = app.pending_confirmation_txid.is_some()
+                || app.pending_incoming_txid.is_some();
+        }
+    }
+
+    // Background sync (inv MSG_BLOCK + periodic 15s/90s) is handled autonomously
     // by the wallet thread — works even when the UI is locked (sk_bytes zeroed).
     // The wallet thread caches its own sk_bytes from the first StartSync.
 
@@ -559,6 +592,8 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
     // don't need 60fps), otherwise periodic 2s for peer count / notifications.
     if app.is_syncing || app.send_in_progress {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    } else if app.pending_confirmation_txid.is_some() || app.pending_incoming_txid.is_some() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
     } else {
         ctx.request_repaint_after(std::time::Duration::from_secs(2));
     }
@@ -664,31 +699,21 @@ fn check_pending_confirmation(app: &mut ZipherXApp, ctx: &egui::Context) {
         return;
     };
 
-    // Strategy 1: exact txid match
-    let matched_by_txid = app
+    // Only use exact txid match — Sapling transactions are not malleable,
+    // so the txid never changes after broadcast. Strategy 2 (count-based)
+    // was removed because it caused false-positive settlements when
+    // back-to-back sends are in flight.
+    let confirmed = app
         .transactions
         .iter()
         .any(|t| t.txid == pending_txid && t.confirmations > 0);
 
-    // Strategy 2: confirmed sent count increased
-    let current_confirmed = app
-        .transactions
-        .iter()
-        .filter(|t| t.confirmations > 0 && (t.tx_type == "sent" || t.tx_type == "self"))
-        .count();
-    let matched_by_count = current_confirmed > app.confirmed_sent_count_at_send;
-
-    if matched_by_txid || matched_by_count {
+    if confirmed {
         let elapsed = app.send_timestamp.map(|t| t.elapsed().as_secs());
         let confirmed_tx = app
             .transactions
             .iter()
-            .find(|t| t.txid == pending_txid && t.confirmations > 0)
-            .or_else(|| {
-                app.transactions
-                    .iter()
-                    .find(|t| t.confirmations > 0 && (t.tx_type == "sent" || t.tx_type == "self"))
-            });
+            .find(|t| t.txid == pending_txid && t.confirmations > 0);
 
         app.settlement_txid = confirmed_tx.map(|t| t.txid.clone()).or(Some(pending_txid));
         app.settlement_celebration = Some(app::random_settlement_message().to_string());
