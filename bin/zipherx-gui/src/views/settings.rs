@@ -1153,7 +1153,7 @@ fn show_danger_zone(app: &mut ZipherXApp, ui: &mut egui::Ui) {
 // Export key helpers
 // ---------------------------------------------------------------------------
 
-fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context) {
     egui::Frame::none()
         .fill(egui::Color32::from_rgb(25, 20, 10))
         .inner_margin(12.0)
@@ -1190,7 +1190,8 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Cont
                         || enter
                     {
                         if app.storage.verify_password(&app.export_password) {
-                            // Password verified — show Step 1
+                            // Password verified — move to Step 1 (backup options)
+                            app.show_export = true;
                             app.show_export_step2 = false;
                             app.password_error = None;
                             // Pre-load shielded key
@@ -1377,6 +1378,7 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Cont
 }
 
 /// Mnemonic export confirmation — now triggered from the unified backup flow.
+#[allow(dead_code)]
 fn show_mnemonic_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context) {
     egui::Frame::none()
         .fill(egui::Color32::from_rgb(25, 20, 10))
@@ -1777,6 +1779,7 @@ fn show_mnemonic_export_display(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &e
         });
 }
 
+#[allow(dead_code)]
 fn show_seed_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context) {
     egui::Frame::none()
         .fill(egui::Color32::from_rgb(30, 25, 0))
@@ -2095,21 +2098,17 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                             .filter(|l| !l.is_empty())
                             .collect();
                         let mut imported = 0u32;
-                        let mut skipped = 0u32;
                         for line in &lines {
                             if let Ok((sk_bytes, address)) =
                                 zipherx_crypto::transparent::decode_wif(line)
                             {
-                                // Encrypt the secret key using the storage's encryption
-                                let encrypted = app.storage.encrypt_data(&sk_bytes);
+                                // Queue raw key + address for the wallet thread to encrypt & store
                                 if let Some(ref state) = app.shared_state {
                                     if let Ok(mut s) = state.lock() {
-                                        s.import_wif_key = Some((encrypted, address));
+                                        s.pending_wif_imports.push((sk_bytes.to_vec(), address));
                                     }
                                 }
                                 imported += 1;
-                            } else {
-                                skipped += 1;
                             }
                         }
                         if imported > 0 {

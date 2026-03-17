@@ -256,6 +256,7 @@ pub struct ZipherXApp {
 
     // -- export mnemonic --
     pub show_mnemonic_export: bool,
+    #[allow(dead_code)]
     pub show_mnemonic_export_confirm: bool,
     pub mnemonic_export_password: String,
     pub export_mnemonic_display: String,
@@ -263,6 +264,7 @@ pub struct ZipherXApp {
 
     // -- export seed --
     pub show_seed_export: bool,
+    #[allow(dead_code)]
     pub show_seed_export_confirm: bool,
     pub seed_export_password: String,
     pub export_seed_display: String,

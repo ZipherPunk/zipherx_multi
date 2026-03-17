@@ -260,7 +260,7 @@ impl AsyncWallet {
                 db_clone.get_imported_transparent_addresses()
             })
             .await
-            .unwrap_or(Err(zipherx_storage::types::StorageError::Other(
+            .unwrap_or(Err(zipherx_storage::types::StorageError::QueryFailed(
                 "spawn failed".into(),
             ))) {
                 for (db_id, addr) in &imported_addrs {

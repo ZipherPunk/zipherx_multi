@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Platform trait implementations for the CLI (Linux, Windows, macOS).
 //!
 //! Provides password-encrypted file storage, console logging, and OS-specific paths.

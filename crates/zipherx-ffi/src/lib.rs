@@ -1931,6 +1931,8 @@ fn export_funded_transparent_wifs() -> Result<Vec<FundedTransparentKeyFFI>, Wall
             // fail for these, and the caller should handle the error.
             // In practice, imported key WIFs are re-encoded from the
             // stored encrypted secret key only when the platform can decrypt.
+            // Return the encrypted blob as-is; the FFI layer can't decrypt imported keys.
+            // The export will skip these entries (encode_wif will fail on encrypted bytes).
             Ok(zeroize::Zeroizing::new(encrypted.to_vec()))
         }),
     )

@@ -221,6 +221,19 @@ impl WalletDatabase {
             [],
         ); // Ignores error if column already exists
 
+        // Migration: reclassify wrongly-tagged self_t2z entries as "sent".
+        // Bug: old code classified ALL t→z sends as self_t2z, even sends to
+        // another wallet's z-address. Fix: downgrade to "sent"; the display-time
+        // grouping logic re-detects actual self-sends (same txid has both sent+received).
+        let _ = conn.execute(
+            "UPDATE transaction_history SET tx_type = 'sent' WHERE tx_type = 'self_t2z'",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE transaction_history SET tx_type = 'sent' WHERE tx_type = 'self_z2t'",
+            [],
+        );
+
         Ok(Self {
             conn: Mutex::new(conn),
             cached_sent_count: AtomicU32::new(0),

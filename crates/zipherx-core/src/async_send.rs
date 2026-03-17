@@ -711,12 +711,11 @@ pub async fn send_transparent_transaction(
             );
         }
 
-        // Record transaction in history
-        let tx_type = if address.starts_with("zs") {
-            TxType::SelfT2Z
-        } else {
-            TxType::Sent
-        };
+        // Record transaction in history.
+        // Always store as "sent" — self-send detection (self, self_t2z, self_z2t)
+        // is done at display time by checking if the same txid has both
+        // sent and received entries.
+        let tx_type = TxType::Sent;
 
         db_clone.insert_transaction(
             &txid_clone,

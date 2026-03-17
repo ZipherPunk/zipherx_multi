@@ -8,8 +8,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use rand::RngCore;
+use zeroize::Zeroizing;
 use zipherx_core::async_wallet::AsyncWallet;
 use zipherx_core::wallet::WalletConfig;
+use zipherx_network::header_sync::HeaderStore;
 use zipherx_platform::SecureStorage;
 
 use crate::platform::GuiSecureStorage;
@@ -71,12 +73,22 @@ pub struct SharedState {
     // -- new block notification (from inv MSG_BLOCK) --
     pub new_block_pending: bool,
 
+    // -- pending confirmation: UI sets true when awaiting TX confirmation --
+    // Wallet thread uses shorter sync interval (15s vs 90s) while true.
+    pub pending_confirmation: bool,
+
+    // -- transparent --
+    pub transparent_balance: u64,
+
     // -- boost download failure (user must decide) --
     /// Set when boost download fails after all retries.
     /// Contains (reason, attempts). UI shows a dialog.
     pub boost_failed: Option<(String, u32)>,
     /// User's response to boost failure: true = continue with P2P, false = quit.
     pub boost_failed_continue: Option<bool>,
+
+    // -- WIF import: raw decoded keys queued by UI for DB storage --
+    pub pending_wif_imports: Vec<(Vec<u8>, String)>, // (raw_secret_key, address)
 
     // -- commands from UI -> sync thread --
     pub command: Option<SyncCommand>,
@@ -102,6 +114,14 @@ pub enum SyncCommand {
         fee: u64,
         memo: Option<String>,
         sk_bytes: Vec<u8>,
+    },
+    TransparentSend {
+        to_address: String,
+        amount: u64,
+        fee: u64,
+        memo: Option<String>,
+        /// C7: Seed wrapped in Zeroizing for automatic secure zeroing on drop.
+        seed: Zeroizing<Vec<u8>>,
     },
     SetTorEnabled(bool),
     RepairDatabase,
@@ -142,12 +162,16 @@ impl Default for SharedState {
 
             maintenance_result: None,
 
+            transparent_balance: 0,
+
             mempool_tx: None,
             new_block_pending: false,
+            pending_confirmation: false,
 
             boost_failed: None,
             boost_failed_continue: None,
 
+            pending_wif_imports: Vec::new(),
             command: None,
         }
     }
@@ -239,6 +263,22 @@ fn wallet_thread_main(
     // Load balance + history from DB immediately so UI isn't blank during sync
     refresh_balance_and_history(&runtime, &wallet, &state);
 
+    // Check if there are pending unconfirmed TXs from a previous session.
+    // If so, enable faster sync polling (15s) until they confirm.
+    {
+        let db = wallet.db.clone();
+        if let Ok(has_pending) =
+            runtime.block_on(async { tokio::task::spawn_blocking(move || db.has_pending_sent_transactions()).await })
+        {
+            if has_pending {
+                if let Ok(mut s) = state.lock() {
+                    s.pending_confirmation = true;
+                }
+                eprintln!("[ZipherX] Found pending unconfirmed TXs — using faster sync interval (15s)");
+            }
+        }
+    }
+
     // Spawn a background thread that polls peer count from the atomic every 500ms.
     // The main loop can't update state.peer_count during blocking operations (sync, send),
     // so this poller ensures the UI always shows the current peer count.
@@ -258,7 +298,9 @@ fn wallet_thread_main(
     // even when the UI is locked (UI zeroes its own copy for security, but
     // the wallet thread keeps its own for autonomous background sync — same
     // as the FFI path does for Android/iOS).
-    let mut cached_sk: Option<Vec<u8>> = None;
+    // I3: Wrap cached keys in Zeroizing for automatic secure zeroing on drop
+    let mut cached_sk: Option<Zeroizing<Vec<u8>>> = None;
+    let mut cached_seed: Option<Zeroizing<Vec<u8>>> = None;
     let mut last_bg_sync = std::time::Instant::now();
     let mut initial_sync_done = false;
 
@@ -275,19 +317,31 @@ fn wallet_thread_main(
 
         match cmd {
             Some(SyncCommand::StartSync { mut sk_bytes }) => {
+                // Cache sk_bytes for autonomous background sync (I3: Zeroizing wrapper)
+                if cached_sk.is_none() {
+                    cached_sk = Some(Zeroizing::new(sk_bytes.clone()));
+                }
+                // Cache seed for transparent address scanning (I3: Zeroizing wrapper)
+                if cached_seed.is_none() {
+                    if let Ok(seed) = storage.load_key("wallet_seed") {
+                        cached_seed = Some(Zeroizing::new(seed));
+                    }
+                }
+
                 // Set up event-driven mempool detector before first sync
                 // so block listeners started during sync already fire the callback.
                 if !mempool_detector_set {
-                    setup_mempool_detector(&runtime, &wallet, &sk_bytes, &state);
+                    setup_mempool_detector(
+                        &runtime,
+                        &wallet,
+                        &sk_bytes,
+                        cached_seed.as_ref().map(|s| s.as_slice()),
+                        &state,
+                    );
                     mempool_detector_set = true;
                 }
 
-                // Cache sk_bytes for autonomous background sync
-                if cached_sk.is_none() {
-                    cached_sk = Some(sk_bytes.clone());
-                }
-
-                handle_sync(&runtime, &wallet, &sk_bytes, &state);
+                handle_sync(&runtime, &wallet, &sk_bytes, cached_seed.as_ref().map(|s| s.as_slice()), &state);
                 // Refresh balance and history after sync
                 refresh_balance_and_history(&runtime, &wallet, &state);
 
@@ -311,7 +365,7 @@ fn wallet_thread_main(
                         eprintln!(
                             "[ZipherX] Auto-retry: total > spendable — notes need witness rebuild"
                         );
-                        handle_sync(&runtime, &wallet, &sk_bytes, &state);
+                        handle_sync(&runtime, &wallet, &sk_bytes, cached_seed.as_ref().map(|s| s.as_slice()), &state);
                         refresh_balance_and_history(&runtime, &wallet, &state);
                     }
                     initial_sync_done = true;
@@ -347,6 +401,26 @@ fn wallet_thread_main(
                     unsafe { std::ptr::write_volatile(b, 0) };
                 }
                 std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
+            }
+            Some(SyncCommand::TransparentSend {
+                to_address,
+                amount,
+                fee,
+                memo,
+                seed,
+            }) => {
+                // C7: seed is Zeroizing<Vec<u8>> — auto-zeroed on drop
+                handle_transparent_send(
+                    &runtime,
+                    &wallet,
+                    &to_address,
+                    amount,
+                    fee,
+                    memo.as_deref(),
+                    &seed,
+                    &state,
+                );
+                // seed is dropped here — Zeroizing handles secure zeroing
             }
             Some(SyncCommand::SetTorEnabled(enabled)) => {
                 // GUI-L1: Tor toggle not yet implemented
@@ -400,33 +474,94 @@ fn wallet_thread_main(
                 // Autonomous background sync: works even when UI is locked.
                 // Triggered by:
                 //   - inv MSG_BLOCK (instant) when initial sync is done
-                //   - periodic timer (90s) when synced
+                //   - pending TX timer (15s) when awaiting confirmation
+                //   - periodic timer (90s) when synced, no pending TX
                 //   - retry timer (30s) when initial sync failed (network recovery)
                 if let Some(ref sk) = cached_sk {
-                    let new_block = if let Ok(mut s) = state.lock() {
+                    let (new_block, has_pending_tx) = if let Ok(mut s) = state.lock() {
                         let pending = s.new_block_pending;
                         if pending {
                             s.new_block_pending = false;
                         }
-                        pending
+                        (pending, s.pending_confirmation)
+                    } else {
+                        (false, false)
+                    };
+
+                    // Check if we're significantly behind chain tip (>10 blocks).
+                    // If so, use aggressive polling to catch up quickly.
+                    let is_behind = if let Ok(_s) = state.lock() {
+                        let peer_tip = wallet.connected_peer_count.load(std::sync::atomic::Ordering::Relaxed);
+                        // If last sync was >5 min ago, we're likely behind
+                        last_bg_sync.elapsed().as_secs() > 300 && peer_tip > 0
                     } else {
                         false
                     };
 
-                    let retry_interval = if initial_sync_done { 90 } else { 30 };
+                    // Faster polling (15s) when awaiting TX confirmation or catching up,
+                    // normal (90s) otherwise, retry (30s) on initial fail.
+                    let retry_interval = if !initial_sync_done {
+                        30
+                    } else if has_pending_tx || is_behind {
+                        15
+                    } else {
+                        90
+                    };
                     let periodic = last_bg_sync.elapsed().as_secs() >= retry_interval;
 
                     if new_block || periodic {
                         if new_block {
-                            eprintln!("[ZipherX] Wallet thread: new block — autonomous sync");
+                            // Wait for block to propagate before syncing.
+                            eprintln!("[ZipherX] Wallet thread: new block — waiting 5s for propagation...");
+                            std::thread::sleep(std::time::Duration::from_secs(5));
                         } else if !initial_sync_done {
                             eprintln!(
                                 "[ZipherX] Wallet thread: retrying initial sync (network recovery)"
                             );
                         }
-                        handle_sync(&runtime, &wallet, sk, &state);
+                        let height_before = if let Ok(s) = state.lock() { s.block_height } else { 0 };
+                        handle_sync(&runtime, &wallet, sk, cached_seed.as_ref().map(|s| s.as_slice()), &state);
                         refresh_balance_and_history(&runtime, &wallet, &state);
+
+                        // If inv MSG_BLOCK triggered this but no new block was found,
+                        // peers haven't propagated headers yet. Retry once after 10s.
+                        if new_block {
+                            let height_after = if let Ok(s) = state.lock() { s.block_height } else { 0 };
+                            if height_after <= height_before {
+                                eprintln!("[ZipherX] Wallet thread: inv block but no new header — retrying in 10s");
+                                std::thread::sleep(std::time::Duration::from_secs(10));
+                                handle_sync(&runtime, &wallet, sk, cached_seed.as_ref().map(|s| s.as_slice()), &state);
+                                refresh_balance_and_history(&runtime, &wallet, &state);
+
+                                // If retry also failed, force reconnect to get fresh peers
+                                let height_after_retry = if let Ok(s) = state.lock() { s.block_height } else { 0 };
+                                if height_after_retry <= height_before {
+                                    eprintln!("[ZipherX] Wallet thread: peers stale after inv — reconnecting");
+                                    runtime.block_on(async {
+                                        let mut pm = wallet.peer_manager.lock().await;
+                                        pm.disconnect_all().await;
+                                        let _ = pm.connect().await;
+                                    });
+                                    // One more sync attempt with fresh peers
+                                    handle_sync(&runtime, &wallet, sk, cached_seed.as_ref().map(|s| s.as_slice()), &state);
+                                    refresh_balance_and_history(&runtime, &wallet, &state);
+                                }
+                            }
+                        }
+
                         last_bg_sync = std::time::Instant::now();
+
+                        // Restart block listeners immediately after sync — sync consumes
+                        // the readers (kills listeners). Without this, inv MSG_BLOCK
+                        // messages are missed until the 30s health check restarts them.
+                        if mempool_detector_set {
+                            runtime.block_on(async {
+                                let mut pm = wallet.peer_manager.lock().await;
+                                if pm.connected_count() > 0 && !pm.has_active_block_listeners() {
+                                    pm.start_all_block_listeners().await;
+                                }
+                            });
+                        }
 
                         // Mark initial sync done if this retry succeeded
                         if !initial_sync_done {
@@ -444,19 +579,16 @@ fn wallet_thread_main(
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    // Zeroize cached sk on thread exit
-    if let Some(ref mut sk) = cached_sk {
-        for b in sk.iter_mut() {
-            unsafe { std::ptr::write_volatile(b, 0) };
-        }
-        std::sync::atomic::fence(std::sync::atomic::Ordering::SeqCst);
-    }
+    // I3: cached_sk and cached_seed are Zeroizing<Vec<u8>> — auto-zeroed on drop
+    drop(cached_sk);
+    drop(cached_seed);
 }
 
 fn handle_sync(
     runtime: &tokio::runtime::Runtime,
     wallet: &AsyncWallet,
     sk_bytes: &[u8],
+    seed: Option<&[u8]>,
     state: &Arc<Mutex<SharedState>>,
 ) {
     use zipherx_core::sync::SyncStatus;
@@ -524,6 +656,11 @@ fn handle_sync(
                     s.sync_current = 0;
                     s.sync_target = *gaps_remaining as u64;
                 }
+                SyncStatus::ConfirmationsUpdated { height } => {
+                    s.sync_phase = format!("Finalizing {}", height);
+                    s.sync_height = *height;
+                    s.block_height = *height;
+                }
                 SyncStatus::Complete { height } => {
                     s.sync_phase = format!("Synced to {}", height);
                     s.sync_current = *height;
@@ -546,7 +683,11 @@ fn handle_sync(
         }
     });
 
-    let result = runtime.block_on(wallet.sync(sk_bytes, Some(progress_fn)));
+    let result = if let Some(s) = seed {
+        runtime.block_on(wallet.sync_with_transparent(sk_bytes, s, Some(progress_fn)))
+    } else {
+        runtime.block_on(wallet.sync(sk_bytes, Some(progress_fn)))
+    };
 
     match result {
         Ok(height) => {
@@ -655,8 +796,21 @@ fn handle_sync(
             }
         }
         Err(e) => {
+            let err_msg = e.to_string();
+            eprintln!("[ZipherX] Sync error: {}", err_msg);
+
+            // If sync failed due to no peers, try to reconnect
+            if err_msg.contains("No peers") || err_msg.contains("peer") {
+                eprintln!("[ZipherX] Attempting peer reconnection after sync failure");
+                runtime.block_on(async {
+                    let mut pm = wallet.peer_manager.lock().await;
+                    pm.disconnect_all().await;
+                    let _ = pm.connect().await;
+                });
+            }
+
             if let Ok(mut s) = state.lock() {
-                s.sync_error = Some(e.to_string());
+                s.sync_error = Some(err_msg);
             }
         }
     }
@@ -666,22 +820,36 @@ fn handle_sync(
 ///
 /// Block listeners handle inv→getdata→tx internally and fire the callback
 /// with raw TX bytes. Trial decryption happens synchronously in the callback.
+/// When seed is available, also matches transparent outputs against derived addresses.
 /// No separate task, no channel, no extra TCP connection.
 fn setup_mempool_detector(
     runtime: &tokio::runtime::Runtime,
     wallet: &AsyncWallet,
     sk_bytes: &[u8],
+    seed: Option<&[u8]>,
     state: &Arc<Mutex<SharedState>>,
 ) {
     let state_clone = state.clone();
-    let detector = zipherx_core::mempool_monitor::MempoolDetector::new(
-        sk_bytes.to_vec(),
-        std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
-            if let Ok(mut s) = state_clone.lock() {
-                s.mempool_tx = Some(info);
-            }
-        }),
-    );
+    let detector = if let Some(seed) = seed {
+        zipherx_core::mempool_monitor::MempoolDetector::new_with_transparent(
+            sk_bytes.to_vec(),
+            seed,
+            std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
+                if let Ok(mut s) = state_clone.lock() {
+                    s.mempool_tx = Some(info);
+                }
+            }),
+        )
+    } else {
+        zipherx_core::mempool_monitor::MempoolDetector::new(
+            sk_bytes.to_vec(),
+            std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
+                if let Ok(mut s) = state_clone.lock() {
+                    s.mempool_tx = Some(info);
+                }
+            }),
+        )
+    };
     let mempool_callback = detector.into_callback();
     runtime.block_on(async {
         let mut pm = wallet.peer_manager.lock().await;
@@ -829,18 +997,385 @@ fn handle_send(
     }
 }
 
+fn handle_transparent_send(
+    runtime: &tokio::runtime::Runtime,
+    wallet: &AsyncWallet,
+    to_address: &str,
+    amount: u64,
+    fee: u64,
+    memo: Option<&str>,
+    seed: &[u8],
+    state: &Arc<Mutex<SharedState>>,
+) {
+    eprintln!(
+        "[ZipherX] Transparent send: {} zatoshis to {}",
+        amount, to_address,
+    );
+
+    // Update progress
+    if let Ok(mut s) = state.lock() {
+        s.send_phase = "Selecting UTXOs...".to_string();
+        s.send_current = 0;
+        s.send_total = 4;
+    }
+
+    // Get unspent UTXOs
+    let utxos = match runtime.block_on(wallet.get_unspent_transparent_utxos()) {
+        Ok(u) => u,
+        Err(e) => {
+            if let Ok(mut s) = state.lock() {
+                s.send_result = Some(Err(format!("Failed to get UTXOs: {}", e)));
+            }
+            return;
+        }
+    };
+
+    if utxos.is_empty() {
+        if let Ok(mut s) = state.lock() {
+            s.send_result = Some(Err("No transparent UTXOs available".to_string()));
+        }
+        return;
+    }
+
+    // Select UTXOs to cover amount + fee.
+    // Sort by value DESCENDING so we pick the fewest UTXOs possible
+    // and avoid consuming the entire transparent balance.
+    let total_needed = match amount.checked_add(fee) {
+        Some(v) => v,
+        None => {
+            if let Ok(mut s) = state.lock() {
+                s.send_result = Some(Err("amount + fee overflow".to_string()));
+            }
+            return;
+        }
+    };
+    let mut sorted_utxos = utxos.clone();
+    sorted_utxos.sort_by(|a, b| b.value.cmp(&a.value));
+
+    eprintln!(
+        "[ZipherX] UTXO selection: amount={}, fee={}, total_needed={}, {} UTXOs available",
+        amount, fee, total_needed, sorted_utxos.len(),
+    );
+    for (i, u) in sorted_utxos.iter().enumerate() {
+        eprintln!(
+            "[ZipherX]   UTXO[{}]: txid={}.. value={} is_change={}",
+            i, &u.txid[..16], u.value, u.is_change,
+        );
+    }
+
+    let mut selected = Vec::new();
+    let mut selected_total: u64 = 0;
+    for utxo in &sorted_utxos {
+        selected.push(utxo.clone());
+        selected_total = selected_total.checked_add(utxo.value).unwrap_or(u64::MAX);
+        if selected_total >= total_needed {
+            break;
+        }
+    }
+
+    let change_amount = selected_total.saturating_sub(total_needed);
+    eprintln!(
+        "[ZipherX] UTXO selection: picked {} UTXOs, total_input={}, change={}",
+        selected.len(), selected_total, change_amount,
+    );
+
+    if selected_total < total_needed {
+        if let Ok(mut s) = state.lock() {
+            s.send_result = Some(Err(format!(
+                "Insufficient transparent funds: have {}, need {}",
+                selected_total, total_needed,
+            )));
+        }
+        return;
+    }
+
+    if let Ok(mut s) = state.lock() {
+        s.send_phase = "Building transaction...".to_string();
+        s.send_current = 1;
+    }
+
+    // Build transparent spend infos
+    let mut spend_infos = Vec::new();
+    for utxo in &selected {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[ZipherX] UTXO spend: txid={}.. output_index={} value={} is_change={} child_index={} addr={}",
+            &utxo.txid[..16], utxo.output_index, utxo.value, utxo.is_change, utxo.child_index, utxo.address,
+        );
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[ZipherX] UTXO script_pubkey ({} bytes): {}",
+            utxo.script_pubkey.len(), hex::encode(&utxo.script_pubkey),
+        );
+
+        // Derive the secret key for this UTXO
+        let sk_result = zipherx_crypto::transparent::derive_transparent_secret_key(
+            seed,
+            0,
+            utxo.child_index,
+            utxo.is_change,
+        );
+        let sk = match sk_result {
+            Ok(s) => s,
+            Err(e) => {
+                if let Ok(mut s) = state.lock() {
+                    s.send_result = Some(Err(format!("Key derivation failed: {}", e)));
+                }
+                return;
+            }
+        };
+
+        // Verify: derive address from the secret key and check it matches the UTXO address
+        let derived_addr = if utxo.is_change {
+            zipherx_crypto::transparent::derive_transparent_change_address(seed, 0, utxo.child_index)
+        } else {
+            zipherx_crypto::transparent::derive_transparent_address(seed, 0, utxo.child_index)
+        };
+        match &derived_addr {
+            Ok(addr) => {
+                let matches = addr == &utxo.address;
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[ZipherX] Key verification: derived={} utxo={} match={}",
+                    addr, utxo.address, matches,
+                );
+                if !matches {
+                    if let Ok(mut s) = state.lock() {
+                        s.send_result = Some(Err(format!(
+                            "UTXO address mismatch: derived {} but UTXO has {}",
+                            addr, utxo.address,
+                        )));
+                    }
+                    return;
+                }
+            }
+            Err(e) => {
+                eprintln!("[ZipherX] WARNING: address derivation for verification failed: {}", e);
+            }
+        }
+
+        // Parse txid hex to bytes — UTXO stores display format (reversed),
+        // but OutPoint needs internal byte order, so reverse after decode.
+        let mut txid_bytes = [0u8; 32];
+        if let Ok(decoded) = hex::decode(&utxo.txid) {
+            if decoded.len() == 32 {
+                txid_bytes.copy_from_slice(&decoded);
+                txid_bytes.reverse(); // display → internal byte order
+            }
+        }
+
+        spend_infos.push(zipherx_crypto::transaction::TransparentSpendInfo {
+            secret_key: sk.to_vec(),
+            prevout_txid: txid_bytes,
+            prevout_index: utxo.output_index,
+            script_pubkey: utxo.script_pubkey.clone(),
+            value: utxo.value,
+        });
+    }
+
+    // We need a Sapling SK for change address (shielded change for privacy).
+    // Load spending key from the seed.
+    let sk_bytes = match zipherx_crypto::keys::derive_spending_key(seed, 0) {
+        Ok(sk) => sk, // Keep Zeroizing<Vec<u8>> wrapper for automatic zeroing on drop
+        Err(e) => {
+            if let Ok(mut s) = state.lock() {
+                s.send_result = Some(Err(format!("SK derivation failed: {}", e)));
+            }
+            return;
+        }
+    };
+
+    // Get chain height from header store
+    let chain_height = wallet
+        .header_store
+        .get_latest_height()
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+
+    if let Ok(mut s) = state.lock() {
+        s.send_phase = "Building proof...".to_string();
+        s.send_current = 2;
+    }
+
+    // Build the transaction (memo supported for shielded destinations)
+    let memo_bytes = memo.map(|m| m.as_bytes().to_vec());
+
+    // I2: Rotate change address — use next available child_index to avoid address reuse.
+    // Propagate DB errors instead of silently falling back to index 0 (which would reuse addresses).
+    let next_change_idx = match wallet.db.next_transparent_change_index() {
+        Ok(idx) => idx,
+        Err(e) => {
+            eprintln!("[ZipherX] Failed to get next change index: {}", e);
+            if let Ok(mut s) = state.lock() {
+                s.send_result = Some(Err(format!("DB error getting change index: {}", e)));
+            }
+            return;
+        }
+    };
+    let t_change_addr = match zipherx_crypto::transparent::derive_transparent_change_address(seed, 0, next_change_idx) {
+        Ok(addr) => {
+            #[cfg(debug_assertions)]
+            eprintln!("[ZipherX] Transparent change address (child_index={}): {}", next_change_idx, &addr);
+            Some(addr)
+        }
+        Err(e) => {
+            eprintln!("[ZipherX] WARNING: transparent change address derivation failed: {} — change will go to shielded", e);
+            None
+        }
+    };
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[ZipherX] Building transparent TX: amount={} to={} chain_height={} change_addr={:?}",
+        amount, to_address, chain_height, t_change_addr.as_deref(),
+    );
+
+    let tx_result = zipherx_crypto::transaction::build_transparent_spend_transaction(
+        &sk_bytes,
+        to_address,
+        amount,
+        memo_bytes.as_deref(),
+        &spend_infos,
+        chain_height,
+        t_change_addr.as_deref(),
+    );
+
+    let tx_result = match tx_result {
+        Ok(r) => {
+            eprintln!(
+                "[ZipherX] TX built: {} bytes",
+                r.tx_bytes.len(),
+            );
+            // Log first 8 bytes (version + version_group_id) and last 4 (expiry)
+            if r.tx_bytes.len() >= 16 {
+                eprintln!(
+                    "[ZipherX] TX header: {}",
+                    hex::encode(&r.tx_bytes[..16]),
+                );
+            }
+            r
+        }
+        Err(e) => {
+            if let Ok(mut s) = state.lock() {
+                s.send_result = Some(Err(format!("TX build failed: {}", e)));
+            }
+            return;
+        }
+    };
+
+    if let Ok(mut s) = state.lock() {
+        s.send_phase = "Broadcasting...".to_string();
+        s.send_current = 3;
+    }
+
+    // Compute txid before broadcast
+    let txid_bytes = zipherx_crypto::util::double_sha256(&tx_result.tx_bytes);
+    let mut txid_display = txid_bytes;
+    txid_display.reverse();
+    let txid_hex = hex::encode(txid_display);
+
+    // Broadcast
+    let broadcast_result = runtime.block_on(async {
+        let pm = wallet.peer_manager.lock().await;
+        pm.broadcast_transaction(&tx_result.tx_bytes, &txid_hex).await
+    });
+
+    match broadcast_result {
+        Ok(br) => {
+            let accepted = br.accepted_by.len();
+            let rejected = br.rejected_by.len();
+
+            if !br.success {
+                if let Ok(mut s) = state.lock() {
+                    let reasons: Vec<String> = br.rejected_by.iter().map(|(_, r)| r.clone()).collect();
+                    s.send_result = Some(Err(format!(
+                        "TX rejected: {}",
+                        reasons.join(", "),
+                    )));
+                }
+                return;
+            }
+
+            eprintln!(
+                "[ZipherX] Transparent TX broadcast: {} ({} accepted, {} rejected)",
+                &txid_hex[..16], accepted, rejected,
+            );
+
+            // Mark spent UTXOs in DB
+            let db = wallet.db.clone();
+            for utxo in &selected {
+                let _ = db.mark_transparent_spent_by_prevout(
+                    &utxo.txid,
+                    utxo.output_index,
+                    &txid_hex,
+                    0, // unconfirmed — height will be set when TX is mined
+                );
+            }
+
+            // Record TX in transaction_history (so it shows in history view)
+            let tx_type_val = if to_address.starts_with("zs") {
+                zipherx_storage::types::TxType::SelfT2Z
+            } else {
+                zipherx_storage::types::TxType::Sent
+            };
+            let now_ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let _ = db.insert_transaction(
+                &txid_hex,
+                0, // height (unconfirmed)
+                Some(now_ts),
+                tx_type_val,
+                amount,
+                fee,
+                Some(to_address),
+                None, // memo
+                zipherx_storage::types::TxStatus::Pending,
+            );
+            eprintln!(
+                "[ZipherX] Transparent TX {} recorded as '{}'",
+                &txid_hex[..16], tx_type_val.as_str()
+            );
+
+            if let Ok(mut s) = state.lock() {
+                s.send_phase = "Complete".to_string();
+                s.send_current = 4;
+                s.send_result = Some(Ok(SendResultInfo {
+                    txid: txid_hex,
+                    amount,
+                    fee,
+                }));
+                s.mempool_accepted = true;
+            }
+        }
+        Err(e) => {
+            if let Ok(mut s) = state.lock() {
+                s.send_result = Some(Err(format!("Broadcast failed: {}", e)));
+            }
+        }
+    }
+}
+
 fn refresh_balance_and_history(
     runtime: &tokio::runtime::Runtime,
     wallet: &AsyncWallet,
     state: &Arc<Mutex<SharedState>>,
 ) {
-    // Balance
+    // Balance (shielded)
     if let Ok(balance) = runtime.block_on(wallet.get_balance()) {
         if let Ok(mut s) = state.lock() {
             s.total_balance = balance.total;
             s.spendable_balance = balance.spendable;
             s.note_count = balance.note_count;
             s.spendable_note_count = balance.spendable_note_count;
+        }
+    }
+    // Balance (transparent)
+    if let Ok(t_balance) = runtime.block_on(wallet.get_transparent_balance()) {
+        if let Ok(mut s) = state.lock() {
+            s.transparent_balance = t_balance;
         }
     }
 
@@ -865,23 +1400,82 @@ fn refresh_balance_and_history(
                     continue;
                 }
                 let group = &grouped[&r.txid];
-                let has_sent = group.iter().any(|t| t.tx_type == "sent");
+                let sent_types = ["sent", "self_z2t", "self_t2z"];
+                let has_sent = group.iter().any(|t| sent_types.contains(&t.tx_type.as_str()));
                 let has_received = group.iter().any(|t| t.tx_type == "received");
 
                 if has_sent && has_received {
-                    // Self-send: display as "self" with fee as amount
-                    let sent = group.iter().find(|t| t.tx_type == "sent").unwrap();
-                    result.push(crate::app::TransactionRecord {
-                        txid: r.txid.clone(),
-                        tx_type: "self".to_string(),
-                        amount: sent.fee,
-                        fee: sent.fee,
-                        address: sent.address.clone(),
-                        memo: sent.memo.clone(),
-                        confirmations: sent.confirmations,
-                        height: sent.height,
-                        timestamp: sent.timestamp,
+                    let sent = group.iter().find(|t| sent_types.contains(&t.tx_type.as_str())).unwrap();
+
+                    // Check ALL received entries for transparent vs shielded addresses.
+                    // A z→t tx has multiple received entries: shielded change + transparent UTXO.
+                    let has_t_received = group.iter().any(|t| {
+                        t.tx_type == "received"
+                            && t.address.as_ref().map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"))
                     });
+                    let has_z_received = group.iter().any(|t| {
+                        t.tx_type == "received"
+                            && t.address.as_ref().map_or(true, |a| !a.starts_with("t1") && !a.starts_with("t3"))
+                    });
+
+                    let sent_dest_is_transparent = sent.address.as_ref()
+                        .map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"));
+
+                    // z→t: sent destination is t-addr AND a transparent UTXO was received
+                    // t→z: sent destination is z-addr AND a shielded note was received (no t-received)
+                    let is_z2t = sent_dest_is_transparent && has_t_received;
+                    let is_t2z = !sent_dest_is_transparent && has_z_received && !has_t_received;
+
+                    if is_z2t {
+                        // Cross-pool: z→t shield-to-transparent transfer
+                        // Use the transparent received entry for amount/address
+                        let t_received = group.iter().find(|t| {
+                            t.tx_type == "received"
+                                && t.address.as_ref().map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"))
+                        }).unwrap();
+                        result.push(crate::app::TransactionRecord {
+                            txid: r.txid.clone(),
+                            tx_type: "self_z2t".to_string(),
+                            amount: t_received.amount,
+                            fee: sent.fee,
+                            address: t_received.address.clone(),
+                            memo: sent.memo.clone(),
+                            confirmations: sent.confirmations.max(t_received.confirmations),
+                            height: sent.height.max(t_received.height),
+                            timestamp: sent.timestamp.max(t_received.timestamp),
+                        });
+                    } else if is_t2z {
+                        // Cross-pool: t→z transparent-to-shield transfer
+                        // Use the shielded received entry for amount
+                        let z_received = group.iter().find(|t| {
+                            t.tx_type == "received"
+                                && t.address.as_ref().map_or(true, |a| !a.starts_with("t1") && !a.starts_with("t3"))
+                        }).unwrap();
+                        result.push(crate::app::TransactionRecord {
+                            txid: r.txid.clone(),
+                            tx_type: "self_t2z".to_string(),
+                            amount: z_received.amount,
+                            fee: sent.fee,
+                            address: sent.address.clone(),
+                            memo: z_received.memo.clone(),
+                            confirmations: sent.confirmations.max(z_received.confirmations),
+                            height: sent.height.max(z_received.height),
+                            timestamp: sent.timestamp.max(z_received.timestamp),
+                        });
+                    } else {
+                        // Same-pool self-send (z→z or t→t): display as "self" with fee
+                        result.push(crate::app::TransactionRecord {
+                            txid: r.txid.clone(),
+                            tx_type: "self".to_string(),
+                            amount: sent.fee,
+                            fee: sent.fee,
+                            address: sent.address.clone(),
+                            memo: sent.memo.clone(),
+                            confirmations: sent.confirmations,
+                            height: sent.height,
+                            timestamp: sent.timestamp,
+                        });
+                    }
                 } else {
                     result.push(crate::app::TransactionRecord {
                         txid: r.txid.clone(),
