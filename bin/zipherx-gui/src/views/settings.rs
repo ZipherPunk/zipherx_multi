@@ -1324,7 +1324,10 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Con
                     // Try to load seed for deriving WIFs of seed-derived keys
                     let seed_opt = app.storage.load_key("wallet_seed").ok();
 
+                    eprintln!("[ZipherX] Export: {} funded transparent addresses found", funded_keys.len());
                     for (addr, balance, is_change, child_index, is_imported) in &funded_keys {
+                        eprintln!("[ZipherX]   addr={} balance={} is_change={} child_index={} is_imported={}",
+                            addr, balance, is_change, child_index, is_imported);
                         if *is_imported {
                             // Imported key — WIF not derivable from seed
                             app.export_funded_keys.push((
@@ -1336,19 +1339,32 @@ fn show_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Con
                             ));
                         } else if let Some(ref seed) = seed_opt {
                             // Seed-derived key — derive WIF
-                            if let Ok(wif) = zipherx_crypto::transparent::export_transparent_wif(
+                            match zipherx_crypto::transparent::export_transparent_wif(
                                 seed,
                                 0,
                                 *child_index,
                                 *is_change,
                             ) {
-                                app.export_funded_keys.push((
-                                    addr.clone(),
-                                    (*wif).clone(),
-                                    *balance,
-                                    *is_change,
-                                    false,
-                                ));
+                                Ok(wif) => {
+                                    app.export_funded_keys.push((
+                                        addr.clone(),
+                                        (*wif).clone(),
+                                        *balance,
+                                        *is_change,
+                                        false,
+                                    ));
+                                }
+                                Err(e) => {
+                                    eprintln!("[ZipherX]   WIF derivation FAILED for {}: {}", addr, e);
+                                    // Still show the address without WIF
+                                    app.export_funded_keys.push((
+                                        addr.clone(),
+                                        format!("WIF derivation failed: {}", e),
+                                        *balance,
+                                        *is_change,
+                                        false,
+                                    ));
+                                }
                             }
                         }
                     }
