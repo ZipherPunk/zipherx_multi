@@ -127,8 +127,9 @@ impl<S: HeaderStore> HeaderSync<S> {
 
     /// Batched header sync — single-peer with failover, accumulate in memory,
     /// flush to DB every BATCH_FLUSH_SIZE headers for maximum throughput.
-    /// Falls back to next peer on error. Equihash verified every 100th header
-    /// during bulk sync, every header in last 1000, and last header of each batch.
+    /// Falls back to next peer on error. Equihash verified every 5th header
+    /// during bulk sync (20% coverage), every header in last 1000, and
+    /// first + last header of each batch.
     async fn sync_headers_simple(
         &self,
         peer_manager: &mut PeerManager,
@@ -439,17 +440,20 @@ impl<S: HeaderStore> HeaderSync<S> {
 
                 let header_base = header.serialize_base();
 
-                // Equihash verification: every 10th during bulk sync, every header
-                // within the last 1000 blocks, and always the last header of each
-                // batch (ensures chain continuity can't be broken at batch boundaries).
-                // nBits/difficulty is implicitly checked via Equihash verification
-                // (the solution must satisfy the difficulty target encoded in the header)
+                // H-5: Equihash verification strategy for PoW integrity:
+                // - Every header within the last 1000 blocks (near-tip = full verification)
+                // - Every 5th header during bulk sync (20% coverage — strong guarantee
+                //   that an attacker cannot inject >4 consecutive invalid headers)
+                // - Always the first AND last header of each batch (prevents boundary attacks)
+                // nBits range is already validated for EVERY header above (RN-2).
+                // Equihash additionally verifies the solution satisfies the difficulty target.
                 let remaining = chain_tip.saturating_sub(current_height);
+                let is_first_in_batch = batch_idx == 0;
                 let is_last_in_batch = batch_idx == headers.len() - 1;
-                // RN-1: Verify every 10th header (10% coverage) instead of every
-                // 100th (1%). This provides much better PoW verification coverage
-                // with only a modest performance cost during bulk sync.
-                let should_verify = remaining < 1000 || height % 10 == 0 || is_last_in_batch;
+                let should_verify = remaining < 1000
+                    || height % 5 == 0
+                    || is_first_in_batch
+                    || is_last_in_batch;
 
                 if should_verify {
                     match zipherx_crypto::equihash::verify(&header_base, &header.solution) {

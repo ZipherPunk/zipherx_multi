@@ -420,8 +420,9 @@ public enum ZipherXWrapper {
     /// background sync needs to read/write the database while the app is not in
     /// the foreground. If biometric authentication were required to load this key,
     /// background sync would fail whenever the user has not recently authenticated.
-    /// The spending key, by contrast, *is* stored with `.userPresence` since it is
-    /// only needed at the moment the user explicitly initiates a transaction.
+    /// The spending key, seed, and mnemonic are stored with
+    /// `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` + `.userPresence`
+    /// (C-4) so the OS enforces biometric/passcode before every read.
     /// SA-AUDIT: The returned key array is stored in WalletConfig and passed to Rust FFI.
     /// We cannot zero the local copy before return since it IS the return value.
     /// The caller (defaultConfig) embeds it in WalletConfig which lives for the

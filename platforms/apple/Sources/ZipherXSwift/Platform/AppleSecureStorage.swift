@@ -21,9 +21,12 @@ public enum SecureStorageError: Error, LocalizedError {
 
 /// Keychain-backed secure storage for cryptographic keys.
 ///
-/// On devices with Secure Enclave, keys are protected with
-/// `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
-/// Falls back to standard Keychain on older hardware.
+/// Sensitive items (spending key, seed, mnemonic) are stored with
+/// `SecAccessControl` + `.userPresence` using
+/// `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`, requiring biometric
+/// or device passcode authentication before the item can be read.
+/// Non-sensitive items use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`.
+/// Falls back to standard Keychain on older hardware or when no passcode is set.
 public final class AppleSecureStorage: @unchecked Sendable {
 
     private let service: String
@@ -46,31 +49,33 @@ public final class AppleSecureStorage: @unchecked Sendable {
         var query = baseQuery(for: identifier)
         query[kSecValueData as String]  = data
 
-        // C-4: On iOS, add SecAccessControl with .userPresence for spending key
-        // so the OS requires biometric/passcode before the item can be read.
-        // SECURITY NOTE: macOS Hardened Runtime sandbox restrictions prevent
-        // SecAccessControl with .userPresence on Keychain items. Re-authentication
-        // is enforced at the application layer (password re-entry for send/export)
-        // rather than at the Keychain level.
-        #if os(iOS)
+        // C-4: Add SecAccessControl with .userPresence for sensitive keys
+        // (spending key, seed, mnemonic) so the OS requires biometric or
+        // passcode authentication before the item can be read.
+        // kSecAttrAccessible and kSecAttrAccessControl are mutually exclusive —
+        // only one may be set per Keychain item.
         if requireUserPresence {
             var error: Unmanaged<CFError>?
-            guard let accessControl = SecAccessControlCreateWithFlags(
+            let accessControl = SecAccessControlCreateWithFlags(
                 kCFAllocatorDefault,
-                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
                 .userPresence,
                 &error
-            ) else {
-                let desc = error.map { ($0.takeRetainedValue() as Error).localizedDescription } ?? "unknown"
-                throw SecureStorageError.unexpectedData("SecAccessControl creation failed: \(desc)")
+            )
+            if let ac = accessControl {
+                // SecAccessControl created successfully — use it instead of
+                // kSecAttrAccessible so the OS enforces biometric/passcode
+                // before every read of this item.
+                query[kSecAttrAccessControl as String] = ac
+            } else {
+                // Fallback: device may not have a passcode set, or platform
+                // limitation (e.g., older macOS without Touch ID).
+                // Use the strongest available accessibility without biometric gate.
+                query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
             }
-            query[kSecAttrAccessControl as String] = accessControl
         } else {
             query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         }
-        #else
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        #endif
 
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
