@@ -1292,9 +1292,21 @@ fn handle_transparent_send(
             eprintln!("[ZipherX] Transparent change address (child_index={}): {}", next_change_idx, &addr);
             Some(addr)
         }
-        Err(e) => {
-            eprintln!("[ZipherX] WARNING: transparent change address derivation failed: {} — change will go to shielded", e);
-            None
+        Err(_) => {
+            // No seed (PK + WIF import) — use an imported transparent address for change.
+            // Read from shared state, or fall back to the source UTXO address.
+            let fallback_addr = if let Ok(s) = state.lock() {
+                s.transparent_address.clone()
+            } else {
+                None
+            };
+            if let Some(addr) = fallback_addr {
+                eprintln!("[ZipherX] No seed — using imported address for change: {}", addr);
+                Some(addr)
+            } else {
+                eprintln!("[ZipherX] WARNING: no seed and no imported address — change will go to shielded");
+                None
+            }
         }
     };
 

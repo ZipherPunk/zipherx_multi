@@ -24,6 +24,7 @@ private let logger = AppleLogger(subsystem: "com.zipherx.wallet", category: "vie
 private func _ffiStartSync(callback: SyncProgressCallback) throws { try startSync(callback: callback) }
 private func _ffiStopSync() { stopSync() }
 private func _ffiSendWithProgress(toAddress: String, amount: UInt64, fee: UInt64, memo: String?, skBytes: [UInt8], callback: SendProgressCallback) throws { try sendWithProgress(toAddress: toAddress, amount: amount, fee: fee, memo: memo, skBytes: skBytes, callback: callback) }
+private func _ffiSendTransparentWithProgress(toAddress: String, amount: UInt64, fee: UInt64, memo: String?, skBytes: [UInt8], seed: [UInt8], callback: SendProgressCallback) throws { try sendTransparentWithProgress(toAddress: toAddress, amount: amount, fee: fee, memo: memo, skBytes: skBytes, seed: seed, callback: callback) }
 private func _ffiSetTorEnabled(enabled: Bool) { setTorEnabled(enabled: enabled) }
 #endif
 
@@ -70,6 +71,9 @@ public final class WalletViewModel {
 
     /// Latest balance snapshot, or `nil` if not yet loaded.
     public var balance: Balance?
+
+    /// Transparent balance in zatoshis.
+    public var transparentBalance: UInt64 = 0
 
     /// Ordered list of transactions, newest first.
     public var transactions: [WalletTransaction] = []
@@ -371,7 +375,7 @@ public final class WalletViewModel {
     ///   - fee:     Miner fee in zatoshis.
     ///   - memo:    Optional UTF-8 memo (max 512 bytes).
     ///   - skBytes: Spending key bytes from Secure Enclave.
-    public func send(to address: String, amount: UInt64, fee: UInt64, memo: String?, skBytes: Data) {
+    public func send(to address: String, amount: UInt64, fee: UInt64, memo: String?, skBytes: Data, fromTransparent: Bool = false) {
         guard !isSending else { return }
         isSending = true
         lastSentTxid = nil
@@ -386,14 +390,33 @@ public final class WalletViewModel {
             // SA-AUDIT: Zero spending key bytes after FFI call
             var skArray = Array(skBytes)
             defer { skArray.replaceSubrange(0..<skArray.count, with: repeatElement(0, count: skArray.count)) }
-            try _ffiSendWithProgress(
-                toAddress: address,
-                amount: amount,
-                fee: fee,
-                memo: memo,
-                skBytes: skArray,
-                callback: SendCallback(viewModel: self)
-            )
+
+            if fromTransparent {
+                // Load seed from Keychain for transparent key derivation.
+                // Falls back to empty for imported-only wallets (PK + WIF) —
+                // the send flow uses source UTXO address for change.
+                let seedData = ZipherXWrapper.loadKey("wallet_seed") ?? []
+                var seedArray = Array(seedData)
+                defer { seedArray.replaceSubrange(0..<seedArray.count, with: repeatElement(0, count: seedArray.count)) }
+                try _ffiSendTransparentWithProgress(
+                    toAddress: address,
+                    amount: amount,
+                    fee: fee,
+                    memo: memo,
+                    skBytes: skArray,
+                    seed: seedArray,
+                    callback: SendCallback(viewModel: self)
+                )
+            } else {
+                try _ffiSendWithProgress(
+                    toAddress: address,
+                    amount: amount,
+                    fee: fee,
+                    memo: memo,
+                    skBytes: skArray,
+                    callback: SendCallback(viewModel: self)
+                )
+            }
         } catch {
             DispatchQueue.main.async { [weak self] in
                 self?.isSending = false
@@ -433,6 +456,11 @@ public final class WalletViewModel {
             logger.error("refreshBalance() error: \(error.localizedDescription)")
             #endif
             errorMessage = error.localizedDescription
+        }
+
+        // Fetch transparent balance
+        if let tBal = try? ZipherXWrapper.getTransparentBalance() {
+            transparentBalance = tBal
         }
 
         do {
@@ -535,21 +563,14 @@ public final class WalletViewModel {
     func checkForTxConfirmation() {
         guard let pendingTxid = pendingConfirmationTxid else { return }
 
-        // Strategy 1: exact txid match
-        let matchedByTxid = transactions.contains { $0.txid == pendingTxid && $0.confirmations > 0 }
-        // Strategy 2: count confirmed sent/self TXs — if more than at send time, our TX confirmed
-        let currentConfirmedCount = transactions.filter {
-            $0.confirmations > 0 && ($0.txType == "sent" || $0.txType == "self")
-        }.count
-        let matchedByCount = currentConfirmedCount > confirmedSentCountAtSend
+        // Only use exact txid match — Sapling transactions are not malleable.
+        let confirmed = transactions.contains { $0.txid == pendingTxid && $0.confirmations > 0 }
 
-        if matchedByTxid || matchedByCount {
+        if confirmed {
             // Settlement detected — show celebration
             let elapsed: Int? = sendTimestamp.map { Int(Date().timeIntervalSince($0)) }
             let durationStr = elapsed.flatMap { $0 > 0 ? Self.formatDuration($0) : nil }
-            // Find the confirmed TX (prefer exact match, fallback to newest)
             let confirmedTx = transactions.first { $0.txid == pendingTxid && $0.confirmations > 0 }
-                ?? transactions.first { $0.confirmations > 0 && ($0.txType == "sent" || $0.txType == "self") }
             settlementTxid = confirmedTx?.txid ?? pendingTxid
             settlementCelebration = Self.randomSettlementMessage()
             settlementDuration = durationStr
@@ -561,12 +582,13 @@ public final class WalletViewModel {
             // Also clear old-style confirmation state
             confirmedTxid = confirmedTx?.txid ?? pendingTxid
             confirmationMessage = settlementCelebration
+            // Force balance + history refresh now that TX is confirmed
+            refreshBalance()
+            refreshHistory()
             #if DEBUG
             let confs = confirmedTx?.confirmations ?? 0
             logger.info("TX SETTLED: \(settlementTxid ?? pendingTxid) (\(confs) confirmations)")
             #endif
-            // Post-settlement: the FFI background loop will rebuild witnesses
-            // on the next sync cycle (within 30s).
         }
     }
 
@@ -1075,8 +1097,10 @@ final class SendCallback: SendProgressCallback {
             vm.pendingConfirmationTxid = txid
             setPendingTxFastPoll(enabled: true)
             // Snapshot confirmed sent/self count for fallback detection
+            // Include transparent types (self_z2t, self_t2z) for cross-pool sends
+            let sentTypes: Set<String> = ["sent", "self", "self_z2t", "self_t2z"]
             vm.confirmedSentCountAtSend = vm.transactions.filter {
-                $0.confirmations > 0 && ($0.txType == "sent" || $0.txType == "self")
+                $0.confirmations > 0 && sentTypes.contains($0.txType)
             }.count
             // Show clearing (mempool) celebration
             let clearingElapsed = vm.mempoolTimestamp.map { Int(Date().timeIntervalSince($0)) }
@@ -1096,12 +1120,24 @@ final class SendCallback: SendProgressCallback {
                 guard let vm = vm else { return }
                 if vm.pendingConfirmationTxid != nil {
                     #if DEBUG
-                    vm.logger.warning("Safety: auto-clearing pending TX after timeout")
+                    vm.logger.warning("Safety timeout: attempting final confirmation check")
                     #endif
-                    vm.pendingConfirmationTxid = nil
-                    setPendingTxFastPoll(enabled: false)
-                    vm.mempoolAccepted = false
-                    vm.mempoolPeerStatus = nil
+                    // Final attempt: refresh history and check one more time before giving up
+                    vm.refreshHistory()
+                    vm.checkForTxConfirmation()
+
+                    // If the final check found confirmation, pending is already cleared
+                    if vm.pendingConfirmationTxid != nil {
+                        #if DEBUG
+                        vm.logger.warning("Safety: auto-clearing pending TX after timeout (not confirmed)")
+                        #endif
+                        vm.pendingConfirmationTxid = nil
+                        setPendingTxFastPoll(enabled: false)
+                        vm.mempoolAccepted = false
+                        vm.mempoolPeerStatus = nil
+                        vm.refreshBalance()
+                        vm.refreshHistory()
+                    }
                 }
             }
         }

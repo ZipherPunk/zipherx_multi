@@ -1075,10 +1075,10 @@ class WalletViewModel : ViewModel() {
                     try {
                         if (fromTransparent) {
                             // Load seed from secure storage for transparent key derivation
+                            // Try seed first; fall back to empty for imported-only wallets.
+                            // With empty seed, the send flow uses source UTXO address for change.
                             val seedList = ZipherXWrapper.platformStorage?.loadKey("wallet_seed")
-                            if (seedList == null || seedList.isEmpty()) {
-                                throw Exception("Wallet seed not available for transparent send")
-                            }
+                                ?: emptyList()
                             // Convert List<UByte> to ByteArray for zeroization support,
                             // then pass as List<UByte> to FFI via toUByteList()
                             val seedArray = ByteArray(seedList.size) { seedList[it].toByte() }
