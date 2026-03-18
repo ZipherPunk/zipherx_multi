@@ -1386,6 +1386,35 @@ fun SettingsScreen(
                                     }
                                 }
                             }
+                            // Copy ALL keys button
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    val allKeys = buildString {
+                                        appendLine("ZipherX Wallet Export")
+                                        appendLine("====================")
+                                        appendLine()
+                                        appendLine("SHIELDED PRIVATE KEY (z-address):")
+                                        appendLine(String(exportedShieldedKey ?: charArrayOf()))
+                                        appendLine()
+                                        appendLine("TRANSPARENT PRIVATE KEYS (t-addresses):")
+                                        appendLine()
+                                        for (key in exportedFundedKeys) {
+                                            appendLine("Address: ${key.address}")
+                                            appendLine("Balance: ${String.format("%.8f", key.balance.toDouble() / 100_000_000.0)} ZCL")
+                                            appendLine("WIF: ${key.wif}")
+                                            appendLine()
+                                        }
+                                    }
+                                    copyToClipboardSecure(context, viewModel, "all_keys", allKeys)
+                                    scope.launch { snackbarHostState.showSnackbar("All keys copied (auto-clears in 5s)") }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(2.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.primary),
+                            ) {
+                                Text("[ COPY ALL KEYS ]", fontFamily = FontFamily.Monospace, fontSize = 10.sp, letterSpacing = 1.sp)
+                            }
                         } else if (exportedTransparentKey != null) {
                             // Fallback: single key (legacy path)
                             Spacer(modifier = Modifier.height(12.dp))
