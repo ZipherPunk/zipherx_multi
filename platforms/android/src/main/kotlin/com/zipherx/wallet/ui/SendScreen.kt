@@ -37,6 +37,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,12 +85,27 @@ fun SendScreen(
     var showConfirmDialog by remember { mutableStateOf(false) }
     var clipboardWarning by remember { mutableStateOf<String?>(null) }
 
+    var sendFromTransparent by remember { mutableStateOf(false) }
+
     val isSending by viewModel.isSending.collectAsState()
     val sendPhase by viewModel.sendPhase.collectAsState()
     val sendTxid by viewModel.sendTxid.collectAsState()
     val balance by viewModel.balance.collectAsState()
+    val transparentBalance by viewModel.transparentBalance.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // Auto-navigate back to wallet after successful broadcast
+    LaunchedEffect(sendTxid) {
+        if (sendTxid != null) {
+            // Brief delay so user sees "TRANSACTION SENT!" flash
+            kotlinx.coroutines.delay(1_500)
+            viewModel.clearSendTxid()
+            onNavigateBack()
+        }
+    }
+
+    val activeSpendable = if (sendFromTransparent) transparentBalance else (balance?.spendable ?: 0L)
 
     val terminalFieldColors = OutlinedTextFieldDefaults.colors(
         focusedTextColor = ZColors.primary,
@@ -154,6 +170,73 @@ fun SendScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
 
+            // Source toggle: SHIELDED / TRANSPARENT
+            val hasTransparent = transparentBalance > 0L
+            val hasShielded = (balance?.spendable ?: 0L) > 0L
+            if (hasTransparent) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            if (sendFromTransparent) {
+                                sendFromTransparent = false
+                                amount = "" // Clear so MAX recalculates for new source
+                            }
+                        },
+                        enabled = !isSending,
+                        shape = RoundedCornerShape(0.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (!sendFromTransparent) ZColors.primary else ZColors.primaryDim,
+                            containerColor = if (!sendFromTransparent) ZColors.surface else Color.Transparent,
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (!sendFromTransparent) ZColors.primary else ZColors.primaryDim.copy(alpha = 0.4f),
+                        ),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            text = "SHIELDED",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            if (!sendFromTransparent) {
+                                sendFromTransparent = true
+                                amount = "" // Clear so MAX recalculates for new source
+                            }
+                        },
+                        enabled = !isSending,
+                        shape = RoundedCornerShape(0.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (sendFromTransparent) ZColors.primary else ZColors.primaryDim,
+                            containerColor = if (sendFromTransparent) ZColors.surface else Color.Transparent,
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (sendFromTransparent) ZColors.primary else ZColors.primaryDim.copy(alpha = 0.4f),
+                        ),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            text = "TRANSPARENT",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                            ),
+                        )
+                    }
+                }
+            }
+
             // Spendable balance info
             balance?.let { bal ->
                 Row(
@@ -165,19 +248,19 @@ fun SendScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(
-                        text = "SPENDABLE:",
+                        text = if (sendFromTransparent) "T-SPENDABLE:" else "Z-SPENDABLE:",
                         style = MaterialTheme.typography.labelMedium,
                         color = ZColors.primaryDim,
                     )
                     Text(
-                        text = formatZatoshisAsZcl(bal.spendable),
+                        text = formatZatoshisAsZcl(activeSpendable),
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = FontWeight.Bold,
                         ),
                         color = ZColors.primaryDark,
                     )
                 }
-                if (bal.total > 0 && bal.spendable == 0L) {
+                if (!sendFromTransparent && bal.total > 0 && bal.spendable == 0L) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "! Notes need witness rebuild -- re-sync to make funds spendable",
@@ -208,10 +291,13 @@ fun SendScreen(
                         addressWasPasted = true
                     }
                     address = newValue
-                    addressValid = newValue.isNotBlank() && ZipherXWrapper.validateAddress(newValue)
+                    addressValid = newValue.isNotBlank() && (
+                        ZipherXWrapper.validateAddress(newValue) ||
+                        ZipherXWrapper.validateTransparentAddress(newValue)
+                    )
                 },
                 label = { Text("Recipient Address") },
-                placeholder = { Text("zs1...") },
+                placeholder = { Text("zs1... or t1...") },
                 modifier = Modifier.fillMaxWidth().testTag("address_field"),
                 singleLine = true,
                 enabled = !isSending,
@@ -242,7 +328,7 @@ fun SendScreen(
 
             if (address.isNotBlank() && !addressValid) {
                 Text(
-                    text = "! Invalid shielded address",
+                    text = "! Invalid address",
                     style = MaterialTheme.typography.bodySmall,
                     color = ZColors.error,
                     modifier = Modifier.padding(start = 4.dp, top = 2.dp),
@@ -271,8 +357,7 @@ fun SendScreen(
                     value = amount,
                     onValueChange = { newValue ->
                         val feeZatoshis = parseZclToZatoshis(fee)
-                        val spendable = balance?.spendable ?: 0L
-                        val maxZatoshis = (spendable - feeZatoshis).coerceAtLeast(0L)
+                        val maxZatoshis = (activeSpendable - feeZatoshis).coerceAtLeast(0L)
                         val parsedZatoshis = parseZclToZatoshis(newValue)
                         amount = if (parsedZatoshis > maxZatoshis && maxZatoshis > 0L) {
                             formatZatoshisAsZclInput(maxZatoshis)
@@ -297,11 +382,10 @@ fun SendScreen(
                 OutlinedButton(
                     onClick = {
                         val feeZatoshis = parseZclToZatoshis(fee)
-                        val spendable = balance?.spendable ?: 0L
-                        val maxZatoshis = (spendable - feeZatoshis).coerceAtLeast(0L)
+                        val maxZatoshis = (activeSpendable - feeZatoshis).coerceAtLeast(0L)
                         amount = formatZatoshisAsZclInput(maxZatoshis)
                     },
-                    enabled = !isSending && balance != null,
+                    enabled = !isSending && activeSpendable > 0L,
                     shape = RoundedCornerShape(0.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = ZColors.primary,
@@ -355,16 +439,18 @@ fun SendScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             // Memo field with Sapling 512-byte limit
+            // Transparent destinations don't support memos
+            val isTransparentDest = address.startsWith("t1") || address.startsWith("t3")
             val memoBytes = memo.toByteArray(Charsets.UTF_8).size
             val memoOverLimit = memoBytes > 512
 
             OutlinedTextField(
-                value = memo,
-                onValueChange = { memo = it },
-                label = { Text("Memo (optional)") },
+                value = if (isTransparentDest) "" else memo,
+                onValueChange = { if (!isTransparentDest) memo = it },
+                label = { Text(if (isTransparentDest) "Memo (not available for t-addr)" else "Memo (optional)") },
                 modifier = Modifier.fillMaxWidth(),
                 maxLines = 3,
-                enabled = !isSending,
+                enabled = !isSending && !isTransparentDest,
                 colors = terminalFieldColors,
                 shape = RoundedCornerShape(0.dp),
                 textStyle = MaterialTheme.typography.bodySmall.copy(
@@ -399,7 +485,7 @@ fun SendScreen(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                         val clipText = clipboard?.primaryClip?.getItemAt(0)?.text?.toString()
                         if (clipText != null && clipText != address &&
-                            clipText.startsWith("zs1") && ZipherXWrapper.validateAddress(clipText)
+                            (ZipherXWrapper.validateAddress(clipText) || ZipherXWrapper.validateTransparentAddress(clipText))
                         ) {
                             clipboardWarning = "Clipboard now contains a DIFFERENT valid address than what was pasted. " +
                                 "This could indicate clipboard-hijacking malware. Verify the recipient address carefully."
@@ -411,7 +497,7 @@ fun SendScreen(
                     .fillMaxWidth()
                     .border(1.dp, ZColors.primary, RoundedCornerShape(0.dp))
                     .testTag("review_send_button"),
-                enabled = !isSending && addressValid && parseZclToZatoshis(amount) > 0L && !memoOverLimit && (balance?.spendable ?: 0L) > 0L,
+                enabled = !isSending && addressValid && parseZclToZatoshis(amount) > 0L && !memoOverLimit && activeSpendable > 0L,
                 shape = RoundedCornerShape(0.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = ZColors.primary,
@@ -553,11 +639,10 @@ fun SendScreen(
                                     "Authorize sending ${formatZatoshisAsZcl(amountZatoshis)}"
                                 )
                                 if (authed) {
-                                    val spendable = balance?.spendable ?: 0L
-                                    val maxAmount = (spendable - feeZatoshis).coerceAtLeast(0L)
+                                    val maxAmount = (activeSpendable - feeZatoshis).coerceAtLeast(0L)
                                     val cappedAmount = amountZatoshis.coerceAtMost(maxAmount)
                                     val memoStr = memo.ifBlank { null }
-                                    viewModel.send(address, cappedAmount, feeZatoshis, memoStr)
+                                    viewModel.send(address, cappedAmount, feeZatoshis, memoStr, sendFromTransparent)
                                 }
                             }
                         },

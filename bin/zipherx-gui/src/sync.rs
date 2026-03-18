@@ -1541,21 +1541,23 @@ fn refresh_balance_and_history(
                 let group = &grouped[&r.txid];
                 let sent_types = ["sent", "self_z2t", "self_t2z"];
                 let has_sent = group.iter().any(|t| sent_types.contains(&t.tx_type.as_str()));
-                let has_received = group.iter().any(|t| t.tx_type == "received");
 
-                if has_sent && has_received {
+                // Check ALL received entries for transparent vs shielded addresses.
+                // A transparent change output (t1/t3) paired with a "sent" is NOT a self-send —
+                // it's just change returning to the sender. Only shielded received entries
+                // (z-address or no address) indicate a true self-send.
+                let has_shielded_received = group.iter().any(|t| {
+                    t.tx_type == "received"
+                        && t.address.as_ref().map_or(true, |a| !a.starts_with("t1") && !a.starts_with("t3"))
+                });
+                let has_t_received = group.iter().any(|t| {
+                    t.tx_type == "received"
+                        && t.address.as_ref().map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"))
+                });
+
+                if has_sent && has_shielded_received {
+                    // True self-send: there is a shielded "received" in the same tx.
                     let sent = group.iter().find(|t| sent_types.contains(&t.tx_type.as_str())).unwrap();
-
-                    // Check ALL received entries for transparent vs shielded addresses.
-                    // A z→t tx has multiple received entries: shielded change + transparent UTXO.
-                    let has_t_received = group.iter().any(|t| {
-                        t.tx_type == "received"
-                            && t.address.as_ref().map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"))
-                    });
-                    let has_z_received = group.iter().any(|t| {
-                        t.tx_type == "received"
-                            && t.address.as_ref().map_or(true, |a| !a.starts_with("t1") && !a.starts_with("t3"))
-                    });
 
                     let sent_dest_is_transparent = sent.address.as_ref()
                         .map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"));
@@ -1563,7 +1565,7 @@ fn refresh_balance_and_history(
                     // z→t: sent destination is t-addr AND a transparent UTXO was received
                     // t→z: sent destination is z-addr AND a shielded note was received (no t-received)
                     let is_z2t = sent_dest_is_transparent && has_t_received;
-                    let is_t2z = !sent_dest_is_transparent && has_z_received && !has_t_received;
+                    let is_t2z = !sent_dest_is_transparent && !has_t_received;
 
                     if is_z2t {
                         // Cross-pool: z→t shield-to-transparent transfer
@@ -1615,6 +1617,21 @@ fn refresh_balance_and_history(
                             timestamp: sent.timestamp,
                         });
                     }
+                } else if has_sent && has_t_received && !has_shielded_received {
+                    // Regular send with transparent change — NOT a self-send.
+                    // The "received" entries are just change outputs going back to our own t-addr.
+                    let sent_tx = group.iter().find(|t| sent_types.contains(&t.tx_type.as_str())).unwrap();
+                    result.push(crate::app::TransactionRecord {
+                        txid: r.txid.clone(),
+                        tx_type: "sent".to_string(),
+                        amount: sent_tx.amount,
+                        fee: sent_tx.fee,
+                        address: sent_tx.address.clone(),
+                        memo: sent_tx.memo.clone(),
+                        confirmations: sent_tx.confirmations,
+                        height: sent_tx.height,
+                        timestamp: sent_tx.timestamp,
+                    });
                 } else {
                     result.push(crate::app::TransactionRecord {
                         txid: r.txid.clone(),

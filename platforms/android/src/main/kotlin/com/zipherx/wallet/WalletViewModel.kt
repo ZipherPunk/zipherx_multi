@@ -1183,9 +1183,19 @@ class WalletViewModel : ViewModel() {
                 val sentTypes = setOf("sent", "alpha", "self_z2t", "self_t2z")
                 val hasSent = group.any { it.txType in sentTypes }
                 val hasReceived = group.any { it.txType == "received" || it.txType == "beta" }
+                // Only count as self-send if there's a shielded "received" (not just transparent change).
+                // A transparent change output (t1/t3 address) paired with a "sent" is a regular send.
+                val hasShieldedReceived = group.any { txEntry ->
+                    (txEntry.txType == "received" || txEntry.txType == "beta") &&
+                    txEntry.address?.let { !it.startsWith("t1") && !it.startsWith("t3") } ?: true
+                }
+                val hasTReceived = group.any { txEntry ->
+                    (txEntry.txType == "received" || txEntry.txType == "beta") &&
+                    txEntry.address?.let { it.startsWith("t1") || it.startsWith("t3") } ?: false
+                }
 
-                if (hasSent && hasReceived) {
-                    // Self-send: merge into a single entry, preserving the original send type
+                if (hasSent && hasShieldedReceived) {
+                    // True self-send: shielded received in the same tx
                     val sentTx = group.first { it.txType in sentTypes }
                     val mergedType = when (sentTx.txType) {
                         "self_z2t" -> "self_z2t"
@@ -1193,6 +1203,11 @@ class WalletViewModel : ViewModel() {
                         else -> "self"
                     }
                     history.add(sentTx.copy(txType = mergedType))
+                    processedTxids.add(tx.txid)
+                } else if (hasSent && hasTReceived && !hasShieldedReceived) {
+                    // Regular send with transparent change — NOT a self-send
+                    val sentTx = group.first { it.txType in sentTypes }
+                    history.add(sentTx)
                     processedTxids.add(tx.txid)
                 } else if (hasSent && !hasReceived) {
                     // Sent without matching received — keep original type

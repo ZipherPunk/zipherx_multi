@@ -24,13 +24,15 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 let transparent_color = if app.send_from_transparent { theme::GREEN } else { theme::MUTED };
                 if ui.add(egui::Button::new(
                     egui::RichText::new("[ SHIELDED ]").font(theme::mono(11.0)).color(shielded_color),
-                )).clicked() {
+                )).clicked() && app.send_from_transparent {
                     app.send_from_transparent = false;
+                    app.send_amount = String::new(); // Clear so MAX recalculates for new source
                 }
                 if ui.add(egui::Button::new(
                     egui::RichText::new("[ TRANSPARENT ]").font(theme::mono(11.0)).color(transparent_color),
-                )).clicked() {
+                )).clicked() && !app.send_from_transparent {
                     app.send_from_transparent = true;
+                    app.send_amount = String::new(); // Clear so MAX recalculates for new source
                 }
             });
             ui.add_space(5.0);
