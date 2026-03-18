@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HourglassBottom
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -150,6 +151,7 @@ fun WalletScreen(
     onNavigateToSettings: () -> Unit = {},
 ) {
     val balance by viewModel.balance.collectAsState()
+    val transparentBalance by viewModel.transparentBalance.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val isSyncing by viewModel.isSyncing.collectAsState()
     val syncPhase by viewModel.syncPhase.collectAsState()
@@ -177,6 +179,8 @@ fun WalletScreen(
     val incomingSettlementCelebration by viewModel.incomingSettlementCelebration.collectAsState()
     val incomingSettlementTxid by viewModel.incomingSettlementTxid.collectAsState()
     val boostFailed by viewModel.boostFailed.collectAsState()
+    val needsSeedMigration by viewModel.needsSeedMigration.collectAsState()
+    val wifRescanInProgress by viewModel.wifRescanInProgress.collectAsState()
 
     // KA-N3: These remember{} states survive configuration changes (rotation) but NOT
     // process death. Critical wallet state lives in WalletViewModel (ViewModel-scoped) which
@@ -299,15 +303,23 @@ fun WalletScreen(
                 .padding(horizontal = 16.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
+                // Seed migration banner (upgrade from pre-transparent version)
+                if (needsSeedMigration) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SeedMigrationBanner(viewModel = viewModel)
+                }
+
                 // Normal wallet view
                 Spacer(modifier = Modifier.height(8.dp))
 
                 BalanceCard(
                     balance = balance,
+                    transparentBalance = transparentBalance,
                     syncPhase = syncPhase,
                     syncProgress = syncProgress,
                     isSyncing = isSyncing,
                     isPendingConfirmation = pendingTxid != null,
+                    wifRescanInProgress = wifRescanInProgress,
                 )
 
                 // Detailed sync task UI — only shown during initial sync
@@ -403,11 +415,13 @@ fun WalletScreen(
                         }
                     },
                     modifier = Modifier.fillMaxWidth().testTag("send_button"),
-                    enabled = pendingTxid == null && (balance?.spendable ?: 0L) > 0L,
+                    enabled = pendingTxid == null && ((balance?.spendable ?: 0L) > 0L || transparentBalance > 0L),
                 ) {
+                    val shieldedSpendable = balance?.spendable ?: 0L
                     val label = when {
                         pendingTxid != null -> "Send [Locked]"
-                        (balance?.spendable ?: 0L) == 0L -> "Send [Syncing...]"
+                        isSyncing && shieldedSpendable == 0L && transparentBalance == 0L -> "Send [Syncing...]"
+                        shieldedSpendable == 0L && transparentBalance == 0L -> "Send [No Balance]"
                         else -> "Send"
                     }
                     Text(label)
@@ -1255,6 +1269,218 @@ private fun BoostFailedCard(
                     fontSize = 11.sp,
                     letterSpacing = 1.sp,
                 )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Seed Migration Banner
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun SeedMigrationBanner(viewModel: WalletViewModel) {
+    // Migration mode: "choose" → "enter_phrase" → done | "generate" → "backup" → done
+    var mode by remember { mutableStateOf("choose") }
+    var mnemonicInput by remember { mutableStateOf("") }
+    val companionWords by viewModel.migrationMnemonic.collectAsState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(ZColors.surface)
+            .border(1.dp, ZColors.warning, RoundedCornerShape(0.dp))
+            .padding(12.dp),
+    ) {
+        Text(
+            text = "[!] ENABLE TRANSPARENT ADDRESSES",
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+            ),
+            color = ZColors.warning,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+
+        when (mode) {
+            "choose" -> {
+                Text(
+                    text = "Transparent address (t-address) support is available. " +
+                        "Choose how to activate it:",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = ZColors.textDim,
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Option A: Have mnemonic
+                Button(
+                    onClick = { mode = "enter_phrase" },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ZColors.primary,
+                        contentColor = ZColors.terminalBlack,
+                    ),
+                    shape = RoundedCornerShape(0.dp),
+                ) {
+                    Text(
+                        "I HAVE MY 24-WORD RECOVERY PHRASE",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Option B: No mnemonic — generate companion
+                Button(
+                    onClick = {
+                        viewModel.generateCompanionSeed()
+                        mode = "backup"
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ZColors.warning,
+                        contentColor = ZColors.terminalBlack,
+                    ),
+                    shape = RoundedCornerShape(0.dp),
+                ) {
+                    Text(
+                        "I DON'T HAVE IT — GENERATE NEW",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Creates a new phrase for transparent addresses only. " +
+                        "Your shielded wallet stays untouched.",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 8.sp),
+                    color = ZColors.textDim,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Skip
+                Button(
+                    onClick = { viewModel.dismissSeedMigration() },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = ZColors.textDim,
+                    ),
+                    shape = RoundedCornerShape(0.dp),
+                ) {
+                    Text("SKIP — STAY SHIELDED ONLY", fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                }
+            }
+
+            "enter_phrase" -> {
+                Text(
+                    text = "Enter your original 24-word recovery phrase:",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = ZColors.textDim,
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = mnemonicInput,
+                    onValueChange = { mnemonicInput = it },
+                    label = { Text("24 words separated by spaces", fontFamily = FontFamily.Monospace, fontSize = 10.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = ZColors.primary,
+                        unfocusedTextColor = ZColors.primaryDim,
+                        focusedBorderColor = ZColors.primary,
+                        unfocusedBorderColor = ZColors.primaryDim,
+                        cursorColor = ZColors.primary,
+                    ),
+                    minLines = 2,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Button(
+                        onClick = {
+                            val words = mnemonicInput.trim().split("\\s+".toRegex())
+                            if (words.size == 24) {
+                                viewModel.migrateSeedFromPhrase(words)
+                                mnemonicInput = ""
+                            } else {
+                                viewModel.showError("Please enter exactly 24 words.")
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ZColors.primary,
+                            contentColor = ZColors.terminalBlack,
+                        ),
+                        shape = RoundedCornerShape(0.dp),
+                    ) {
+                        Text("ACTIVATE", fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                    }
+                    Button(
+                        onClick = { mode = "choose"; mnemonicInput = "" },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = ZColors.textDim,
+                        ),
+                        shape = RoundedCornerShape(0.dp),
+                    ) {
+                        Text("BACK", fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                    }
+                }
+            }
+
+            "backup" -> {
+                if (companionWords.isNotEmpty()) {
+                    Text(
+                        text = "WRITE DOWN THIS PHRASE — it controls your transparent address funds:",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                        ),
+                        color = ZColors.error,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = companionWords.joinToString(" "),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                        color = ZColors.primary,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(ZColors.terminalBlack)
+                            .border(1.dp, ZColors.primaryDim)
+                            .padding(12.dp),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "This is a SEPARATE phrase from your shielded private key. " +
+                            "You need BOTH to fully recover your wallet.",
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, fontSize = 8.sp),
+                        color = ZColors.warning,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.confirmCompanionSeedBackup() },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ZColors.primary,
+                            contentColor = ZColors.terminalBlack,
+                        ),
+                        shape = RoundedCornerShape(0.dp),
+                    ) {
+                        Text(
+                            "I HAVE SAVED THIS PHRASE — ACTIVATE",
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 10.sp,
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Generating phrase...",
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = ZColors.textDim,
+                    )
+                }
             }
         }
     }

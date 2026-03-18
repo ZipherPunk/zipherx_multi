@@ -156,7 +156,15 @@ pub fn encode_wif(secret_key_bytes: &[u8]) -> Result<Zeroizing<String>, CryptoEr
 /// Decode a WIF-encoded private key. Returns (secret_key_bytes, t-address).
 /// Validates: Base58Check checksum, version byte 0x80, compression flag 0x01.
 /// Rejects uncompressed WIF keys (start with '5').
+/// Strips Electrum-style prefixes (e.g., "p2pkh:L5Kx7j...") if present.
 pub fn decode_wif(wif: &str) -> Result<(Zeroizing<Vec<u8>>, String), CryptoError> {
+    // Strip Electrum-style prefix (e.g., "p2pkh:L5Kx7j...")
+    let wif = if let Some(stripped) = wif.strip_prefix("p2pkh:") {
+        stripped
+    } else {
+        wif
+    };
+
     let decoded = bs58::decode(wif)
         .into_vec()
         .map_err(|e| CryptoError::InvalidData(format!("Invalid Base58: {}", e)))?;
@@ -489,6 +497,18 @@ mod tests {
         assert!(validate_wif(&wif));
         assert!(!validate_wif("not_a_wif"));
         assert!(!validate_wif(""));
+    }
+
+    #[test]
+    fn test_decode_wif_strips_p2pkh_prefix() {
+        let seed = test_seed();
+        let sk = derive_transparent_secret_key(&seed, 0, 0, false).unwrap();
+        let wif = encode_wif(&sk).unwrap();
+        let prefixed = format!("p2pkh:{}", &*wif);
+        let (decoded_sk, decoded_addr) = decode_wif(&prefixed).unwrap();
+        assert_eq!(&*decoded_sk, &*sk);
+        let expected_addr = derive_transparent_address(&seed, 0, 0).unwrap();
+        assert_eq!(decoded_addr, expected_addr);
     }
 
     #[test]

@@ -51,6 +51,7 @@ fun BalanceCard(
     isSyncing: Boolean,
     isPendingConfirmation: Boolean = false,
     importedKeyCount: UInt = 0u,
+    wifRescanInProgress: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -227,6 +228,19 @@ fun BalanceCard(
         // Sync progress
         if (isSyncing) {
             Spacer(modifier = Modifier.height(12.dp))
+
+            // WIF rescan banner
+            if (wifRescanInProgress) {
+                Text(
+                    text = "Scanning blockchain for imported addresses...",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                    ),
+                    color = ZColors.warning,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
 
             // Custom progress bar
             if (syncProgress > 0.0) {

@@ -1563,20 +1563,29 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             val validCount = results.count { it.first }
                             for ((valid, addrOrErr, prefix) in results) {
-                                Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                                Column(modifier = Modifier.padding(vertical = 2.dp)) {
+                                    Row {
+                                        Text(
+                                            text = if (valid) "\u2713" else "\u2717",
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 10.sp,
+                                            color = if (valid) ZColors.success else ZColors.error,
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = prefix,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 9.sp,
+                                            color = if (valid) ZColors.primary else ZColors.error,
+                                        )
+                                    }
                                     Text(
-                                        text = if (valid) "[OK]" else "[X]",
+                                        text = if (valid) "  \u2192 $addrOrErr" else "  $addrOrErr",
                                         fontFamily = FontFamily.Monospace,
                                         fontSize = 9.sp,
-                                        color = if (valid) ZColors.success else ZColors.error,
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "$prefix -> $addrOrErr",
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 9.sp,
-                                        color = if (valid) ZColors.primary else ZColors.error,
-                                        maxLines = 1,
+                                        color = if (valid) ZColors.primaryDim else ZColors.error,
+                                        maxLines = 2,
+                                        modifier = Modifier.padding(start = 14.dp),
                                     )
                                 }
                             }
@@ -1592,7 +1601,7 @@ fun SettingsScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Button(
                                     onClick = {
-                                        // Import valid keys via FFI
+                                        // Import valid keys via ViewModel (triggers rescan + balance refresh)
                                         scope.launch {
                                             try {
                                                 val lines = wifImportText.lines().map { it.trim() }.filter { it.isNotEmpty() }
@@ -1601,15 +1610,13 @@ fun SettingsScreen(
                                                 val addrs = mutableListOf<String>()
                                                 for ((i, r) in validResults.withIndex()) {
                                                     if (r.valid) {
-                                                        // Store the WIF itself as encrypted key placeholder
-                                                        // (mobile platforms encrypt via AndroidSecureStorage)
                                                         encKeys.add(lines[i].toByteArray().map { it.toUByte() })
                                                         addrs.add(r.address)
                                                     }
                                                 }
                                                 if (encKeys.isNotEmpty()) {
-                                                    uniffi.zipherx.importWifKeys(encKeys, addrs)
-                                                    snackbarHostState.showSnackbar("Imported ${encKeys.size} key(s)")
+                                                    viewModel.importWifKeysAndRescan(encKeys, addrs)
+                                                    snackbarHostState.showSnackbar("Imported ${encKeys.size} key(s) — scanning blockchain...")
                                                 }
                                             } catch (e: Exception) {
                                                 snackbarHostState.showSnackbar("Import error: ${e.message}")

@@ -167,6 +167,10 @@ class WalletViewModel : ViewModel() {
     private val _boostFailed = MutableStateFlow<Pair<String, Int>?>(null)
     val boostFailed: StateFlow<Pair<String, Int>?> = _boostFailed.asStateFlow()
 
+    /** True when a WIF import rescan is in progress. Shown on the balance card. */
+    private val _wifRescanInProgress = MutableStateFlow(false)
+    val wifRescanInProgress: StateFlow<Boolean> = _wifRescanInProgress.asStateFlow()
+
     private var secureStorage: AndroidSecureStorage? = null
     private var appContext: Context? = null
 
@@ -634,14 +638,21 @@ class WalletViewModel : ViewModel() {
 
                 // Detect upgrade from pre-transparent version: SK exists but no seed.
                 // Without the seed, transparent address scanning is disabled.
+                // Skip if user already dismissed or imported WIF keys.
                 if (skBytes != null) {
                     val hasSeed = withContext(Dispatchers.IO) {
                         val seedBytes = ZipherXWrapper.platformStorage?.loadKey("wallet_seed")
                         seedBytes != null && seedBytes.isNotEmpty()
                     }
                     if (!hasSeed) {
-                        if (BuildConfig.DEBUG) Log.w(TAG, "Seed migration needed: SK exists but no wallet_seed stored")
-                        _needsSeedMigration.value = true
+                        val wasDismissed = loadSettingBoolean("seed_migration_dismissed", false)
+                        val hasImportedKeys = try {
+                            uniffi.zipherx.getImportedKeyCount() > 0u
+                        } catch (_: Exception) { false }
+                        if (!wasDismissed && !hasImportedKeys) {
+                            if (BuildConfig.DEBUG) Log.w(TAG, "Seed migration needed: SK exists but no wallet_seed stored")
+                            _needsSeedMigration.value = true
+                        }
                     }
                 }
 
@@ -898,6 +909,7 @@ class WalletViewModel : ViewModel() {
                             }
                             _isSyncing.value = false
                             _isInitialSync.value = false
+                            _wifRescanInProgress.value = false
                             _syncPhase.value = "complete"
                             _syncProgress.value = 1.0
                             _blockHeight.value = height.toLong()
@@ -928,6 +940,7 @@ class WalletViewModel : ViewModel() {
                         override fun onError(message: String) {
                             if (BuildConfig.DEBUG) Log.e(TAG, "Sync error: $message")
                             _isSyncing.value = false
+                            _wifRescanInProgress.value = false
                             _syncPhase.value = "failed"
                             // Make network errors more user-friendly
                             _errorMessage.value = when {
@@ -1235,9 +1248,10 @@ class WalletViewModel : ViewModel() {
         _errorMessage.value = message
     }
 
-    /** Dismiss the seed migration banner (user chose shielded-only). */
+    /** Dismiss the seed migration banner (user chose shielded-only). Persists across app restarts. */
     fun dismissSeedMigration() {
         _needsSeedMigration.value = false
+        storeSettingBoolean("seed_migration_dismissed", true)
     }
 
     // -----------------------------------------------------------------------
@@ -1821,6 +1835,67 @@ class WalletViewModel : ViewModel() {
     }
 
     /**
+     * Import WIF keys via FFI, then trigger a rescan to pick up transparent UTXOs.
+     * Updates wifRescanInProgress so the UI can show progress.
+     * Also loads the first imported address as the transparent receive address.
+     */
+    fun importWifKeysAndRescan(encKeys: List<List<UByte>>, addrs: List<String>) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    uniffi.zipherx.importWifKeys(encKeys, addrs)
+                }
+                if (BuildConfig.DEBUG) Log.i(TAG, "Imported ${encKeys.size} WIF key(s)")
+
+                // Update transparent address for receive screen if not already set
+                if (_transparentAddress.value == null && addrs.isNotEmpty()) {
+                    _transparentAddress.value = addrs.first()
+                }
+
+                // Dismiss migration banner since user imported keys
+                _needsSeedMigration.value = false
+                storeSettingBoolean("seed_migration_dismissed", true)
+
+                // Trigger rescan
+                _wifRescanInProgress.value = true
+                if (_isSyncing.value) {
+                    withContext(Dispatchers.IO) { uniffi.zipherx.stopSync() }
+                    _isSyncing.value = false
+                }
+                startSync()
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.e(TAG, "importWifKeysAndRescan failed: ${e.message}")
+                _errorMessage.value = "Import failed: ${e.message}"
+                _wifRescanInProgress.value = false
+            }
+        }
+    }
+
+    /**
+     * Load the first imported transparent address from UTXOs or imported keys.
+     * Called when the derived transparent address is null but imported keys exist.
+     */
+    fun loadImportedTransparentAddress() {
+        viewModelScope.launch {
+            if (_transparentAddress.value != null) return@launch
+            try {
+                val utxos = withContext(Dispatchers.IO) {
+                    uniffi.zipherx.getTransparentUtxos()
+                }
+                val addr = utxos.firstOrNull()?.address
+                if (addr != null) {
+                    _transparentAddress.value = addr
+                    return@launch
+                }
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "getTransparentUtxos failed: ${e.message}")
+            }
+            // Fallback: validate the first imported key to get its address
+            // (no imported key listing FFI, so we rely on UTXOs above)
+        }
+    }
+
+    /**
      * Import wallet from a raw 64-byte seed (128-char hex string).
      * This is an advanced import method — no mnemonic is stored since
      * a raw seed has no corresponding BIP39 phrase.
@@ -1966,6 +2041,7 @@ class WalletViewModel : ViewModel() {
             _walletState.value = "uninitialized"
             _walletAddress.value = null
             _transparentBalance.value = 0L
+            _wifRescanInProgress.value = false
             _transparentAddress.value = null
             _syncPhase.value = "idle"
             _syncProgress.value = 0.0
