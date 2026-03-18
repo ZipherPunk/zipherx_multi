@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -1569,6 +1570,21 @@ fun SettingsScreen(
                         if (results != null) {
                             Spacer(modifier = Modifier.height(8.dp))
                             val validCount = results.count { it.first }
+                            val invalidCount = results.size - validCount
+                            Text(
+                                text = "Found $validCount valid, $invalidCount invalid key(s)",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = if (validCount > 0) ZColors.success else ZColors.error,
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            // Scrollable results list (for large imports)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 200.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
                             for ((valid, addrOrErr, prefix) in results) {
                                 Column(modifier = Modifier.padding(vertical = 2.dp)) {
                                     Row {
@@ -1596,6 +1612,7 @@ fun SettingsScreen(
                                     )
                                 }
                             }
+                            } // end scrollable Column
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = "WARNING: Imported keys are NOT covered by your recovery phrase. Back up WIF keys separately.",

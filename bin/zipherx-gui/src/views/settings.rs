@@ -2178,6 +2178,21 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                 let valid_count = results.iter().filter(|(v, _, _)| *v).count();
                 let invalid_count = results.len() - valid_count;
 
+                // Summary line
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Found {} valid, {} invalid key(s)",
+                        valid_count, invalid_count
+                    ))
+                    .font(theme::mono(10.0))
+                    .color(if valid_count > 0 { theme::GREEN } else { theme::RED }),
+                );
+
+                // Show results in a scrollable area (for large imports)
+                let max_height = 150.0;
+                egui::ScrollArea::vertical()
+                    .max_height(max_height)
+                    .show(ui, |ui| {
                 for (valid, addr_or_err, prefix) in results {
                     let (icon, color) = if *valid {
                         ("[OK]", theme::GREEN)
@@ -2206,6 +2221,7 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                         );
                     });
                 }
+                    }); // end ScrollArea
 
                 if invalid_count > 0 {
                     ui.add_space(4.0);
