@@ -156,8 +156,20 @@ pub fn encode_wif(secret_key_bytes: &[u8]) -> Result<Zeroizing<String>, CryptoEr
 /// Decode a WIF-encoded private key. Returns (secret_key_bytes, t-address).
 /// Validates: Base58Check checksum, version byte 0x80, compression flag 0x01.
 /// Rejects uncompressed WIF keys (start with '5').
-/// Strips Electrum-style prefixes (e.g., "p2pkh:L5Kx7j...") if present.
+/// Handles multiple Electrum-ZCL export formats:
+///   - Plain WIF: `L5Kx7j...`
+///   - With prefix: `p2pkh:L5Kx7j...`
+///   - CSV with address: `t1Wx6YG...,p2pkh:L5Kx7j...`
 pub fn decode_wif(wif: &str) -> Result<(Zeroizing<Vec<u8>>, String), CryptoError> {
+    let wif = wif.trim();
+
+    // Handle Electrum CSV format: "t1address,p2pkh:WIF" — take the part after comma
+    let wif = if let Some((_addr, key_part)) = wif.split_once(',') {
+        key_part.trim()
+    } else {
+        wif
+    };
+
     // Strip Electrum-style prefix (e.g., "p2pkh:L5Kx7j...")
     let wif = if let Some(stripped) = wif.strip_prefix("p2pkh:") {
         stripped
@@ -509,6 +521,19 @@ mod tests {
         assert_eq!(&*decoded_sk, &*sk);
         let expected_addr = derive_transparent_address(&seed, 0, 0).unwrap();
         assert_eq!(decoded_addr, expected_addr);
+    }
+
+    #[test]
+    fn test_decode_wif_electrum_csv_format() {
+        let seed = test_seed();
+        let sk = derive_transparent_secret_key(&seed, 0, 0, false).unwrap();
+        let wif = encode_wif(&sk).unwrap();
+        let addr = derive_transparent_address(&seed, 0, 0).unwrap();
+        // Electrum CSV format: "t1address,p2pkh:WIF"
+        let csv_line = format!("{},p2pkh:{}", addr, &*wif);
+        let (decoded_sk, decoded_addr) = decode_wif(&csv_line).unwrap();
+        assert_eq!(&*decoded_sk, &*sk);
+        assert_eq!(decoded_addr, addr);
     }
 
     #[test]

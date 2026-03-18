@@ -2098,7 +2098,8 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                 egui::RichText::new(
                     "Accepted formats:\n\
                      \u{2022} WIF compressed: L... or K... (standard)\n\
-                     \u{2022} Electrum-ZCL: p2pkh:L... or p2pkh:K...",
+                     \u{2022} Electrum-ZCL: p2pkh:L... or p2pkh:K...\n\
+                     \u{2022} Electrum CSV: t1addr,p2pkh:L... (paste full export)",
                 )
                 .font(theme::mono(9.0))
                 .color(theme::MUTED),

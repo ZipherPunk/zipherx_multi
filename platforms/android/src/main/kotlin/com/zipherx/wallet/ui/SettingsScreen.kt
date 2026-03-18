@@ -1509,7 +1509,7 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Accepted formats:\n\u2022 WIF compressed: L... or K... (standard)\n\u2022 Electrum-ZCL: p2pkh:L... or p2pkh:K...",
+                            text = "Accepted formats:\n\u2022 WIF compressed: L... or K... (standard)\n\u2022 Electrum-ZCL: p2pkh:L... or p2pkh:K...\n\u2022 Electrum CSV: t1addr,p2pkh:L... (paste full export)",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 9.sp,
                             color = ZColors.primaryDim,
