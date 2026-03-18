@@ -1640,7 +1640,7 @@ fun SettingsScreen(
                                                 }
                                                 if (encKeys.isNotEmpty()) {
                                                     viewModel.importWifKeysAndRescan(encKeys, addrs)
-                                                    snackbarHostState.showSnackbar("Imported ${encKeys.size} key(s) — scanning blockchain...")
+                                                    snackbarHostState.showSnackbar("${encKeys.size} key(s) imported! Rescanning blockchain for funds...")
                                                 }
                                             } catch (e: Exception) {
                                                 snackbarHostState.showSnackbar("Import error: ${e.message}")
@@ -1648,6 +1648,8 @@ fun SettingsScreen(
                                             wifImportText = ""
                                             wifImportResults = null
                                             showWifImportDialog = false
+                                            // Navigate back to wallet screen to show rescan progress
+                                            onNavigateBack()
                                         }
                                     },
                                     modifier = Modifier.fillMaxWidth(),
