@@ -161,6 +161,9 @@ namespace zipherx {
     [Throws=WalletError]
     void full_rescan();
 
+    [Throws=WalletError]
+    void full_rescan_reset();
+
     // ==================================================================
     // Tor (Phase 9)
     // ==================================================================

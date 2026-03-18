@@ -1862,8 +1862,9 @@ class WalletViewModel : ViewModel() {
                     withContext(Dispatchers.IO) { uniffi.zipherx.stopSync() }
                     _isSyncing.value = false
                 }
-                // Reset scan state — forces full blockchain rescan including imported addresses
-                withContext(Dispatchers.IO) { ZipherXWrapper.fullRescan() }
+                // Nuclear reset — clears notes, history, UTXOs, scan state to 0.
+                // The next sync re-scans everything with imported addresses in the scanner.
+                withContext(Dispatchers.IO) { uniffi.zipherx.fullRescanReset() }
                 startSync()
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e(TAG, "importWifKeysAndRescan failed: ${e.message}")

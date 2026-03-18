@@ -1553,6 +1553,20 @@ fn full_rescan() -> Result<(), WalletError> {
         .map_err(WalletError::from)
 }
 
+/// Nuclear rescan: clears ALL notes, history, transparent UTXOs, and resets
+/// scan state to 0. The next sync will re-download and re-scan everything.
+/// Use after WIF import to ensure imported addresses are fully scanned.
+fn full_rescan_reset() -> Result<(), WalletError> {
+    let wallet = get_wallet()?;
+    runtime::block_on(async {
+        let db = wallet.db.clone();
+        tokio::task::spawn_blocking(move || db.full_rescan_reset())
+            .await
+            .map_err(|e| WalletError::StorageError { msg: e.to_string() })?
+            .map_err(|e| WalletError::StorageError { msg: e.to_string() })
+    })?
+}
+
 // ============================================================================
 // Phase 9: Tor
 // ============================================================================
