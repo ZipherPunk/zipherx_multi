@@ -109,6 +109,7 @@ fun SettingsScreen(
     var showExportKeyDialog by remember { mutableStateOf(false) }
     var exportedShieldedKey by remember { mutableStateOf<CharArray?>(null) }
     var exportedTransparentKey by remember { mutableStateOf<CharArray?>(null) }
+    var exportedFundedKeys by remember { mutableStateOf<List<uniffi.zipherx.FundedTransparentKeyFfi>>(emptyList()) }
     var showRecoveryPhraseDialog by remember { mutableStateOf(false) }
     var recoveryPhraseChars by remember { mutableStateOf<CharArray?>(null) }
     var showSecurityAuditDialog by remember { mutableStateOf(false) }
@@ -867,6 +868,7 @@ fun SettingsScreen(
                                 if (authed) {
                                     exportedShieldedKey = viewModel.getSpendingKeyHex()
                                     exportedTransparentKey = viewModel.getTransparentKeyWif()
+                                    exportedFundedKeys = viewModel.exportFundedTransparentWifs()
                                     showExportKeyDialog = exportedShieldedKey != null
                                     if (exportedShieldedKey == null) {
                                         snackbarHostState.showSnackbar("No private key found")
@@ -1334,8 +1336,58 @@ fun SettingsScreen(
                             Text("[ COPY SHIELDED KEY ]", fontFamily = FontFamily.Monospace, fontSize = 9.sp)
                         }
 
-                        // Transparent key section (if available)
-                        if (exportedTransparentKey != null) {
+                        // Transparent keys section — show ALL funded addresses
+                        if (exportedFundedKeys.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "TRANSPARENT KEYS (${exportedFundedKeys.size} funded address${if (exportedFundedKeys.size > 1) "es" else ""})",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ZColors.warning,
+                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 250.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                for (key in exportedFundedKeys) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = key.address,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 9.sp,
+                                        color = ZColors.primaryDim,
+                                    )
+                                    Text(
+                                        text = "Balance: ${String.format("%.8f", key.balance.toDouble() / 100_000_000.0)} ZCL",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 8.sp,
+                                        color = ZColors.primaryDim,
+                                    )
+                                    Text(
+                                        text = key.wif,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 7.sp,
+                                        lineHeight = 10.sp,
+                                        color = ZColors.warning,
+                                    )
+                                    OutlinedButton(
+                                        onClick = {
+                                            copyToClipboardSecure(context, viewModel, "t_key_${key.address.take(8)}", key.wif)
+                                            scope.launch { snackbarHostState.showSnackbar("Key copied (auto-clears in 5s)") }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(0.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ZColors.warning),
+                                    ) {
+                                        Text("[ COPY WIF ]", fontFamily = FontFamily.Monospace, fontSize = 8.sp)
+                                    }
+                                }
+                            }
+                        } else if (exportedTransparentKey != null) {
+                            // Fallback: single key (legacy path)
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "TRANSPARENT (t-address, WIF)",
