@@ -1856,12 +1856,14 @@ class WalletViewModel : ViewModel() {
                 _needsSeedMigration.value = false
                 storeSettingBoolean("seed_migration_dismissed", true)
 
-                // Trigger rescan
+                // Trigger full rescan so the scanner picks up UTXOs for imported addresses
                 _wifRescanInProgress.value = true
                 if (_isSyncing.value) {
                     withContext(Dispatchers.IO) { uniffi.zipherx.stopSync() }
                     _isSyncing.value = false
                 }
+                // Reset scan state — forces full blockchain rescan including imported addresses
+                withContext(Dispatchers.IO) { ZipherXWrapper.fullRescan() }
                 startSync()
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.e(TAG, "importWifKeysAndRescan failed: ${e.message}")
