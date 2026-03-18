@@ -377,6 +377,18 @@ If you only have a shielded private key (no recovery phrase):
 - **You can import up to 100 keys at once.** Paste them all in the text area, one per line.
 - **Authentication required.** Password (desktop) or biometric (mobile) is required before importing.
 
+### Transaction history differences (PK + WIF vs recovery phrase)
+
+If you restore using a **recovery phrase**, the wallet knows all your addresses (shielded + all transparent) from the start. Transaction history and self-send detection will be fully accurate.
+
+If you restore using a **private key + WIF import**, the wallet only knows the specific addresses you imported. This means:
+
+- Some transactions may show different classifications (e.g., `[z>t]` instead of `[t>z]`)
+- Self-sends involving addresses you didn't import won't be detected as self-sends
+- Amounts may differ (showing change instead of the main amount)
+
+**This is normal and expected.** The wallet can only classify what it can see. For the most accurate transaction history, always prefer restoring from your recovery phrase.
+
 ### When to use WIF import
 
 - Migrating from Electrum-ZCL or another Zclassic wallet
