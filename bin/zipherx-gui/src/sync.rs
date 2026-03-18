@@ -128,6 +128,8 @@ pub enum SyncCommand {
         memo: Option<String>,
         /// C7: Seed wrapped in Zeroizing for automatic secure zeroing on drop.
         seed: Zeroizing<Vec<u8>>,
+        /// Spending key for transaction building (needed when no seed available).
+        sk_bytes: Zeroizing<Vec<u8>>,
     },
     SetTorEnabled(bool),
     RepairDatabase,
@@ -481,8 +483,9 @@ fn wallet_thread_main(
                 fee,
                 memo,
                 seed,
+                sk_bytes: cmd_sk_bytes,
             }) => {
-                // C7: seed is Zeroizing<Vec<u8>> — auto-zeroed on drop
+                // C7: seed + sk_bytes are Zeroizing — auto-zeroed on drop
                 handle_transparent_send(
                     &runtime,
                     &wallet,
@@ -491,6 +494,7 @@ fn wallet_thread_main(
                     fee,
                     memo.as_deref(),
                     &seed,
+                    &cmd_sk_bytes,
                     &state,
                     &storage,
                 );
@@ -1079,6 +1083,7 @@ fn handle_transparent_send(
     fee: u64,
     memo: Option<&str>,
     seed: &[u8],
+    sk_bytes: &[u8],
     state: &Arc<Mutex<SharedState>>,
     storage: &Arc<crate::platform::GuiSecureStorage>,
 ) {
@@ -1261,17 +1266,9 @@ fn handle_transparent_send(
         });
     }
 
-    // We need a Sapling SK for change address (shielded change for privacy).
-    // Load spending key from the seed.
-    let sk_bytes = match zipherx_crypto::keys::derive_spending_key(seed, 0) {
-        Ok(sk) => sk, // Keep Zeroizing<Vec<u8>> wrapper for automatic zeroing on drop
-        Err(e) => {
-            if let Ok(mut s) = state.lock() {
-                s.send_result = Some(Err(format!("SK derivation failed: {}", e)));
-            }
-            return;
-        }
-    };
+    // We need a Sapling SK for building the transaction.
+    // Use the passed sk_bytes (from app state) — works for both seed-derived and PK-only wallets.
+    let sk_bytes = Zeroizing::new(sk_bytes.to_vec());
 
     // Get chain height from header store
     let chain_height = wallet

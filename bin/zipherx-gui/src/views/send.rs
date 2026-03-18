@@ -572,6 +572,7 @@ fn execute_send(app: &mut ZipherXApp) {
                     fee: validated.fee,
                     memo: validated.memo,
                     seed: zeroize::Zeroizing::new(seed),
+                    sk_bytes: app.sk_bytes.clone().unwrap_or_else(|| zeroize::Zeroizing::new(Vec::new())),
                 });
             }
         }
