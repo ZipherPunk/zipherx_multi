@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -125,6 +126,38 @@ fun BalanceCard(
                     fontFamily = FontFamily.Monospace,
                 ),
                 color = ZColors.warning.copy(alpha = 0.7f),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+        } else if (wifRescanInProgress) {
+            // During WIF rescan, hide potentially misleading 0 balance
+            val blink = rememberInfiniteTransition(label = "rescan_blink")
+            val alpha by blink.animateFloat(
+                initialValue = 1f,
+                targetValue = 0.4f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(800),
+                    repeatMode = RepeatMode.Reverse,
+                ),
+                label = "rescan_alpha",
+            )
+            Text(
+                text = "Rescanning...",
+                style = MaterialTheme.typography.headlineLarge.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 28.sp,
+                ),
+                color = ZColors.primaryDim.copy(alpha = alpha),
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Balance will update when scan completes",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                ),
+                color = ZColors.primaryDim,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
         } else {
@@ -240,6 +273,22 @@ fun BalanceCard(
                     color = ZColors.warning,
                     modifier = Modifier.padding(bottom = 4.dp),
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                if (syncProgress > 0.0) {
+                    LinearProgressIndicator(
+                        progress = { syncProgress.toFloat().coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(2.dp),
+                        color = ZColors.primary,
+                        trackColor = ZColors.surface,
+                    )
+                } else {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().height(2.dp),
+                        color = ZColors.primary,
+                        trackColor = ZColors.surface,
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
             }
 
             // Custom progress bar

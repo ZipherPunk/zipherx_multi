@@ -1706,10 +1706,22 @@ fun SettingsScreen(
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Button(
                                     onClick = {
-                                        // Import valid keys via ViewModel (triggers rescan + balance refresh)
+                                        // Capture validated keys before closing dialog
+                                        val lines = wifImportText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                                        val keyCount = validCount
+
+                                        // Close dialog and navigate immediately for instant feedback
+                                        wifImportText = ""
+                                        wifImportResults = null
+                                        showWifImportDialog = false
+                                        onNavigateBack()
+
+                                        // Show snackbar and do heavy FFI work in background
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("Importing $keyCount key(s)...")
+                                        }
                                         scope.launch {
                                             try {
-                                                val lines = wifImportText.lines().map { it.trim() }.filter { it.isNotEmpty() }
                                                 val validResults = uniffi.zipherx.validateWifKeys(lines)
                                                 val encKeys = mutableListOf<List<UByte>>()
                                                 val addrs = mutableListOf<String>()
@@ -1726,11 +1738,6 @@ fun SettingsScreen(
                                             } catch (e: Exception) {
                                                 snackbarHostState.showSnackbar("Import error: ${e.message}")
                                             }
-                                            wifImportText = ""
-                                            wifImportResults = null
-                                            showWifImportDialog = false
-                                            // Navigate back to wallet screen to show rescan progress
-                                            onNavigateBack()
                                         }
                                     },
                                     modifier = Modifier.fillMaxWidth(),
