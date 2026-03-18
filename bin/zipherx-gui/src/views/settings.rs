@@ -2134,28 +2134,36 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                         .map(str::trim)
                         .filter(|l| !l.is_empty())
                         .collect();
-                    let mut results = Vec::new();
-                    for line in &lines {
-                        match zipherx_crypto::transparent::decode_wif(line) {
-                            Ok((_sk, addr)) => {
-                                let prefix = if line.len() > 8 {
-                                    format!("{}...", &line[..8])
-                                } else {
-                                    line.to_string()
-                                };
-                                results.push((true, addr, prefix));
-                            }
-                            Err(e) => {
-                                let prefix = if line.len() > 8 {
-                                    format!("{}...", &line[..8])
-                                } else {
-                                    line.to_string()
-                                };
-                                results.push((false, e.to_string(), prefix));
+                    if lines.len() > 100 {
+                        app.wif_import_results = Some(vec![(
+                            false,
+                            "Maximum 100 keys per import".to_string(),
+                            "LIMIT".to_string(),
+                        )]);
+                    } else {
+                        let mut results = Vec::new();
+                        for line in &lines {
+                            match zipherx_crypto::transparent::decode_wif(line) {
+                                Ok((_sk, addr)) => {
+                                    let prefix = if line.len() > 8 {
+                                        format!("{}...", &line[..8])
+                                    } else {
+                                        line.to_string()
+                                    };
+                                    results.push((true, addr, prefix));
+                                }
+                                Err(e) => {
+                                    let prefix = if line.len() > 8 {
+                                        format!("{}...", &line[..8])
+                                    } else {
+                                        line.to_string()
+                                    };
+                                    results.push((false, e.to_string(), prefix));
+                                }
                             }
                         }
+                        app.wif_import_results = Some(results);
                     }
-                    app.wif_import_results = Some(results);
                 }
 
                 if ui

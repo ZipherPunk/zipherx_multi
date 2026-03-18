@@ -1006,7 +1006,14 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     OutlinedButton(
-                        onClick = { showWifImportDialog = true },
+                        onClick = {
+                            scope.launch {
+                                val authed = viewModel.authenticateStrict("Authenticate to import keys")
+                                if (authed) {
+                                    showWifImportDialog = true
+                                }
+                            }
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(2.dp),
                         colors = ButtonDefaults.outlinedButtonColors(

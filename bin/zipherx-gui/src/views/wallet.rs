@@ -982,7 +982,7 @@ fn show_seed_migration(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                         {
                             app.needs_seed_migration = false;
                             let _ = std::fs::write(app.data_dir.join(".migration_dismissed"), b"1");
-                            app.show_wif_import = true;
+                            app.show_wif_import_confirm = true;
                             app.tab = crate::app::Tab::Settings;
                         }
                         ui.add_space(8.0);

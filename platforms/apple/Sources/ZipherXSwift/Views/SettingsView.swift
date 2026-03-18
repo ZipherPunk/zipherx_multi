@@ -469,7 +469,7 @@ public struct SettingsView: View {
                                     .frame(height: 1)
 
                                 // Import WIF keys
-                                Button(action: { showWifImport = true }) {
+                                Button(action: authenticateForImport) {
                                     HStack(spacing: 6) {
                                         Image(systemName: "square.and.arrow.down")
                                             .font(ZFonts.small)
@@ -1043,6 +1043,33 @@ public struct SettingsView: View {
             }
         } else {
             viewModel.errorMessage = "No authentication method available. Please enable a device passcode or biometrics in Settings."
+        }
+    }
+
+    // MARK: - Import WIF Keys
+
+    private func authenticateForImport() {
+        let ctx = LAContext()
+        var error: NSError?
+        if ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) {
+            ctx.evaluatePolicy(
+                .deviceOwnerAuthentication,
+                localizedReason: "Authenticate to import keys"
+            ) { success, authError in
+                DispatchQueue.main.async {
+                    if success {
+                        showWifImport = true
+                    } else if let authError = authError {
+                        let laErr = authError as? LAError
+                        if laErr?.code != .userCancel && laErr?.code != .appCancel {
+                            viewModel.errorMessage = "Authentication failed: \(authError.localizedDescription)"
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback: no biometric/passcode available — allow import
+            showWifImport = true
         }
     }
 

@@ -250,6 +250,8 @@ pub struct ZipherXApp {
     pub export_t_key_display: String,
     pub export_auto_dismiss: Option<Instant>,
     /// Funded transparent keys: (address, wif, balance, is_change, is_imported)
+    // NOTE: The WIF string (second field) is zeroized in Drop.
+    // Ideally this would be Zeroizing<String> but tuple type constraints prevent it.
     pub export_funded_keys: Vec<(String, String, u64, bool, bool)>,
     /// True when showing step 2 of the unified export (individual keys)
     pub show_export_step2: bool,
@@ -700,6 +702,12 @@ impl Drop for ZipherXApp {
         self.export_seed_display.zeroize();
         self.seed_import_input.zeroize();
         self.wif_import_text.zeroize();
+        self.seed_migration_input.zeroize();
+        self.wif_import_password.zeroize();
+        for word in self.seed_migration_words.iter_mut() {
+            word.zeroize();
+        }
+        self.seed_migration_words.clear();
         // Zeroize WIF strings in funded key exports
         for (_, ref mut wif, _, _, _) in self.export_funded_keys.iter_mut() {
             wif.zeroize();

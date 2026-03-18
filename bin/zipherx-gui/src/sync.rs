@@ -329,10 +329,12 @@ fn wallet_thread_main(
                     match storage.store_key(&format!("imported_wif_{}", address), raw_sk) {
                         Ok(()) => {
                             // Also store in the imported_transparent_keys table.
-                            // SECURITY: The DB is encrypted at rest by SQLCipher
-                            // (key derived from user password via Argon2id).
-                            // storage.store_key() above also encrypts a copy to file
-                            // as defense-in-depth. Both layers require the user password.
+                            // SECURITY NOTE: The raw 32-byte secret key is stored in the DB,
+                            // protected by SQLCipher (AES-256-CBC with Argon2id-derived key).
+                            // If running without DB encryption (should not happen in production),
+                            // the secret key would be exposed. The file-based copy via
+                            // storage.store_key() above provides defense-in-depth encryption.
+                            // Both layers require the user password.
                             let _ = runtime.block_on(async {
                                 let db_c = db.clone();
                                 let addr = address.clone();

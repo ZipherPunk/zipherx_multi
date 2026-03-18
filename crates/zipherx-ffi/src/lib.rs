@@ -1509,7 +1509,25 @@ fn send_transparent_with_progress(
                 &sk_bytes,
                 &seed_secure,
                 Some(progress_fn),
-                |_| Err("No imported keys available via FFI yet".to_string()),
+                |encrypted_sk: &[u8]| {
+                    // Try as raw 32-byte key first (egui stores raw secret bytes)
+                    if encrypted_sk.len() == 32 {
+                        return Ok(zeroize::Zeroizing::new(encrypted_sk.to_vec()));
+                    }
+                    // Try as WIF string (Android/iOS store WIF as UTF-8 bytes)
+                    if let Ok(wif_str) = std::str::from_utf8(encrypted_sk) {
+                        let wif_str = wif_str.trim();
+                        if let Ok((sk_bytes, _)) =
+                            zipherx_crypto::transparent::decode_wif(wif_str)
+                        {
+                            return Ok(sk_bytes);
+                        }
+                    }
+                    Err(format!(
+                        "Cannot decode imported key ({} bytes)",
+                        encrypted_sk.len()
+                    ))
+                },
             )
             .await
         {
@@ -1944,16 +1962,24 @@ fn export_funded_transparent_wifs() -> Result<Vec<FundedTransparentKeyFFI>, Wall
     let seed = SecureVec(seed);
 
     let keys = runtime::block_on(
-        wallet.export_funded_transparent_wifs(&seed, |encrypted| {
-            // Mobile platforms store imported keys as encrypted blobs.
-            // The FFI layer cannot decrypt them (no password context),
-            // so we pass the encrypted bytes through — encode_wif will
-            // fail for these, and the caller should handle the error.
-            // In practice, imported key WIFs are re-encoded from the
-            // stored encrypted secret key only when the platform can decrypt.
-            // Return the encrypted blob as-is; the FFI layer can't decrypt imported keys.
-            // The export will skip these entries (encode_wif will fail on encrypted bytes).
-            Ok(zeroize::Zeroizing::new(encrypted.to_vec()))
+        wallet.export_funded_transparent_wifs(&seed, |encrypted_sk| {
+            // Try as raw 32-byte key first (egui stores raw secret bytes)
+            if encrypted_sk.len() == 32 {
+                return Ok(zeroize::Zeroizing::new(encrypted_sk.to_vec()));
+            }
+            // Try as WIF string (Android/iOS store WIF as UTF-8 bytes)
+            if let Ok(wif_str) = std::str::from_utf8(encrypted_sk) {
+                let wif_str = wif_str.trim();
+                if let Ok((sk_bytes, _)) =
+                    zipherx_crypto::transparent::decode_wif(wif_str)
+                {
+                    return Ok(sk_bytes);
+                }
+            }
+            Err(format!(
+                "Cannot decode imported key ({} bytes)",
+                encrypted_sk.len()
+            ))
         }),
     )
     .map_err(WalletError::from)?
