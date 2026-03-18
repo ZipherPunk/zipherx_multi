@@ -492,6 +492,7 @@ fn wallet_thread_main(
                     memo.as_deref(),
                     &seed,
                     &state,
+                    &storage,
                 );
                 // seed is dropped here — Zeroizing handles secure zeroing
             }
@@ -1079,6 +1080,7 @@ fn handle_transparent_send(
     memo: Option<&str>,
     seed: &[u8],
     state: &Arc<Mutex<SharedState>>,
+    storage: &Arc<crate::platform::GuiSecureStorage>,
 ) {
     eprintln!(
         "[ZipherX] Transparent send: {} zatoshis to {}",
@@ -1182,23 +1184,35 @@ fn handle_transparent_send(
         );
 
         // Derive the secret key for this UTXO
-        let sk_result = zipherx_crypto::transparent::derive_transparent_secret_key(
-            seed,
-            0,
-            utxo.child_index,
-            utxo.is_change,
-        );
-        let sk = match sk_result {
-            Ok(s) => s,
-            Err(e) => {
-                if let Ok(mut s) = state.lock() {
-                    s.send_result = Some(Err(format!("Key derivation failed: {}", e)));
+        let sk = if utxo.is_imported {
+            // Imported key: load from secure file storage
+            let key_id = format!("imported_wif_{}", utxo.address);
+            match storage.load_key(&key_id) {
+                Ok(raw_sk) => zeroize::Zeroizing::new(raw_sk),
+                Err(e) => {
+                    if let Ok(mut s) = state.lock() {
+                        s.send_result = Some(Err(format!("Imported key load failed: {}", e)));
+                    }
+                    return;
                 }
-                return;
+            }
+        } else {
+            // Seed-derived key
+            match zipherx_crypto::transparent::derive_transparent_secret_key(
+                seed, 0, utxo.child_index, utxo.is_change,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    if let Ok(mut s) = state.lock() {
+                        s.send_result = Some(Err(format!("Key derivation failed: {}", e)));
+                    }
+                    return;
+                }
             }
         };
 
-        // Verify: derive address from the secret key and check it matches the UTXO address
+        // Verify address match (skip for imported — already validated at import time)
+        if !utxo.is_imported {
         let derived_addr = if utxo.is_change {
             zipherx_crypto::transparent::derive_transparent_change_address(seed, 0, utxo.child_index)
         } else {
@@ -1226,6 +1240,7 @@ fn handle_transparent_send(
                 eprintln!("[ZipherX] WARNING: address derivation for verification failed: {}", e);
             }
         }
+        } // end if !utxo.is_imported
 
         // Parse txid hex to bytes — UTXO stores display format (reversed),
         // but OutPoint needs internal byte order, so reverse after decode.
