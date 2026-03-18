@@ -1502,9 +1502,16 @@ fun SettingsScreen(
                 text = {
                     Column {
                         Text(
-                            text = "Paste WIF private keys (one per line):",
+                            text = "Paste transparent private keys (one per line):",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
+                            color = ZColors.primaryDim,
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Accepted formats:\n\u2022 WIF compressed: L... or K... (standard)\n\u2022 Electrum-ZCL: p2pkh:L... or p2pkh:K...",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 9.sp,
                             color = ZColors.primaryDim,
                         )
                         Spacer(modifier = Modifier.height(8.dp))
@@ -1519,7 +1526,7 @@ fun SettingsScreen(
                             ),
                             placeholder = {
                                 Text(
-                                    "5K... or L... or K...",
+                                    "L... or K... or p2pkh:L... (one per line)",
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 10.sp,
                                     color = ZColors.primaryDim.copy(alpha = 0.5f),

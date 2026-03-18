@@ -816,7 +816,7 @@ fn show_security_section(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Co
             app.show_wif_import_confirm = true;
         }
         ui.label(
-            egui::RichText::new("Import transparent private keys (WIF format).")
+            egui::RichText::new("Import transparent private keys (WIF or Electrum format).")
                 .font(theme::mono(10.0))
                 .color(theme::MUTED),
         );
@@ -2087,10 +2087,20 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new(
-                    "Paste one or more WIF private keys (one per line).\n\
+                    "Paste one or more transparent private keys (one per line).\n\
                      These keys will be encrypted and stored locally.",
                 )
                 .font(theme::mono(10.0))
+                .color(theme::MUTED),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(
+                    "Accepted formats:\n\
+                     \u{2022} WIF compressed: L... or K... (standard)\n\
+                     \u{2022} Electrum-ZCL: p2pkh:L... or p2pkh:K...",
+                )
+                .font(theme::mono(9.0))
                 .color(theme::MUTED),
             );
             ui.add_space(6.0);
@@ -2101,7 +2111,7 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                     .font(theme::mono(10.0))
                     .desired_rows(4)
                     .desired_width(f32::INFINITY)
-                    .hint_text("5K... or L... or K... (one per line)")
+                    .hint_text("L... or K... or p2pkh:L... (one per line)")
                     .char_limit(10_000),
             );
 
