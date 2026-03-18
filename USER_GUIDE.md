@@ -329,27 +329,60 @@ All exported keys auto-dismiss after 60 seconds. Clipboard auto-clears after 30 
 
 ## Import WIF Keys
 
-Have transparent private keys (WIF format) from another wallet? You can import them.
+Have transparent private keys from another wallet? You can import them.
+
+### Accepted formats
+
+ZipherX accepts three formats -- paste whatever you have:
+
+| Format | Example | Source |
+|--------|---------|--------|
+| **WIF compressed** | `L5Kx7j9nQcB...` or `K...` | Standard (most wallets) |
+| **Electrum with prefix** | `p2pkh:L5Kx7j9nQcB...` | Electrum-ZCL export |
+| **Electrum CSV** | `t1Wx6YG...,p2pkh:L5Kx7j...` | Electrum-ZCL full export (Wallet > Private Keys > Export) |
+
+You can mix formats -- paste them all, one per line. ZipherX detects the format automatically.
 
 ### How to import
 
 1. Go to **Settings > IMPORT WIF KEYS**
-2. Paste one or more WIF keys (one per line). WIF keys start with `L` or `K`.
-3. Click **VALIDATE** -- the app verifies each key and shows the corresponding address
-4. Review the results (green checkmark = valid, red cross = invalid)
-5. Click **IMPORT** -- keys are stored and a full blockchain rescan starts automatically
+2. Authenticate (password on desktop, biometric on mobile)
+3. Paste one or more keys (one per line, up to 100 at a time)
+4. Click **VALIDATE** -- the app verifies each key and shows the corresponding t-address
+5. Review the results (checkmark = valid, cross = invalid)
+6. Click **IMPORT** -- keys are stored and a full blockchain rescan starts automatically
+7. A progress bar shows the rescan status. Balance appears when complete.
+
+### Importing from Electrum-ZCL
+
+In Electrum-ZCL: **Wallet > Private Keys > Export**. This gives you a CSV file with `address,p2pkh:WIF` on each line. You can paste the entire file content directly into ZipherX -- it handles the format automatically.
+
+### Private key import flow (advanced)
+
+If you only have a shielded private key (no recovery phrase):
+
+1. **Setup screen**: Choose "Import Private Key" and paste your shielded key
+2. The wallet creates a shielded-only wallet (no transparent addresses)
+3. A banner offers options to add transparent addresses:
+   - **Enter My Phrase** -- if you have the original 24-word phrase
+   - **Generate New** -- creates new transparent addresses (unrelated to shielded funds)
+   - **Import WIF** -- add transparent keys from another wallet
+   - **Skip** -- stay shielded-only
+4. After importing WIF keys, the wallet rescans the blockchain automatically
 
 ### Important warnings
 
 - **Imported keys are NOT covered by your recovery phrase.** If you restore from your phrase, imported addresses will not appear. Keep a separate backup of your WIF keys.
-- **The rescan takes a few minutes.** The wallet needs to scan the entire blockchain to find transactions for the newly imported addresses. Progress is shown on the balance screen.
-- **You can import multiple keys at once.** Paste them all in the text area, one per line.
+- **The rescan takes a few minutes.** A progress bar shows the scan status on the balance screen. During the rescan, "Rescanning..." is displayed instead of the balance.
+- **You can import up to 100 keys at once.** Paste them all in the text area, one per line.
+- **Authentication required.** Password (desktop) or biometric (mobile) is required before importing.
 
 ### When to use WIF import
 
-- Migrating from another Zclassic wallet
+- Migrating from Electrum-ZCL or another Zclassic wallet
 - Importing a paper wallet
-- Using a private key exported from ZipherX on a PK-only wallet (no recovery phrase)
+- Restoring a PK-only wallet with separate transparent keys
+- Adding transparent addresses to a shielded-only wallet
 
 ---
 
@@ -393,8 +426,19 @@ The CLI provides the same core functionality as the GUI: create wallet, restore,
 
 ### "Send failed"
 - Make sure you have enough balance (amount + 0.0001 ZCL fee)
-- Make sure the recipient address is a valid shielded address (`zs1...`)
+- Make sure the recipient address is valid -- shielded (`zs1...`) or transparent (`t1...`)
 - Check that sync is complete (pending sync can cause stale witnesses)
+- For transparent sends: make sure you selected TRANSPARENT as the source
+
+### "Transparent balance is 0 after WIF import"
+- The blockchain rescan may still be in progress -- check the progress bar
+- If rescan completed and balance is still 0, try **Full Rescan** in Settings > Maintenance
+- Make sure the WIF keys you imported are for the correct Zclassic addresses
+
+### "Imported addresses disappeared after restart"
+- Imported WIF keys are stored securely and persist across restarts
+- If the transparent balance shows 0 on restart, wait for the background sync to complete
+- The wallet scans for imported addresses on every sync cycle
 
 ### "Can't connect to peers"
 - Check your firewall (port 8033 for Zclassic mainnet)

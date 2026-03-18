@@ -190,7 +190,10 @@ ZipherX Multi takes security seriously:
 - **Tor integration**: Route all traffic through the Tor network
 - **Open source**: Every line of code is auditable
 - **Hardened runtime**: macOS builds use Hardened Runtime + App Sandbox
-- **Biometric gating**: Key export and destructive operations require biometric authentication
+- **Biometric gating**: Key export, key import, and destructive operations require biometric/password authentication
+- **Zeroizing secrets**: Spending keys wrapped in `Zeroizing<Vec<u8>>` for automatic secure zeroing on drop, including panic paths
+- **Encrypted storage**: SQLCipher (AES-256) for database, AES-256-GCM for key files, Argon2id for key derivation
+- **Input validation**: WIF decode validates checksum, version byte, compression flag, and length bounds
 
 **Found a vulnerability?** Open a GitHub issue or contact us responsibly. We take every report seriously.
 
