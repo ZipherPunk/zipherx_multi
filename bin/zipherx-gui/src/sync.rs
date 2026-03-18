@@ -1460,6 +1460,12 @@ fn refresh_balance_and_history(
         }
         if let Ok(funded) = db.get_funded_transparent_addresses() {
             if let Ok(mut s) = state.lock() {
+                // Set transparent_address from the first funded address (for display)
+                if s.transparent_address.is_none() {
+                    if let Some(first) = funded.first() {
+                        s.transparent_address = Some(first.address.clone());
+                    }
+                }
                 s.funded_transparent_keys = funded
                     .iter()
                     .map(|f| {
@@ -1472,6 +1478,16 @@ fn refresh_balance_and_history(
                         )
                     })
                     .collect();
+            }
+        }
+        // Also set transparent_address from imported keys (even if no funded UTXOs yet)
+        if let Ok(imported) = db.get_imported_transparent_addresses() {
+            if !imported.is_empty() {
+                if let Ok(mut s) = state.lock() {
+                    if s.transparent_address.is_none() {
+                        s.transparent_address = Some(imported[0].1.clone());
+                    }
+                }
             }
         }
     }

@@ -405,9 +405,15 @@ fn handle_unlock(app: &mut ZipherXApp) {
                 }
                 app.needs_seed_migration = false;
             } else {
-                // SK exists but no seed — check if user already dismissed the migration
+                // SK exists but no seed — check if user already dismissed or has imported WIFs
                 let dismissed = app.data_dir.join(".migration_dismissed").exists();
-                if dismissed {
+                // Also check if any imported WIF key files exist in keys dir
+                let keys_dir = app.storage.data_dir().join("keys");
+                let has_imported_wifs = std::fs::read_dir(&keys_dir)
+                    .map(|entries| entries.filter_map(|e| e.ok())
+                        .any(|e| e.file_name().to_string_lossy().starts_with("imported_wif_")))
+                    .unwrap_or(false);
+                if dismissed || has_imported_wifs {
                     app.needs_seed_migration = false;
                 } else {
                     app.needs_seed_migration = true;
