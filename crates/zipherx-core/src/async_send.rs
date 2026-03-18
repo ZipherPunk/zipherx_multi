@@ -591,10 +591,15 @@ pub async fn send_transparent_transaction(
         .map_err(|e| CoreError::RuntimeError(e.to_string()))?
         .map_err(|e| CoreError::Storage(e.to_string()))?;
 
-        Some(
-            zipherx_crypto::transparent::derive_transparent_change_address(&seed_owned, 0, next_change_idx)
-                .map_err(|e| CoreError::Crypto(format!("Change address derivation failed: {e}")))?,
-        )
+        match zipherx_crypto::transparent::derive_transparent_change_address(&seed_owned, 0, next_change_idx) {
+            Ok(addr) => Some(addr),
+            Err(_) => {
+                // No seed (PK + WIF import) — send change back to the first selected UTXO's address.
+                // This avoids creating new addresses the wallet doesn't control.
+                eprintln!("[ZipherX] No seed for change derivation — using source UTXO address");
+                Some(selected[0].address.clone())
+            }
+        }
     };
 
     // Step 8: Build transaction (prover must already be initialized by caller)
