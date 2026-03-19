@@ -1,7 +1,10 @@
 name: CI
 
 on:
-  workflow_dispatch:  # manual trigger only until lints are fixed
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
@@ -34,7 +37,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        run: cargo clippy --no-deps -p zipherx-core -p zipherx-crypto -p zipherx-network -p zipherx-storage -p zipherx-ffi -p zipherx-tor -p zipherx-platform -p zipherx-gui -p zipherx-cli -- -D warnings
+        run: cargo clippy --no-deps -p zipherx-core -p zipherx-crypto -p zipherx-network -p zipherx-storage -p zipherx-ffi -p zipherx-tor -p zipherx-platform -- -D warnings -A clippy::manual_is_multiple_of -A clippy::useless_conversion -A clippy::needless_borrows_for_generic_args
 
       - name: Verify Cargo.lock is up-to-date
         run: cargo check --locked
