@@ -1012,10 +1012,49 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
     {
         let sk_mempool = sk_bg.0.clone();
         let cb_mp = cb_mempool.clone();
-        let detector = if let Some(ref seed) = seed_bg {
-            zipherx_core::mempool_monitor::MempoolDetector::new_with_transparent(
+        // Build transparent address set with seed-derived + imported addresses,
+        // matching the egui setup (sync.rs setup_mempool_detector).
+        let addr_set = {
+            use zipherx_core::scanner::TransparentAddressSet;
+
+            let mut set = if let Some(ref seed) = seed_bg {
+                TransparentAddressSet::from_seed(&seed.0, 0, 20)
+            } else {
+                TransparentAddressSet::empty()
+            };
+
+            // Load imported transparent addresses from DB
+            let db = wallet.db.clone();
+            let imported = runtime::block_on(async {
+                tokio::task::spawn_blocking(move || db.get_imported_transparent_addresses())
+                    .await
+                    .unwrap_or(Err(zipherx_storage::types::StorageError::QueryFailed(
+                        "spawn_blocking failed".into(),
+                    )))
+            })
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
+            for (db_id, addr) in &imported {
+                set.add_imported(addr.clone(), *db_id);
+            }
+            if !imported.is_empty() {
+                eprintln!(
+                    "[ZipherX] FFI mempool detector: {} imported transparent addresses added",
+                    imported.len()
+                );
+            }
+
+            if set.addresses().is_empty() && set.imported_addresses().is_empty() {
+                None
+            } else {
+                Some(set)
+            }
+        };
+        let detector = if let Some(addr_set) = addr_set {
+            zipherx_core::mempool_monitor::MempoolDetector::new_with_address_set(
                 sk_mempool,
-                &seed.0,
+                addr_set,
                 std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
                     cb_mp.on_mempool_tx(info.txid, info.amount);
                 }),
