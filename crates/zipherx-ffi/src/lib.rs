@@ -2009,6 +2009,28 @@ fn get_transparent_utxos() -> Result<Vec<TransparentUtxoFFI>, WalletError> {
         .collect())
 }
 
+/// Get all imported transparent addresses (regardless of balance).
+///
+/// Unlike `get_transparent_utxos` which only returns addresses with unspent UTXOs,
+/// this returns every WIF-imported address. Used by the receive screen to show
+/// a valid receive address even when all UTXOs are spent.
+fn get_imported_transparent_addresses() -> Result<Vec<String>, WalletError> {
+    let wallet = get_wallet()?;
+    let db = wallet.db.clone();
+    let addrs = runtime::block_on(async {
+        tokio::task::spawn_blocking(move || db.get_imported_transparent_addresses())
+            .await
+            .unwrap_or(Err(zipherx_storage::types::StorageError::QueryFailed(
+                "spawn_blocking failed".into(),
+            )))
+    })
+    .map_err(|e| WalletError::from(e))?
+    .map_err(|e| WalletError::StorageError {
+        msg: e.to_string(),
+    })?;
+    Ok(addrs.into_iter().map(|(_id, addr)| addr).collect())
+}
+
 // ============================================================================
 // Funded Transparent Key Export & WIF Import
 // ============================================================================

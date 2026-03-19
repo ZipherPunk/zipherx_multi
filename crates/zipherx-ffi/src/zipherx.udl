@@ -240,6 +240,9 @@ namespace zipherx {
     [Throws=WalletError]
     sequence<TransparentUtxoFFI> get_transparent_utxos();
 
+    [Throws=WalletError]
+    sequence<string> get_imported_transparent_addresses();
+
     // ==================================================================
     // Funded Transparent Key Export & WIF Import
     // ==================================================================

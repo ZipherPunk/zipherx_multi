@@ -1896,6 +1896,19 @@ class WalletViewModel : ViewModel() {
     fun loadImportedTransparentAddress() {
         viewModelScope.launch {
             if (_transparentAddress.value != null) return@launch
+            // First try imported addresses (works even with 0 balance)
+            try {
+                val addrs = withContext(Dispatchers.IO) {
+                    uniffi.zipherx.getImportedTransparentAddresses()
+                }
+                if (addrs.isNotEmpty()) {
+                    _transparentAddress.value = addrs.first()
+                    return@launch
+                }
+            } catch (e: Exception) {
+                if (BuildConfig.DEBUG) Log.d(TAG, "getImportedTransparentAddresses failed: ${e.message}")
+            }
+            // Fallback: try unspent UTXOs (seed-derived addresses with balance)
             try {
                 val utxos = withContext(Dispatchers.IO) {
                     uniffi.zipherx.getTransparentUtxos()
@@ -1903,13 +1916,10 @@ class WalletViewModel : ViewModel() {
                 val addr = utxos.firstOrNull()?.address
                 if (addr != null) {
                     _transparentAddress.value = addr
-                    return@launch
                 }
             } catch (e: Exception) {
                 if (BuildConfig.DEBUG) Log.d(TAG, "getTransparentUtxos failed: ${e.message}")
             }
-            // Fallback: validate the first imported key to get its address
-            // (no imported key listing FFI, so we rely on UTXOs above)
         }
     }
 
