@@ -945,12 +945,18 @@ impl WalletDatabase {
 
                 // Check if this "sent" tx has a transparent UTXO belonging to us.
                 // If so, shielded value went to our own t-address → z→t self-send.
-                // SKIP if the sent entry already has a transparent destination
-                // (starts with "t1"/"t3") — that means it's a real t→t send with
-                // change, not a z→t deshield. Overwriting would hide the real send.
+                // SKIP if:
+                //  - The sent entry already has a transparent destination (t→t send,
+                //    not a z→t deshield — overwriting would hide the real send).
+                //  - No shielded notes were spent in this TX. A transparent-only send
+                //    to a z-address is NOT a z→t deshield; the transparent UTXO found
+                //    would be change, not the deshield destination. (Imported wallets
+                //    have is_change=0 for all UTXOs, so the is_change filter alone
+                //    isn't sufficient.)
                 let already_transparent_send = rec.address.as_ref()
                     .map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"));
-                if rec.tx_type == TxType::Sent && !already_transparent_send {
+                let has_shielded_spend = spend_txids.contains(&rec.txid);
+                if rec.tx_type == TxType::Sent && !already_transparent_send && has_shielded_spend {
                     #[cfg(debug_assertions)]
                     eprintln!(
                         "[ZipherX] z→t check: txid={} (len={})",
@@ -1096,9 +1102,13 @@ impl WalletDatabase {
         }
 
         // Self-send fallback: if same txid has both "sent" AND "received" entries,
-        // it's a self-send that wasn't detected by the notes-based method above.
-        // This catches cases where nullifier matching failed (wrong positions)
-        // so the notes-based total_input was 0 and the "received" entry wasn't filtered.
+        // it MIGHT be a self-send, or it might be a transparent send whose change
+        // UTXO wasn't filtered (e.g., imported wallets where is_change is always false).
+        //
+        // Distinguish by comparing addresses:
+        // - If "sent" dest is a t-address AND "received" addr is a different t-address,
+        //   the "received" is just change returning — remove it but keep "sent" as-is.
+        // - Otherwise (shielded, same address, or missing addresses), treat as self-send.
         {
             // Build map of txid → indices for "sent" entries
             let mut sent_idx_map: std::collections::HashMap<String, usize> =
@@ -1114,8 +1124,32 @@ impl WalletDatabase {
             for (i, r) in result.iter().enumerate() {
                 if r.tx_type == TxType::Received {
                     if let Some(&si) = sent_idx_map.get(&r.txid) {
+                        // Check if this is transparent change rather than a self-send.
+                        // If the "received" entry is a transparent UTXO (t-address) AND
+                        // its address differs from the "sent" destination, the "received"
+                        // entry is just change returning — not a self-send.
+                        // This handles:
+                        //  - t→t sends: sent to external t-addr, change to own t-addr
+                        //  - t→z sends: sent to external z-addr, change to own t-addr
+                        //  - Imported wallets where change UTXOs have is_change=false
+                        let is_transparent_change = {
+                            let sent_addr = result[si].address.as_ref();
+                            let recv_addr = r.address.as_ref();
+                            match (sent_addr, recv_addr) {
+                                (Some(sa), Some(ra)) => {
+                                    // "received" is a transparent UTXO at a different
+                                    // address than the send destination → change output
+                                    let ra_is_t = ra.starts_with("t1") || ra.starts_with("t3");
+                                    ra_is_t && sa != ra
+                                }
+                                _ => false,
+                            }
+                        };
+
                         recv_to_remove.push(i);
-                        sent_to_convert.push(si);
+                        if !is_transparent_change {
+                            sent_to_convert.push(si);
+                        }
                     }
                 }
             }

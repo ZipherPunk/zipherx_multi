@@ -7,6 +7,8 @@
 //! - `oneshot::Sender` replaces CheckedContinuation (no crash risk)
 //! - `CancellationToken` replaces block listener state machine
 
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -112,6 +114,15 @@ pub struct Peer {
     /// Used for peer discovery — harvested addresses feed into PeerManager's
     /// known_addresses pool for future connections.
     pub on_addr: Arc<Mutex<Option<Arc<dyn Fn(Vec<(String, u16)>) + Send + Sync>>>>,
+
+    /// Shared live chain tip counter — bumped by hash-based dedup when inv
+    /// MSG_BLOCK arrives with previously-unseen block hashes.
+    pub live_chain_tip: Arc<AtomicU64>,
+
+    /// Set of block hashes already counted toward live_chain_tip.
+    /// Shared across all peers so the same block announced by multiple peers
+    /// is only counted once.
+    pub seen_block_hashes: Arc<Mutex<HashSet<[u8; 32]>>>,
 }
 
 impl Peer {
@@ -140,6 +151,8 @@ impl Peer {
             on_mempool_tx_data: Arc::new(Mutex::new(None)),
             on_new_block: Arc::new(Mutex::new(None)),
             on_addr: Arc::new(Mutex::new(None)),
+            live_chain_tip: Arc::new(AtomicU64::new(0)),
+            seen_block_hashes: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -227,6 +240,8 @@ impl Peer {
         let on_mempool_tx_data = self.on_mempool_tx_data.clone(); // shares the same Mutex slot
         let on_new_block = self.on_new_block.clone();
         let on_addr = self.on_addr.clone();
+        let live_chain_tip = self.live_chain_tip.clone();
+        let seen_block_hashes = self.seen_block_hashes.clone();
 
         let handle = tokio::spawn(async move {
             block_listener_loop(
@@ -238,6 +253,8 @@ impl Peer {
                 on_mempool_tx_data,
                 on_new_block,
                 on_addr,
+                live_chain_tip,
+                seen_block_hashes,
             )
             .await;
         });
@@ -685,6 +702,8 @@ async fn block_listener_loop(
     on_mempool_tx_data: Arc<Mutex<Option<Arc<dyn Fn(Vec<u8>) + Send + Sync>>>>,
     on_new_block: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     on_addr: Arc<Mutex<Option<Arc<dyn Fn(Vec<(String, u16)>) + Send + Sync>>>>,
+    live_chain_tip: Arc<AtomicU64>,
+    seen_block_hashes: Arc<Mutex<HashSet<[u8; 32]>>>,
 ) {
     dispatcher.lock().unwrap().set_active(true);
 
@@ -717,7 +736,7 @@ async fn block_listener_loop(
                                 eprintln!("[ZipherX] Peer {} exceeded rate limit ({} unsolicited msgs/min), disconnecting", peer_id, rl_count);
                                 break;
                             }
-                            handle_background_message(&cmd, &payload, &writer, &peer_id, &on_mempool_tx_data, &on_new_block, &on_addr).await;
+                            handle_background_message(&cmd, &payload, &writer, &peer_id, &on_mempool_tx_data, &on_new_block, &on_addr, &live_chain_tip, &seen_block_hashes).await;
                         }
                     }
                     Err(e) => {
@@ -748,6 +767,8 @@ async fn handle_background_message(
     on_mempool_tx_data: &Arc<Mutex<Option<Arc<dyn Fn(Vec<u8>) + Send + Sync>>>>,
     on_new_block: &Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     on_addr: &Arc<Mutex<Option<Arc<dyn Fn(Vec<(String, u16)>) + Send + Sync>>>>,
+    live_chain_tip: &Arc<AtomicU64>,
+    seen_block_hashes: &Arc<Mutex<HashSet<[u8; 32]>>>,
 ) {
     match command {
         // ── Keepalive ──
@@ -761,33 +782,62 @@ async fn handle_background_message(
         // ── Inventory announcements ──
         "inv" => {
             if let Some(items) = crate::messages::deserialize_inv(payload) {
-                // MSG_BLOCK: new block mined — notify for instant sync
-                let has_block = items
+                // MSG_BLOCK: new block mined — bump live_chain_tip for each
+                // previously-unseen block hash (hash-based dedup across all peers).
+                let block_hashes: Vec<[u8; 32]> = items
                     .iter()
-                    .any(|item| item.inv_type == crate::types::InvType::Block);
-                if has_block {
-                    eprintln!(
-                        "[ZipherX] {}: inv MSG_BLOCK received — new block!",
-                        _peer_id
-                    );
-                    let cb = on_new_block.lock().unwrap().clone();
-                    if let Some(cb) = cb {
-                        cb();
-                    } else {
+                    .filter(|item| item.inv_type == crate::types::InvType::Block)
+                    .map(|item| item.hash)
+                    .collect();
+                if !block_hashes.is_empty() {
+                    let new_count = {
+                        let mut seen = seen_block_hashes.lock().unwrap();
+                        let mut count = 0u64;
+                        for hash in &block_hashes {
+                            if seen.insert(*hash) {
+                                count += 1;
+                            }
+                        }
+                        // Bound the set to prevent unbounded growth in long sessions.
+                        // At ~1 block/2.5min, 500 hashes ≈ 20 hours.
+                        // Re-insert current batch after clear so other peers
+                        // announcing the same block(s) don't double-count.
+                        if seen.len() > 500 {
+                            seen.clear();
+                            for hash in &block_hashes {
+                                seen.insert(*hash);
+                            }
+                        }
+                        count
+                    };
+                    if new_count > 0 {
+                        live_chain_tip.fetch_add(new_count, Ordering::Relaxed);
                         eprintln!(
-                            "[ZipherX] {}: WARNING: on_new_block callback is None!",
-                            _peer_id
+                            "[ZipherX] {}: inv MSG_BLOCK × {} new (tip now {})",
+                            _peer_id, new_count,
+                            live_chain_tip.load(Ordering::Relaxed),
                         );
+                        // Only fire sync trigger for genuinely new blocks —
+                        // avoids 4x sync attempts when 4 peers announce same block.
+                        let cb = on_new_block.lock().unwrap().clone();
+                        if let Some(cb) = cb {
+                            cb();
+                        }
                     }
                 }
 
                 // MSG_TX: mempool detection — fetch TX for trial decryption
-                if on_mempool_tx_data.lock().unwrap().is_some() {
-                    let tx_items: Vec<crate::types::InvVector> = items
-                        .into_iter()
-                        .filter(|item| item.inv_type == crate::types::InvType::Tx)
-                        .collect();
-                    if !tx_items.is_empty() {
+                let has_mempool_cb = on_mempool_tx_data.lock().unwrap().is_some();
+                let tx_items: Vec<crate::types::InvVector> = items
+                    .into_iter()
+                    .filter(|item| item.inv_type == crate::types::InvType::Tx)
+                    .collect();
+                if !tx_items.is_empty() {
+                    eprintln!(
+                        "[ZipherX] {}: inv MSG_TX × {} (mempool_cb={})",
+                        _peer_id, tx_items.len(), has_mempool_cb,
+                    );
+                    if has_mempool_cb {
                         let getdata_payload = crate::messages::serialize_inv(&tx_items);
                         let _ = send_frame_retry(writer, "getdata", &getdata_payload, 10).await;
                     }
@@ -797,9 +847,15 @@ async fn handle_background_message(
 
         // ── Transaction data (mempool detection) ──
         "tx" => {
+            eprintln!(
+                "[ZipherX] {}: received 'tx' ({} bytes)",
+                _peer_id, payload.len(),
+            );
             let cb = on_mempool_tx_data.lock().unwrap().clone();
             if let Some(cb) = cb {
                 cb(payload.to_vec());
+            } else {
+                eprintln!("[ZipherX] {}: WARNING: on_mempool_tx_data is None!", _peer_id);
             }
         }
 

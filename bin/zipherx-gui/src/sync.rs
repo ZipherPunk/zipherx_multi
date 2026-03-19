@@ -398,8 +398,14 @@ fn wallet_thread_main(
                 }
                 // Cache seed for transparent address scanning (I3: Zeroizing wrapper)
                 if cached_seed.is_none() {
-                    if let Ok(seed) = storage.load_key("wallet_seed") {
-                        cached_seed = Some(Zeroizing::new(seed));
+                    match storage.load_key("wallet_seed") {
+                        Ok(seed) => {
+                            eprintln!("[ZipherX] Wallet thread: seed loaded ({} bytes)", seed.len());
+                            cached_seed = Some(Zeroizing::new(seed));
+                        }
+                        Err(e) => {
+                            eprintln!("[ZipherX] Wallet thread: seed load FAILED: {}", e);
+                        }
                     }
                 }
 
@@ -907,11 +913,51 @@ fn setup_mempool_detector(
     seed: Option<&[u8]>,
     state: &Arc<Mutex<SharedState>>,
 ) {
+    // Build a transparent address set with BOTH seed-derived AND imported addresses.
+    // The block scanner does the same (async_wallet.rs sync_with_transparent).
+    // Without imported addresses, mempool detection misses incoming TXs to WIF-imported t-addrs.
+    let addr_set = {
+        use zipherx_core::scanner::TransparentAddressSet;
+
+        let mut set = if let Some(seed) = seed {
+            TransparentAddressSet::from_seed(seed, 0, 20)
+        } else {
+            TransparentAddressSet::empty()
+        };
+
+        // Load imported transparent addresses from DB
+        let db = wallet.db.clone();
+        if let Ok(imported) = runtime.block_on(async {
+            tokio::task::spawn_blocking(move || db.get_imported_transparent_addresses())
+                .await
+                .unwrap_or(Err(zipherx_storage::types::StorageError::QueryFailed(
+                    "spawn_blocking failed".into(),
+                )))
+        }) {
+            for (db_id, addr) in &imported {
+                set.add_imported(addr.clone(), *db_id);
+            }
+            if !imported.is_empty() {
+                eprintln!(
+                    "[ZipherX] Mempool detector: {} imported transparent addresses added",
+                    imported.len()
+                );
+            }
+        }
+
+        // Only use the set if it has any addresses
+        if set.addresses().is_empty() && set.imported_addresses().is_empty() {
+            None
+        } else {
+            Some(set)
+        }
+    };
+
     let state_clone = state.clone();
-    let detector = if let Some(seed) = seed {
-        zipherx_core::mempool_monitor::MempoolDetector::new_with_transparent(
+    let detector = if let Some(addr_set) = addr_set {
+        zipherx_core::mempool_monitor::MempoolDetector::new_with_address_set(
             sk_bytes.to_vec(),
-            seed,
+            addr_set,
             std::sync::Arc::new(move |info: zipherx_core::mempool_monitor::MempoolTxInfo| {
                 if let Ok(mut s) = state_clone.lock() {
                     s.mempool_tx = Some(info);

@@ -1223,17 +1223,18 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                     // Wait for EITHER the timer OR a new-block notification from peers.
                     // When a peer sends inv MSG_BLOCK, new_block_notify fires and we
                     // sync immediately instead of waiting for the full interval.
-                    tokio::select! {
-                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => {}
+                    let inv_triggered = tokio::select! {
+                        _ = tokio::time::sleep(tokio::time::Duration::from_secs(interval)) => false,
                         _ = new_block_notify.notified() => {
                             #[cfg(debug_assertions)]
                             eprintln!("[ZipherX] FFI: new block announced by peer — instant sync");
                             // Delay to let the block propagate to all peers before syncing.
-                            // 500ms was too short — headers often not available yet, causing
-                            // the sync to find 0 new blocks and miss the confirmation.
                             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                            true
                         }
-                    }
+                    };
+
+                    let h_before = last_height;
 
                     match if let Some(ref seed) = seed_bg {
                         wallet.sync_with_transparent(&sk_bg, seed, None).await
@@ -1269,6 +1270,51 @@ fn start_sync(callback: Box<dyn SyncProgressCallback>) -> Result<(), WalletError
                             // Always log (not just debug) so production issues are visible.
                             eprintln!("[ZipherX] FFI: background sync error (non-fatal): {}", e);
                             let _ = e;
+                        }
+                    }
+
+                    // Retry logic for inv-triggered syncs that found 0 new blocks.
+                    // Peers may not have propagated headers yet when the inv arrived.
+                    // Matches the egui retry+reconnect escalation for parity.
+                    if inv_triggered && last_height <= h_before {
+                        #[cfg(debug_assertions)]
+                        eprintln!("[ZipherX] FFI: inv block but no new header — retrying in 10s");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                        match if let Some(ref seed) = seed_bg {
+                            wallet.sync_with_transparent(&sk_bg, seed, None).await
+                        } else {
+                            wallet.sync(&sk_bg, None).await
+                        } {
+                            Ok(h) if h > last_height => {
+                                last_height = h;
+                                cb_bg.on_complete(h);
+                            }
+                            _ => {}
+                        }
+
+                        // If retry also found nothing, reconnect for fresh peer heights.
+                        // Skip if a send is in progress — it needs stable peer connections.
+                        if last_height <= h_before
+                            && !IS_SENDING.load(std::sync::atomic::Ordering::Relaxed)
+                        {
+                            eprintln!("[ZipherX] FFI: peers stale after inv — reconnecting");
+                            {
+                                let mut pm = wallet.peer_manager.lock().await;
+                                pm.disconnect_all().await;
+                                let _ = pm.connect().await;
+                            }
+                            // One more sync with fresh peers
+                            match if let Some(ref seed) = seed_bg {
+                                wallet.sync_with_transparent(&sk_bg, seed, None).await
+                            } else {
+                                wallet.sync(&sk_bg, None).await
+                            } {
+                                Ok(h) if h > last_height => {
+                                    last_height = h;
+                                    cb_bg.on_complete(h);
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }

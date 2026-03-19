@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::sync::Semaphore;
@@ -200,6 +200,11 @@ pub struct PeerManager {
     /// Tracks the minimum known chain height from inv MSG_BLOCK events.
     /// Used by `get_consensus_height` to avoid stale peer heights.
     pub live_chain_tip: Arc<AtomicU64>,
+
+    /// Set of block hashes already counted toward live_chain_tip.
+    /// Shared across all peers for cross-peer dedup (same block announced
+    /// by multiple peers is only counted once).
+    pub seen_block_hashes: Arc<Mutex<std::collections::HashSet<[u8; 32]>>>,
 }
 
 impl PeerManager {
@@ -218,6 +223,7 @@ impl PeerManager {
             on_new_block: None,
             on_addr: None,
             live_chain_tip: Arc::new(AtomicU64::new(0)),
+            seen_block_hashes: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -227,29 +233,13 @@ impl PeerManager {
     /// The background sync loop uses this to trigger an immediate sync instead
     /// of waiting for the 30s timer.
     pub fn set_on_new_block(&mut self, cb: Arc<dyn Fn() + Send + Sync>) {
-        // Wrap callback to also bump live_chain_tip on each inv MSG_BLOCK.
-        // This ensures get_consensus_height() returns a fresh value even when
-        // peer_start_height is stale from the version exchange.
-        let tip = self.live_chain_tip.clone();
-        // Time-based dedup: multiple peers announce the same block within ~100ms.
-        // Only bump live_chain_tip once per 5-second window to prevent inflation
-        // (4 peers × N blocks would exceed the +10 safety margin in consensus_height).
-        let last_bump = Arc::new(AtomicU64::new(0));
-        let wrapped = Arc::new(move || {
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let prev = last_bump.load(Ordering::Relaxed);
-            if now_secs >= prev + 5 {
-                last_bump.store(now_secs, Ordering::Relaxed);
-                tip.fetch_add(1, Ordering::Relaxed);
-            }
-            cb();
-        });
-        self.on_new_block = Some(wrapped.clone());
+        // live_chain_tip bumping is now done directly in the inv handler
+        // (handle_background_message in peer.rs) using hash-based dedup:
+        // each unique block hash bumps by 1, shared across all peers.
+        // This callback just signals "a new block arrived — trigger sync".
+        self.on_new_block = Some(cb.clone());
         for peer in self.peers.values() {
-            *peer.on_new_block.lock().unwrap() = Some(wrapped.clone());
+            *peer.on_new_block.lock().unwrap() = Some(cb.clone());
         }
     }
 
@@ -446,10 +436,12 @@ impl PeerManager {
             }
 
             while let Some(result) = join_set.join_next().await {
-                if let Ok(Some(peer)) = result {
+                if let Ok(Some(mut peer)) = result {
                     *peer.on_mempool_tx_data.lock().unwrap() = self.on_mempool_tx_data.clone();
                     *peer.on_new_block.lock().unwrap() = self.on_new_block.clone();
                     *peer.on_addr.lock().unwrap() = self.on_addr.clone();
+                    peer.live_chain_tip = self.live_chain_tip.clone();
+                    peer.seen_block_hashes = self.seen_block_hashes.clone();
                     let key = peer.id.clone();
                     self.peers.insert(key, peer);
                     // Update live counter so UI sees peers as they connect
@@ -562,6 +554,14 @@ impl PeerManager {
             if self.known_addresses.len() >= MAX_KNOWN_ADDRESSES {
                 break;
             }
+            // Filter reserved/private IPs (same as discover_peers)
+            if is_reserved_ip(&host) {
+                continue;
+            }
+            // Reject invalid port
+            if port == 0 {
+                continue;
+            }
             let key = format!("{host}:{port}");
             self.known_addresses.entry(key).or_insert(AddressInfo {
                 host,
@@ -671,29 +671,46 @@ impl PeerManager {
         }
 
         // If block listener inv notifications have pushed live_chain_tip beyond
-        // the stale peer_start_height median, accept it. The time-based dedup
-        // in set_on_new_block prevents inflation (only +1 per 5s window), so
-        // live_chain_tip tracks real blocks. Accept within 100 blocks of median
-        // to handle long sessions where peer_start_height becomes very stale.
+        // the stale peer_start_height median, accept it. Hash-based dedup in
+        // handle_background_message (peer.rs) ensures each unique block hash is
+        // counted exactly once across all peers. Accept within 2000 blocks of
+        // median to handle long sessions where peer_start_height becomes very
+        // stale (~3.5 days at ZCL's 2.5min block time).
         let live_tip = self.live_chain_tip.load(Ordering::Relaxed);
-        let consensus_height = if live_tip > median_height && live_tip <= median_height + 100 {
+        let consensus_height = if live_tip > median_height && live_tip <= median_height + 2000 {
             live_tip // Accept live tip (dedup prevents inflation)
         } else {
             median_height // Strict median otherwise
         };
 
         // Sybil detection: ban peers >500 blocks above consensus
-        let to_ban: Vec<String> = heights
+        let sybil_peers: Vec<(String, String)> = heights
             .iter()
             .filter(|(_, h)| *h > consensus_height + 500)
-            .filter_map(|(id, _)| self.peers.get(id).map(|p| p.host.clone()))
+            .filter_map(|(id, _)| {
+                self.peers.get(id).map(|p| (id.clone(), p.host.clone()))
+            })
             .collect();
-        for host in &to_ban {
+        for (peer_key, host) in &sybil_peers {
             self.ban_peer(host, BanReason::SybilAttack);
+            // Disconnect the banned peer immediately — dropping closes the TCP connection
+            if let Some(peer) = self.peers.remove(peer_key) {
+                drop(peer);
+            }
         }
 
         // Absolute sanity cap: 10M blocks
         Ok(consensus_height.min(10_000_000))
+    }
+
+    /// Update the live chain tip to the actual synced height.
+    /// Called after each successful sync to reset the baseline so that
+    /// `get_consensus_height` stays accurate across long-running sessions.
+    ///
+    /// Uses `fetch_max` so that inv MSG_BLOCK bumps are never overwritten
+    /// by a sync that completed before the new block was fetched.
+    pub fn update_live_chain_tip(&self, height: u64) {
+        self.live_chain_tip.fetch_max(height, Ordering::Relaxed);
     }
 
     /// Ban a peer.
@@ -1143,7 +1160,9 @@ impl PeerManager {
 
         let total_accepted = accepted_by.len() + duplicate_at.len();
         let total_attempted = accepted_by.len() + rejected_by.len() + duplicate_at.len();
-        let success = total_accepted > 0;
+        // Any explicit reject means the TX is invalid — silence (timeout) is NOT
+        // a positive confirmation, so "accepted" peers may also reject later.
+        let success = total_accepted > 0 && rejected_by.is_empty();
 
         eprintln!(
             "[ZipherX] Broadcast result: {}/{} accepted, {} rejected, {} duplicate",
@@ -1172,8 +1191,36 @@ impl PeerManager {
     }
 }
 
-/// Check if an IP is reserved/private.
+/// Check if an IP is reserved/private (supports both IPv4 and IPv6).
 fn is_reserved_ip(ip: &str) -> bool {
+    // Try parsing as a proper IP address for comprehensive check
+    if let Ok(addr) = ip.parse::<std::net::IpAddr>() {
+        return match addr {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_unspecified()
+                    // CGNAT range 100.64.0.0/10
+                    || (v4.octets()[0] == 100
+                        && v4.octets()[1] >= 64
+                        && v4.octets()[1] <= 127)
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    // fe80::/10 — link-local
+                    || (v6.segments()[0] & 0xffc0 == 0xfe80)
+                    // fc00::/7 — unique-local (ULA)
+                    || (v6.segments()[0] & 0xfe00 == 0xfc00)
+                    // 2001:db8::/32 — documentation
+                    || (v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8)
+            }
+        };
+    }
+
+    // Fallback: string-based check for IPv4 (legacy, if parse fails)
     ip.starts_with("10.")
         || ip.starts_with("192.168.")
         || ip.starts_with("127.")
@@ -1232,6 +1279,7 @@ mod tests {
 
     #[test]
     fn test_reserved_ip_filtering() {
+        // IPv4 reserved
         assert!(is_reserved_ip("10.0.0.1"));
         assert!(is_reserved_ip("192.168.1.1"));
         assert!(is_reserved_ip("127.0.0.1"));
@@ -1240,9 +1288,22 @@ mod tests {
         assert!(is_reserved_ip("100.64.0.1"));
         assert!(is_reserved_ip("169.254.0.1"));
 
+        // IPv4 public
         assert!(!is_reserved_ip("8.8.8.8"));
         assert!(!is_reserved_ip("140.174.189.3"));
         assert!(!is_reserved_ip("172.32.0.1"));
+
+        // IPv6 reserved
+        assert!(is_reserved_ip("::1")); // loopback
+        assert!(is_reserved_ip("::")); // unspecified
+        assert!(is_reserved_ip("fe80::1")); // link-local
+        assert!(is_reserved_ip("fc00::1")); // unique-local
+        assert!(is_reserved_ip("fd12:3456::1")); // unique-local
+        assert!(is_reserved_ip("2001:db8::1")); // documentation
+
+        // IPv6 public
+        assert!(!is_reserved_ip("2001:4860:4860::8888")); // Google DNS
+        assert!(!is_reserved_ip("2606:4700::1111")); // Cloudflare
     }
 
     #[test]
@@ -1268,6 +1329,23 @@ mod tests {
         // Dedup
         pm.add_discovered_addresses(vec![("1.2.3.4".into(), 8233)]);
         assert_eq!(pm.known_addresses.len(), 2);
+
+        // Reserved IPs should be filtered out
+        pm.add_discovered_addresses(vec![
+            ("10.0.0.1".into(), 8233),
+            ("192.168.1.1".into(), 8233),
+            ("::1".into(), 8233),
+            ("fe80::1".into(), 8233),
+        ]);
+        assert_eq!(pm.known_addresses.len(), 2); // No new entries
+
+        // Port 0 should be filtered out
+        pm.add_discovered_addresses(vec![("9.9.9.9".into(), 0)]);
+        assert_eq!(pm.known_addresses.len(), 2); // Still no new entries
+
+        // Valid address should be accepted
+        pm.add_discovered_addresses(vec![("9.9.9.9".into(), 8233)]);
+        assert_eq!(pm.known_addresses.len(), 3);
     }
 
     #[test]

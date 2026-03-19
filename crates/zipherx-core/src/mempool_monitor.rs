@@ -126,12 +126,23 @@ impl MempoolDetector {
         // Parse the transaction including transparent outputs
         let (txid, outputs, _spends, t_outputs) = match block_fetcher::parse_raw_tx_full(raw_tx) {
             Some(parsed) => parsed,
-            None => return,
+            None => {
+                eprintln!(
+                    "[ZipherX] Mempool: failed to parse raw TX ({} bytes)",
+                    raw_tx.len()
+                );
+                return;
+            }
         };
 
         if outputs.is_empty() && t_outputs.is_empty() {
             return;
         }
+
+        eprintln!(
+            "[ZipherX] Mempool: parsed TX — {} shielded outputs, {} transparent outputs, has_addr_set={}",
+            outputs.len(), t_outputs.len(), self.transparent_addresses.is_some(),
+        );
 
         let mut total_value = 0u64;
 
@@ -156,18 +167,19 @@ impl MempoolDetector {
         // Match transparent outputs against our derived addresses
         if let Some(ref addr_set) = self.transparent_addresses {
             for t_out in &t_outputs {
-                if addr_set.match_script(&t_out.script_pubkey).is_some() {
+                if let Some((addr, is_change, _, _is_imported)) =
+                    addr_set.match_script(&t_out.script_pubkey)
+                {
                     total_value += t_out.value;
-
-                    #[cfg(debug_assertions)]
-                    {
-                        let (addr, is_change, _, _is_imported) =
-                            addr_set.match_script(&t_out.script_pubkey).unwrap();
-                        eprintln!(
-                            "[ZipherX] Mempool: transparent output matched addr={} change={} value={}",
-                            addr, is_change, t_out.value
-                        );
-                    }
+                    eprintln!(
+                        "[ZipherX] Mempool: transparent output matched addr={} change={} value={}",
+                        addr, is_change, t_out.value
+                    );
+                } else {
+                    eprintln!(
+                        "[ZipherX] Mempool: transparent output NOT matched (script_len={}, value={})",
+                        t_out.script_pubkey.len(), t_out.value,
+                    );
                 }
             }
         }
