@@ -58,7 +58,12 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         .filter(|tx| match app.history_filter {
             HistoryFilter::All => true,
             HistoryFilter::Received => tx.tx_type == "received",
-            HistoryFilter::Sent => tx.tx_type == "sent" || tx.tx_type == "self",
+            HistoryFilter::Sent => {
+                tx.tx_type == "sent"
+                    || tx.tx_type == "self"
+                    || tx.tx_type == "self_z2t"
+                    || tx.tx_type == "self_t2z"
+            }
         })
         .cloned()
         .collect();
@@ -83,6 +88,8 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     "received" => ("[+]", theme::GREEN, "+"),
                     "sent" => ("[-]", theme::RED, "-"),
                     "self" => ("[S]", theme::YELLOW, "~"),
+                    "self_z2t" => ("[z>t]", theme::YELLOW, "~"),
+                    "self_t2z" => ("[t>z]", theme::YELLOW, "~"),
                     _ => ("[?]", theme::MUTED, ""),
                 };
 
@@ -151,23 +158,24 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             );
                         });
 
+                        let mut btn_clicked = false;
+
                         // Expanded details
                         if is_expanded {
                             ui.add_space(5.0);
                             ui.separator();
                             detail_row(ui, "TXID", &tx.txid);
-                            if ui
-                                .add(egui::Button::new(
-                                    egui::RichText::new("[COPY TXID]")
-                                        .font(theme::mono(9.0))
-                                        .color(theme::CYAN),
-                                ))
-                                .clicked()
-                            {
+                            let copy_btn = ui.add(egui::Button::new(
+                                egui::RichText::new("[COPY TXID]")
+                                    .font(theme::mono(9.0))
+                                    .color(theme::CYAN),
+                            ));
+                            if copy_btn.clicked() {
                                 ctx.copy_text(tx.txid.clone());
                                 app.clipboard_clear_at = Some(std::time::Instant::now());
                                 // GUI-H3: ensure repaint fires for clipboard auto-clear
                                 ctx.request_repaint_after(std::time::Duration::from_secs(31));
+                                btn_clicked = true;
                             }
 
                             detail_row(ui, "Type", &tx.tx_type);
@@ -176,7 +184,30 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 detail_row(ui, "Fee", &format!("{} ZCL", fmt_zcl(tx.fee)));
                             }
                             if let Some(ref addr) = tx.address {
-                                detail_row(ui, "Address", addr);
+                                let is_transparent =
+                                    addr.starts_with("t1") || addr.starts_with("t3");
+                                if is_transparent {
+                                    // Transparent addresses are publicly visible on-chain
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new("Address")
+                                                .font(theme::mono(10.0))
+                                                .color(theme::MUTED),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new("[ON-CHAIN]")
+                                                .font(theme::mono(9.0))
+                                                .color(theme::YELLOW),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(addr)
+                                                .font(theme::mono(10.0))
+                                                .color(theme::GREEN),
+                                        );
+                                    });
+                                } else {
+                                    detail_row(ui, "Address", addr);
+                                }
                             }
                             if let Some(ref memo) = tx.memo {
                                 if !memo.is_empty() {
@@ -188,16 +219,23 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             }
                             detail_row(ui, "Confirmations", &tx.confirmations.to_string());
                         }
+
+                        btn_clicked
                     });
 
-                // Click on FULL frame rect (including margins) to expand/collapse
+                let btn_was_clicked = frame_resp.inner;
+
+                // Click on FULL frame rect (including margins) to expand/collapse.
+                // Use raw pointer input instead of ui.interact() to avoid creating
+                // a competing click widget that steals clicks from buttons inside.
                 let click_rect = frame_resp.response.rect;
-                let click_resp = ui.interact(
-                    click_rect,
-                    egui::Id::new(("tx_row", i)),
-                    egui::Sense::click(),
-                );
-                if click_resp.clicked() {
+                let clicked_row = ctx.input(|i| {
+                    i.pointer.primary_released()
+                        && i.pointer
+                            .latest_pos()
+                            .is_some_and(|pos| click_rect.contains(pos))
+                });
+                if clicked_row && !btn_was_clicked {
                     app.history_expanded = if app.history_expanded == Some(i) {
                         None
                     } else {
@@ -205,7 +243,7 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     };
                 }
                 // Hover effect
-                if click_resp.hovered() {
+                if ui.rect_contains_pointer(click_rect) {
                     ui.painter()
                         .rect_filled(click_rect, 0.0, egui::Color32::from_white_alpha(5));
                 }

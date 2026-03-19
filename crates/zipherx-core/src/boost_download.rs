@@ -498,7 +498,10 @@ async fn get_tag_from_readme() -> Result<String, CoreError> {
         if line.contains("Release Tag") {
             // Extract the tag value after the colon
             if let Some(idx) = line.rfind('v') {
-                let tag = line[idx..].trim().trim_end_matches('`').trim_end_matches('*');
+                let tag = line[idx..]
+                    .trim()
+                    .trim_end_matches('`')
+                    .trim_end_matches('*');
                 if tag.starts_with("v") && tag.contains("-unified") {
                     return Ok(tag.to_string());
                 }
@@ -1027,7 +1030,9 @@ pub async fn download_boost_file_if_needed(
         {
             let manifest_path = manifest_file.to_string_lossy().to_string();
             if let Ok(m) = parse_manifest(&manifest_path) {
-                let expected = m.files.as_ref()
+                let expected = m
+                    .files
+                    .as_ref()
                     .and_then(|f| f.compressed.as_ref())
                     .map(|c| c.sha256.as_str())
                     .unwrap_or("");
@@ -1306,7 +1311,10 @@ fn parse_tboost_entry(data: &[u8]) -> Option<TBoostEntry> {
 
 /// Validate and parse the transparent boost file header (streaming variant).
 /// `file_size` is the total file size on disk (for validation).
-fn parse_tboost_header_with_file_size(data: &[u8], file_size: u64) -> Result<(u32, u64, u64), CoreError> {
+fn parse_tboost_header_with_file_size(
+    data: &[u8],
+    file_size: u64,
+) -> Result<(u32, u64, u64), CoreError> {
     parse_tboost_header_inner(data, file_size)
 }
 
@@ -1318,7 +1326,9 @@ fn parse_tboost_header(data: &[u8]) -> Result<(u32, u64, u64), CoreError> {
 
 fn parse_tboost_header_inner(data: &[u8], file_size: u64) -> Result<(u32, u64, u64), CoreError> {
     if data.len() < TBOOST_HEADER_SIZE {
-        return Err(CoreError::Storage("Transparent boost file too small".into()));
+        return Err(CoreError::Storage(
+            "Transparent boost file too small".into(),
+        ));
     }
 
     // Check magic
@@ -1350,8 +1360,7 @@ fn parse_tboost_header_inner(data: &[u8], file_size: u64) -> Result<(u32, u64, u
     if file_size < expected_size {
         return Err(CoreError::Storage(format!(
             "Transparent boost file truncated: {} bytes, expected {}",
-            file_size,
-            expected_size,
+            file_size, expected_size,
         )));
     }
 
@@ -1392,7 +1401,10 @@ pub async fn download_transparent_boost_if_needed(
             Err(e) => match get_tag_from_readme().await {
                 Ok(t) => t,
                 Err(e2) => {
-                    eprintln!("[ZipherX] TBoost: API ({}) and README ({}) both failed", e, e2);
+                    eprintln!(
+                        "[ZipherX] TBoost: API ({}) and README ({}) both failed",
+                        e, e2
+                    );
                     return Ok(None);
                 }
             },
@@ -1495,16 +1507,11 @@ pub async fn download_transparent_boost_if_needed(
                 .map_err(|e| CoreError::Storage(format!("Write compressed tboost: {e}")))?;
 
             // Use streaming file-to-file decompression (not in-memory)
-            let decompressed_size = zipherx_crypto::zstd_decompress::decompress_file(
-                &zst_path_str,
-                &tboost_path_str,
-            )
-            .map_err(|e| CoreError::Storage(format!("TBoost decompress: {e}")))?;
+            let decompressed_size =
+                zipherx_crypto::zstd_decompress::decompress_file(&zst_path_str, &tboost_path_str)
+                    .map_err(|e| CoreError::Storage(format!("TBoost decompress: {e}")))?;
 
-            eprintln!(
-                "[ZipherX] TBoost decompressed: {} bytes",
-                decompressed_size,
-            );
+            eprintln!("[ZipherX] TBoost decompressed: {} bytes", decompressed_size,);
 
             // Clean up compressed file
             let _ = std::fs::remove_file(&zst_path_str);
@@ -1582,7 +1589,8 @@ pub fn apply_transparent_boost(
         .map_err(|e| CoreError::Storage(format!("Cannot open tboost file: {e}")))?;
 
     // Validate file size BEFORE parsing header
-    let file_size = file.metadata()
+    let file_size = file
+        .metadata()
         .map_err(|e| CoreError::Storage(format!("Cannot stat tboost file: {e}")))?
         .len();
 
@@ -1590,7 +1598,8 @@ pub fn apply_transparent_boost(
     file.read_exact(&mut header_buf)
         .map_err(|e| CoreError::Storage(format!("Cannot read tboost header: {e}")))?;
 
-    let (version, chain_height, utxo_count) = parse_tboost_header_with_file_size(&header_buf, file_size)?;
+    let (version, chain_height, utxo_count) =
+        parse_tboost_header_with_file_size(&header_buf, file_size)?;
 
     eprintln!(
         "[ZipherX] Applying transparent boost v{}: {} UTXOs at height {}",
@@ -1730,11 +1739,10 @@ pub async fn download_and_apply_transparent_boost(
 
     // Step 2: Apply (scan entries, insert matching UTXOs)
     let addr_set = address_set.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        apply_transparent_boost(&tboost_path, &db, &addr_set)
-    })
-    .await
-    .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
+    let result =
+        tokio::task::spawn_blocking(move || apply_transparent_boost(&tboost_path, &db, &addr_set))
+            .await
+            .map_err(|e| CoreError::RuntimeError(e.to_string()))??;
 
     Ok(Some(result))
 }
@@ -1856,12 +1864,10 @@ mod tests {
         let data = vec![0u8; TBOOST_HEADER_SIZE];
         let result = parse_tboost_header(&data);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid transparent boost magic")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid transparent boost magic"));
     }
 
     #[test]
@@ -1962,8 +1968,7 @@ mod tests {
             *b = 0xCC;
         }
         file_data[entry_start + 36..entry_start + 40].copy_from_slice(&0u32.to_le_bytes());
-        file_data[entry_start + 40..entry_start + 48]
-            .copy_from_slice(&50_000_000u64.to_le_bytes());
+        file_data[entry_start + 40..entry_start + 48].copy_from_slice(&50_000_000u64.to_le_bytes());
         file_data[entry_start + 48] = 25;
         // P2PKH script
         file_data[entry_start + 49] = 0x76;

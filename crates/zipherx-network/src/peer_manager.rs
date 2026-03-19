@@ -687,9 +687,7 @@ impl PeerManager {
         let sybil_peers: Vec<(String, String)> = heights
             .iter()
             .filter(|(_, h)| *h > consensus_height + 500)
-            .filter_map(|(id, _)| {
-                self.peers.get(id).map(|p| (id.clone(), p.host.clone()))
-            })
+            .filter_map(|(id, _)| self.peers.get(id).map(|p| (id.clone(), p.host.clone())))
             .collect();
         for (peer_key, host) in &sybil_peers {
             self.ban_peer(host, BanReason::SybilAttack);

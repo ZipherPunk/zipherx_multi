@@ -493,6 +493,20 @@ pub fn parse_raw_tx(data: &[u8]) -> Option<([u8; 32], Vec<ShieldedOutput>, Vec<S
     Some((txid, outputs, spends))
 }
 
+/// Parse a raw transaction including transparent outputs.
+/// Returns (txid, shielded_outputs, shielded_spends, transparent_outputs) or None.
+pub fn parse_raw_tx_full(
+    data: &[u8],
+) -> Option<(
+    [u8; 32],
+    Vec<ShieldedOutput>,
+    Vec<ShieldedSpend>,
+    Vec<TransparentOutput>,
+)> {
+    let (_size, txid, outputs, spends, t_outputs, _t_inputs) = parse_transaction(data)?;
+    Some((txid, outputs, spends, t_outputs))
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

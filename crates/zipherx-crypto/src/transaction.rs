@@ -16,11 +16,13 @@ use rand::rngs::OsRng;
 use rand::Rng;
 use zcash_primitives::{
     consensus::BlockHeight,
+    legacy::TransparentAddress,
     memo::MemoBytes,
     sapling::{value::NoteValue, Diversifier, PaymentAddress, Rseed},
     transaction::{builder::Builder, components::Amount, fees::fixed::FeeRule},
     zip32::{sapling::ExtendedSpendingKey, DiversifierIndex},
 };
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::types::{CryptoError, ZclassicNetwork, DEFAULT_FEE, SPENDING_KEY_LENGTH};
 
@@ -356,6 +358,456 @@ pub fn build_transaction_multi(
         tx_bytes,
         nullifiers,
         // RCR-NEW-2: Use local value to avoid TOCTOU race with concurrent TX builds
+        change_diversifier_index: local_change_div_index,
+    })
+}
+
+/// Build a deshielding transaction: Sapling spend → transparent output.
+///
+/// Same as `build_transaction_multi` but sends to a transparent address
+/// instead of a shielded address. Change goes back to a shielded address.
+pub fn build_transaction_to_transparent(
+    sk_bytes: &[u8],
+    to_t_address: &TransparentAddress,
+    amount: u64,
+    spends: &[SpendInfo],
+    chain_height: u64,
+) -> Result<TransactionResult, CryptoError> {
+    if sk_bytes.len() != SPENDING_KEY_LENGTH {
+        return Err(CryptoError::InvalidSpendingKey);
+    }
+    if spends.is_empty() || spends.len() > MAX_SPENDS_PER_TX {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Invalid spend count: {} (must be 1-{})",
+            spends.len(),
+            MAX_SPENDS_PER_TX
+        )));
+    }
+
+    let prover_guard = crate::prover::get_prover()?;
+    let prover = prover_guard
+        .as_ref()
+        .ok_or(CryptoError::ProverNotInitialized)?;
+
+    let extsk = ExtendedSpendingKey::read(&mut &sk_bytes[..])
+        .map_err(|e| CryptoError::TransactionBuildFailed(format!("Invalid SK: {e:?}")))?;
+
+    let fee = DEFAULT_FEE;
+
+    let total_input: u64 = spends
+        .iter()
+        .try_fold(0u64, |acc, s| acc.checked_add(s.value))
+        .ok_or_else(|| CryptoError::TransactionBuildFailed("total input overflow".into()))?;
+    let amount_plus_fee = amount
+        .checked_add(fee)
+        .ok_or_else(|| CryptoError::TransactionBuildFailed("amount + fee overflow".into()))?;
+    if total_input < amount_plus_fee {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Insufficient funds: have {total_input}, need {amount_plus_fee}",
+        )));
+    }
+
+    if chain_height > u32::MAX as u64 {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Chain height {} exceeds u32::MAX",
+            chain_height,
+        )));
+    }
+    let target_height = BlockHeight::from_u32(chain_height as u32);
+    let mut builder = Builder::new(ZclassicNetwork, target_height, None);
+
+    // Add all Sapling spends
+    let mut nullifiers = Vec::with_capacity(spends.len());
+    for (i, spend) in spends.iter().enumerate() {
+        let diversifier = Diversifier(spend.diversifier);
+        let fvk = extsk.to_diversifiable_full_viewing_key();
+        let note_addr = fvk
+            .fvk()
+            .vk
+            .to_payment_address(diversifier)
+            .ok_or_else(|| {
+                CryptoError::TransactionBuildFailed(format!("Invalid diversifier for spend {i}"))
+            })?;
+
+        let note = if spend.is_zip212 {
+            zcash_primitives::sapling::Note::from_parts(
+                note_addr,
+                NoteValue::from_raw(spend.value),
+                Rseed::AfterZip212(spend.rcm),
+            )
+        } else {
+            let rcm = jubjub::Fr::from_repr(spend.rcm)
+                .into_option()
+                .ok_or_else(|| {
+                    CryptoError::TransactionBuildFailed(format!("Invalid rcm for spend {i}"))
+                })?;
+            zcash_primitives::sapling::Note::from_parts(
+                note_addr,
+                NoteValue::from_raw(spend.value),
+                Rseed::BeforeZip212(rcm),
+            )
+        };
+
+        let nk = fvk.fvk().vk.nk;
+        let mut reader = Cursor::new(&spend.witness_data).take(10 * 1024 * 1024);
+        let witness = zcash_primitives::merkle_tree::read_incremental_witness(&mut reader)
+            .map_err(|e| {
+                CryptoError::TransactionBuildFailed(format!("Invalid witness for spend {i}: {e:?}"))
+            })?;
+
+        let position = u64::from(witness.witnessed_position());
+        let nullifier = note.nf(&nk, position);
+        nullifiers.push(nullifier.0);
+
+        let merkle_path = witness
+            .path()
+            .ok_or_else(|| CryptoError::TransactionBuildFailed(format!("No path for spend {i}")))?;
+
+        builder
+            .add_sapling_spend(extsk.clone(), diversifier, note, merkle_path)
+            .map_err(|e| {
+                CryptoError::TransactionBuildFailed(format!("Failed to add spend {i}: {e:?}"))
+            })?;
+    }
+
+    // Add TRANSPARENT output to recipient
+    if amount > i64::MAX as u64 {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Amount {} exceeds i64::MAX",
+            amount
+        )));
+    }
+    let amount_val = Amount::from_i64(amount as i64)
+        .map_err(|_| CryptoError::TransactionBuildFailed("Invalid amount".into()))?;
+
+    builder
+        .add_transparent_output(to_t_address, amount_val)
+        .map_err(|e| {
+            CryptoError::TransactionBuildFailed(format!("Failed to add transparent output: {e:?}"))
+        })?;
+
+    // Add shielded change output if needed
+    let change = total_input.checked_sub(amount_plus_fee).ok_or_else(|| {
+        CryptoError::TransactionBuildFailed(format!(
+            "Insufficient funds: have {total_input}, need {amount_plus_fee}"
+        ))
+    })?;
+    let mut local_change_div_index: u64 = 0;
+    if change > 0 {
+        if change > i64::MAX as u64 {
+            return Err(CryptoError::TransactionBuildFailed(format!(
+                "Change amount {} exceeds i64::MAX",
+                change
+            )));
+        }
+        let change_amount = Amount::from_i64(change as i64)
+            .map_err(|_| CryptoError::TransactionBuildFailed("Invalid change amount".into()))?;
+
+        let dfvk = extsk.to_diversifiable_full_viewing_key();
+        let change_offset: u64 = OsRng.gen_range(0u64..CHANGE_DIVERSIFIER_RANGE);
+        let change_index = CHANGE_DIVERSIFIER_BASE + change_offset;
+        local_change_div_index = change_index;
+        LAST_CHANGE_DIVERSIFIER_INDEX.store(change_index, Ordering::SeqCst);
+
+        let change_j = DiversifierIndex::from(change_index);
+        let (_, change_addr) = dfvk
+            .find_address(change_j)
+            .unwrap_or_else(|| dfvk.default_address());
+
+        builder
+            .add_sapling_output(
+                Some(extsk.expsk.ovk),
+                change_addr,
+                change_amount,
+                MemoBytes::empty(),
+            )
+            .map_err(|e| {
+                CryptoError::TransactionBuildFailed(format!("Failed to add change: {e:?}"))
+            })?;
+    }
+
+    // Build with Groth16 proofs
+    if fee > i64::MAX as u64 {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Fee {} exceeds i64::MAX",
+            fee
+        )));
+    }
+    let fee_amount = Amount::from_i64(fee as i64)
+        .map_err(|_| CryptoError::TransactionBuildFailed("Invalid fee".into()))?;
+
+    let (tx, _) = builder
+        .build(prover, &FeeRule::non_standard(fee_amount))
+        .map_err(|e| CryptoError::TransactionBuildFailed(format!("Build failed: {e:?}")))?;
+
+    let mut tx_bytes = Vec::new();
+    tx.write(&mut tx_bytes)
+        .map_err(|e| CryptoError::TransactionBuildFailed(format!("Serialize failed: {e:?}")))?;
+
+    if tx_bytes.len() > MAX_TX_SIZE_BYTES {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "TX too large: {} bytes (max {})",
+            tx_bytes.len(),
+            MAX_TX_SIZE_BYTES
+        )));
+    }
+
+    drop(extsk);
+
+    Ok(TransactionResult {
+        tx_bytes,
+        nullifiers,
+        change_diversifier_index: local_change_div_index,
+    })
+}
+
+/// Information about a transparent UTXO to spend.
+///
+/// C2: `secret_key` is zeroized on drop to prevent key material from
+/// lingering in freed memory. Clone and Debug are intentionally omitted —
+/// secret key material must not be duplicated or logged.
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct TransparentSpendInfo {
+    /// secp256k1 secret key (32 bytes).
+    pub secret_key: Vec<u8>,
+    /// Previous output transaction ID (internal byte order).
+    pub prevout_txid: [u8; 32],
+    /// Previous output index.
+    pub prevout_index: u32,
+    /// scriptPubKey of the output being spent.
+    pub script_pubkey: Vec<u8>,
+    /// Value of the UTXO in zatoshis.
+    pub value: u64,
+}
+
+/// Build a transaction spending transparent inputs.
+///
+/// Supports sending to either a shielded (zs1...) or transparent (t1...) address.
+/// If sending to a shielded address, this is a "shielding" transaction (t→z).
+/// If sending to a transparent address, this is a t→t transaction.
+///
+/// Change goes to `change_to_transparent` address if provided (stays in same pool),
+/// otherwise to a shielded change address (for shielding/privacy).
+pub fn build_transparent_spend_transaction(
+    sk_bytes: &[u8],
+    to_address_str: &str,
+    amount: u64,
+    memo: Option<&[u8]>,
+    transparent_spends: &[TransparentSpendInfo],
+    chain_height: u64,
+    change_to_transparent: Option<&str>,
+) -> Result<TransactionResult, CryptoError> {
+    if sk_bytes.len() != SPENDING_KEY_LENGTH {
+        return Err(CryptoError::InvalidSpendingKey);
+    }
+    if transparent_spends.is_empty() {
+        return Err(CryptoError::TransactionBuildFailed(
+            "No transparent inputs provided".into(),
+        ));
+    }
+
+    let prover_guard = crate::prover::get_prover()?;
+    let prover = prover_guard
+        .as_ref()
+        .ok_or(CryptoError::ProverNotInitialized)?;
+
+    let extsk = ExtendedSpendingKey::read(&mut &sk_bytes[..])
+        .map_err(|e| CryptoError::TransactionBuildFailed(format!("Invalid SK: {e:?}")))?;
+
+    let fee = DEFAULT_FEE;
+
+    // Calculate total input
+    let total_input: u64 = transparent_spends
+        .iter()
+        .try_fold(0u64, |acc, s| acc.checked_add(s.value))
+        .ok_or_else(|| CryptoError::TransactionBuildFailed("total input overflow".into()))?;
+
+    let amount_plus_fee = amount
+        .checked_add(fee)
+        .ok_or_else(|| CryptoError::TransactionBuildFailed("amount + fee overflow".into()))?;
+
+    if total_input < amount_plus_fee {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Insufficient transparent funds: have {total_input}, need {amount_plus_fee}",
+        )));
+    }
+
+    if chain_height > u32::MAX as u64 {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Chain height {} exceeds u32::MAX",
+            chain_height,
+        )));
+    }
+    let target_height = BlockHeight::from_u32(chain_height as u32);
+    let mut builder = Builder::new(ZclassicNetwork, target_height, None);
+
+    // Add transparent inputs
+    for (i, tspend) in transparent_spends.iter().enumerate() {
+        if tspend.secret_key.len() != 32 {
+            return Err(CryptoError::TransactionBuildFailed(format!(
+                "Invalid secret key length for transparent spend {i}: {}",
+                tspend.secret_key.len()
+            )));
+        }
+
+        let sk = secp256k1::SecretKey::from_slice(&tspend.secret_key).map_err(|e| {
+            CryptoError::TransactionBuildFailed(format!("Invalid secret key for spend {i}: {e}"))
+        })?;
+
+        // Reconstruct the outpoint — OutPoint::new takes raw hash bytes (internal order)
+        let outpoint = zcash_primitives::transaction::components::transparent::OutPoint::new(
+            tspend.prevout_txid,
+            tspend.prevout_index,
+        );
+
+        let coin = zcash_primitives::transaction::components::TxOut {
+            value: Amount::from_i64(tspend.value as i64).map_err(|_| {
+                CryptoError::TransactionBuildFailed(format!("Invalid value for spend {i}"))
+            })?,
+            script_pubkey: zcash_primitives::legacy::Script(tspend.script_pubkey.clone()),
+        };
+
+        builder
+            .add_transparent_input(sk, outpoint, coin)
+            .map_err(|e| {
+                CryptoError::TransactionBuildFailed(format!(
+                    "Failed to add transparent input {i}: {e:?}"
+                ))
+            })?;
+    }
+
+    // Determine destination type
+    let is_shielded_dest = to_address_str.starts_with("zs");
+
+    if amount > i64::MAX as u64 {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Amount {} exceeds i64::MAX",
+            amount
+        )));
+    }
+    let amount_val = Amount::from_i64(amount as i64)
+        .map_err(|_| CryptoError::TransactionBuildFailed("Invalid amount".into()))?;
+
+    if is_shielded_dest {
+        // Shielding: t→z
+        let to_addr_bytes = crate::address::decode_address(to_address_str)?;
+        let to_addr_array: [u8; 43] = to_addr_bytes[..43]
+            .try_into()
+            .map_err(|_| CryptoError::InvalidAddress("Invalid shielded address length".into()))?;
+        let to_addr = PaymentAddress::from_bytes(&to_addr_array)
+            .ok_or_else(|| CryptoError::InvalidAddress("Invalid payment address".into()))?;
+
+        let memo_bytes = if let Some(m) = memo {
+            let mut buf = [0u8; 512];
+            let len = m.len().min(512);
+            buf[..len].copy_from_slice(&m[..len]);
+            MemoBytes::from_bytes(&buf)
+                .map_err(|_| CryptoError::TransactionBuildFailed("Invalid memo format".into()))?
+        } else {
+            MemoBytes::empty()
+        };
+
+        builder
+            .add_sapling_output(Some(extsk.expsk.ovk), to_addr, amount_val, memo_bytes)
+            .map_err(|e| {
+                CryptoError::TransactionBuildFailed(format!("Failed to add shielded output: {e:?}"))
+            })?;
+    } else {
+        // t→t
+        let t_addr = crate::transparent::decode_transparent_address(to_address_str)?;
+        let script = t_addr.script();
+
+        builder
+            .add_transparent_output(&t_addr, amount_val)
+            .map_err(|e| {
+                CryptoError::TransactionBuildFailed(format!(
+                    "Failed to add transparent output: {e:?}"
+                ))
+            })?;
+        let _ = script; // used implicitly by add_transparent_output
+    }
+
+    // Change: return to transparent address if provided, otherwise shielded
+    let change = total_input.checked_sub(amount_plus_fee).ok_or_else(|| {
+        CryptoError::TransactionBuildFailed("Insufficient funds for change".into())
+    })?;
+    let mut local_change_div_index: u64 = 0;
+    if change > 0 {
+        if change > i64::MAX as u64 {
+            return Err(CryptoError::TransactionBuildFailed(format!(
+                "Change amount {} exceeds i64::MAX",
+                change
+            )));
+        }
+        let change_amount = Amount::from_i64(change as i64)
+            .map_err(|_| CryptoError::TransactionBuildFailed("Invalid change amount".into()))?;
+
+        if let Some(t_change_addr) = change_to_transparent {
+            // Return change to transparent address (same pool)
+            let t_addr = crate::transparent::decode_transparent_address(t_change_addr)?;
+            builder
+                .add_transparent_output(&t_addr, change_amount)
+                .map_err(|e| {
+                    CryptoError::TransactionBuildFailed(format!(
+                        "Failed to add transparent change: {e:?}"
+                    ))
+                })?;
+        } else {
+            // Change to shielded address (for privacy / shielding)
+            let dfvk = extsk.to_diversifiable_full_viewing_key();
+            let change_offset: u64 = OsRng.gen_range(0u64..CHANGE_DIVERSIFIER_RANGE);
+            let change_index = CHANGE_DIVERSIFIER_BASE + change_offset;
+            local_change_div_index = change_index;
+
+            let change_j = DiversifierIndex::from(change_index);
+            let (_, change_addr) = dfvk
+                .find_address(change_j)
+                .unwrap_or_else(|| dfvk.default_address());
+
+            builder
+                .add_sapling_output(
+                    Some(extsk.expsk.ovk),
+                    change_addr,
+                    change_amount,
+                    MemoBytes::empty(),
+                )
+                .map_err(|e| {
+                    CryptoError::TransactionBuildFailed(format!("Failed to add change: {e:?}"))
+                })?;
+        }
+    }
+
+    // Build
+    if fee > i64::MAX as u64 {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "Fee {} exceeds i64::MAX",
+            fee
+        )));
+    }
+    let fee_amount = Amount::from_i64(fee as i64)
+        .map_err(|_| CryptoError::TransactionBuildFailed("Invalid fee".into()))?;
+
+    let (tx, _) = builder
+        .build(prover, &FeeRule::non_standard(fee_amount))
+        .map_err(|e| CryptoError::TransactionBuildFailed(format!("Build failed: {e:?}")))?;
+
+    let mut tx_bytes = Vec::new();
+    tx.write(&mut tx_bytes)
+        .map_err(|e| CryptoError::TransactionBuildFailed(format!("Serialize failed: {e:?}")))?;
+
+    if tx_bytes.len() > MAX_TX_SIZE_BYTES {
+        return Err(CryptoError::TransactionBuildFailed(format!(
+            "TX too large: {} bytes (max {})",
+            tx_bytes.len(),
+            MAX_TX_SIZE_BYTES
+        )));
+    }
+
+    drop(extsk);
+
+    Ok(TransactionResult {
+        tx_bytes,
+        nullifiers: vec![], // no shielded spends
         change_diversifier_index: local_change_div_index,
     })
 }

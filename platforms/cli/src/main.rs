@@ -1101,6 +1101,9 @@ fn cmd_sync(state: &WalletState) {
                 } => {
                     format!("Witnesses: {} / {}", notes_updated, total_notes)
                 }
+                SyncStatus::ConfirmationsUpdated { height } => {
+                    format!("Confirmations updated at height {}", height)
+                }
                 SyncStatus::Complete { height } => {
                     format!("Sync complete at height {}", height)
                 }

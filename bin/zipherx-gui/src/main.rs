@@ -396,9 +396,7 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
                     app.confirmed_sent_count_at_send = app
                         .transactions
                         .iter()
-                        .filter(|t| {
-                            t.confirmations > 0 && sent_types.contains(&t.tx_type.as_str())
-                        })
+                        .filter(|t| t.confirmations > 0 && sent_types.contains(&t.tx_type.as_str()))
                         .count();
 
                     // Clearing celebration
@@ -544,7 +542,10 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         if should_resync {
             if let Ok(mut s) = state.lock() {
                 s.command = Some(sync::SyncCommand::StartSync {
-                    sk_bytes: app.sk_bytes.clone().unwrap_or_else(|| Zeroizing::new(Vec::new())),
+                    sk_bytes: app
+                        .sk_bytes
+                        .clone()
+                        .unwrap_or_else(|| Zeroizing::new(Vec::new())),
                 });
             }
             app.is_syncing = true;
@@ -574,7 +575,10 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
         if should_resync {
             if let Ok(mut s) = state.lock() {
                 s.command = Some(sync::SyncCommand::StartSync {
-                    sk_bytes: app.sk_bytes.clone().unwrap_or_else(|| Zeroizing::new(Vec::new())),
+                    sk_bytes: app
+                        .sk_bytes
+                        .clone()
+                        .unwrap_or_else(|| Zeroizing::new(Vec::new())),
                 });
             }
             app.is_syncing = true;
@@ -593,8 +597,8 @@ fn poll_shared_state(app: &mut ZipherXApp, ctx: &egui::Context) {
     // Sync pending_confirmation flag to wallet thread so it uses faster polling (15s).
     if let Some(ref state) = app.shared_state {
         if let Ok(mut s) = state.lock() {
-            s.pending_confirmation = app.pending_confirmation_txid.is_some()
-                || app.pending_incoming_txid.is_some();
+            s.pending_confirmation =
+                app.pending_confirmation_txid.is_some() || app.pending_incoming_txid.is_some();
         }
     }
 

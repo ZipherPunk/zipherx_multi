@@ -443,7 +443,9 @@ pub async fn sync_to_tip(
             };
 
             if !tboost_already_applied {
-                eprintln!("[ZipherX] Transparent boost: not yet applied, checking for tboost file...");
+                eprintln!(
+                    "[ZipherX] Transparent boost: not yet applied, checking for tboost file..."
+                );
                 let boost_dir_clone = boost_dir.clone();
                 let db_c = db.clone();
                 let addr_set = t_addrs.clone();
@@ -464,13 +466,19 @@ pub async fn sync_to_tip(
                         );
                         // Mark as applied so we don't re-download on every sync
                         let db_flag = db_c;
-                        let _ = tokio::task::spawn_blocking(move || db_flag.set_tboost_applied(true)).await;
+                        let _ =
+                            tokio::task::spawn_blocking(move || db_flag.set_tboost_applied(true))
+                                .await;
                     }
                     Ok(None) => {
-                        eprintln!("[ZipherX] No transparent boost available — will scan from peers");
+                        eprintln!(
+                            "[ZipherX] No transparent boost available — will scan from peers"
+                        );
                         // Still mark as applied so we don't retry every sync
                         let db_flag = db_c;
-                        let _ = tokio::task::spawn_blocking(move || db_flag.set_tboost_applied(true)).await;
+                        let _ =
+                            tokio::task::spawn_blocking(move || db_flag.set_tboost_applied(true))
+                                .await;
                     }
                     Err(e) => {
                         eprintln!("[ZipherX] Transparent boost failed (non-fatal): {e}");
@@ -2570,9 +2578,10 @@ pub async fn sync_to_tip(
         #[cfg(debug_assertions)]
         {
             let db_diag = db.clone();
-            if let Ok(all_notes) = tokio::task::spawn_blocking(move || db_diag.get_all_unspent_notes(0))
-                .await
-                .unwrap_or_else(|_| Ok(Vec::new()))
+            if let Ok(all_notes) =
+                tokio::task::spawn_blocking(move || db_diag.get_all_unspent_notes(0))
+                    .await
+                    .unwrap_or_else(|_| Ok(Vec::new()))
             {
                 let t_bal = {
                     let db_t = db.clone();
@@ -2585,19 +2594,22 @@ pub async fn sync_to_tip(
                 {
                     eprintln!(
                         "[ZipherX] DIAG: {} unspent shielded notes, transparent_balance={}",
-                        all_notes.len(), t_bal,
+                        all_notes.len(),
+                        t_bal,
                     );
                     let db_diag = db.clone();
-                    if let Ok(dump) = tokio::task::spawn_blocking(move || db_diag.dump_transparent_utxos())
-                        .await
-                        .unwrap_or(Ok(String::new()))
+                    if let Ok(dump) =
+                        tokio::task::spawn_blocking(move || db_diag.dump_transparent_utxos())
+                            .await
+                            .unwrap_or(Ok(String::new()))
                     {
                         if !dump.is_empty() {
                             eprintln!("{}", dump);
                         }
                     }
                     for (i, note) in all_notes.iter().enumerate() {
-                        let has_witness = note.witness.as_ref().map(|w| w.len()).unwrap_or(0) >= 100;
+                        let has_witness =
+                            note.witness.as_ref().map(|w| w.len()).unwrap_or(0) >= 100;
                         eprintln!(
                             "[ZipherX]   note[{}]: value={} height={} pos={:?} witness={} cmu={}... nf={}...",
                             i, note.value, note.height,
@@ -2653,7 +2665,8 @@ pub async fn sync_to_tip(
         let db_t = db.clone();
         let t_result = tokio::task::spawn_blocking(move || {
             db_t.restore_stuck_transparent_utxos(1500) // 20 blocks × 75s = 25 min expiry
-        }).await;
+        })
+        .await;
         match t_result {
             Ok(Ok(count)) if count > 0 => {
                 eprintln!(
@@ -2829,12 +2842,10 @@ pub async fn rebuild_witnesses_if_needed(
     // notes discovered in blocks ABOVE boost_height are post-boost (delta range),
     // so they don't require the expensive full boost replay (~49s).
     let boost_height = manifest.chain_height;
-    let has_boost_range_notes = notes_needing_witnesses
-        .iter()
-        .any(|n| match n.position {
-            Some(p) => p < boost_output_count,
-            None => n.height <= boost_height,
-        });
+    let has_boost_range_notes = notes_needing_witnesses.iter().any(|n| match n.position {
+        Some(p) => p < boost_output_count,
+        None => n.height <= boost_height,
+    });
 
     // Save current tree state for restoration after witness creation.
     let db_c = db.clone();
@@ -4182,7 +4193,9 @@ async fn transparent_only_scan(
 
     eprintln!(
         "[ZipherX] Transparent-only scan: {} blocks, {} UTXOs, {} spends",
-        block_count, t_utxos.len(), t_spends.len(),
+        block_count,
+        t_utxos.len(),
+        t_spends.len(),
     );
 
     let height_timestamps: HashMap<u64, u32> = fetch_result
@@ -4874,7 +4887,9 @@ async fn post_boost_full_block_scan(
                             if marked.unwrap_or(false) {
                                 let block_ts = ts_map.get(&spend.height).map(|&t| t as u64);
                                 // Look up the value from the UTXO we just marked spent
-                                if let Ok(Some(spent_val)) = db_clone.get_transparent_utxo_value(&prevout_hex, spend.prevout_index) {
+                                if let Ok(Some(spent_val)) = db_clone
+                                    .get_transparent_utxo_value(&prevout_hex, spend.prevout_index)
+                                {
                                     let _ = db_clone.insert_transaction(
                                         &spending_hex,
                                         spend.height,

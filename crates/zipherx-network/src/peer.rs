@@ -814,7 +814,8 @@ async fn handle_background_message(
                         live_chain_tip.fetch_add(new_count, Ordering::Relaxed);
                         eprintln!(
                             "[ZipherX] {}: inv MSG_BLOCK × {} new (tip now {})",
-                            _peer_id, new_count,
+                            _peer_id,
+                            new_count,
                             live_chain_tip.load(Ordering::Relaxed),
                         );
                         // Only fire sync trigger for genuinely new blocks —
@@ -835,7 +836,9 @@ async fn handle_background_message(
                 if !tx_items.is_empty() {
                     eprintln!(
                         "[ZipherX] {}: inv MSG_TX × {} (mempool_cb={})",
-                        _peer_id, tx_items.len(), has_mempool_cb,
+                        _peer_id,
+                        tx_items.len(),
+                        has_mempool_cb,
                     );
                     if has_mempool_cb {
                         let getdata_payload = crate::messages::serialize_inv(&tx_items);
@@ -849,13 +852,17 @@ async fn handle_background_message(
         "tx" => {
             eprintln!(
                 "[ZipherX] {}: received 'tx' ({} bytes)",
-                _peer_id, payload.len(),
+                _peer_id,
+                payload.len(),
             );
             let cb = on_mempool_tx_data.lock().unwrap().clone();
             if let Some(cb) = cb {
                 cb(payload.to_vec());
             } else {
-                eprintln!("[ZipherX] {}: WARNING: on_mempool_tx_data is None!", _peer_id);
+                eprintln!(
+                    "[ZipherX] {}: WARNING: on_mempool_tx_data is None!",
+                    _peer_id
+                );
             }
         }
 

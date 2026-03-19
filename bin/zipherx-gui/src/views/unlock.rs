@@ -123,11 +123,15 @@ fn show_password_create(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     let btn_width = 280.0;
 
     if ui
-        .add_sized([btn_width, 32.0], egui::Button::new(
-            egui::RichText::new("CREATE NEW WALLET")
-                .font(theme::mono(13.0))
-                .color(egui::Color32::BLACK),
-        ).fill(theme::GREEN))
+        .add_sized(
+            [btn_width, 32.0],
+            egui::Button::new(
+                egui::RichText::new("CREATE NEW WALLET")
+                    .font(theme::mono(13.0))
+                    .color(egui::Color32::BLACK),
+            )
+            .fill(theme::GREEN),
+        )
         .clicked()
     {
         handle_password_then_setup(app, SetupMode::Create);
@@ -136,11 +140,15 @@ fn show_password_create(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 
     if ui
-        .add_sized([btn_width, 32.0], egui::Button::new(
-            egui::RichText::new("RESTORE FROM MNEMONIC")
-                .font(theme::mono(13.0))
-                .color(egui::Color32::BLACK),
-        ).fill(theme::CYAN))
+        .add_sized(
+            [btn_width, 32.0],
+            egui::Button::new(
+                egui::RichText::new("RESTORE FROM MNEMONIC")
+                    .font(theme::mono(13.0))
+                    .color(egui::Color32::BLACK),
+            )
+            .fill(theme::CYAN),
+        )
         .clicked()
     {
         handle_password_then_setup(app, SetupMode::Restore);
@@ -149,11 +157,14 @@ fn show_password_create(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 
     if ui
-        .add_sized([btn_width, 28.0], egui::Button::new(
-            egui::RichText::new("IMPORT PRIVATE KEY")
-                .font(theme::mono(11.0))
-                .color(theme::MUTED),
-        ))
+        .add_sized(
+            [btn_width, 28.0],
+            egui::Button::new(
+                egui::RichText::new("IMPORT PRIVATE KEY")
+                    .font(theme::mono(11.0))
+                    .color(theme::MUTED),
+            ),
+        )
         .clicked()
     {
         handle_password_then_setup(app, SetupMode::Import);
@@ -162,11 +173,14 @@ fn show_password_create(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
 
     if ui
-        .add_sized([btn_width, 28.0], egui::Button::new(
-            egui::RichText::new("IMPORT SEED (ADVANCED)")
-                .font(theme::mono(11.0))
-                .color(theme::MUTED),
-        ))
+        .add_sized(
+            [btn_width, 28.0],
+            egui::Button::new(
+                egui::RichText::new("IMPORT SEED (ADVANCED)")
+                    .font(theme::mono(11.0))
+                    .color(theme::MUTED),
+            ),
+        )
         .clicked()
     {
         handle_password_then_setup(app, SetupMode::ImportSeed);
@@ -330,7 +344,7 @@ fn show_import_flow(app: &mut ZipherXApp, ui: &mut egui::Ui) {
         egui::RichText::new(
             "\u{26A0} Importing a private key creates a shielded-only wallet.\n\
              There is no recovery phrase \u{2014} you MUST keep a backup of this key.\n\
-             Transparent addresses can be added later via WIF import in Settings."
+             Transparent addresses can be added later via WIF import in Settings.",
         )
         .font(theme::mono(9.0))
         .color(theme::YELLOW),
@@ -410,8 +424,11 @@ fn handle_unlock(app: &mut ZipherXApp) {
                 // Also check if any imported WIF key files exist in keys dir
                 let keys_dir = app.storage.data_dir().join("keys");
                 let has_imported_wifs = std::fs::read_dir(&keys_dir)
-                    .map(|entries| entries.filter_map(|e| e.ok())
-                        .any(|e| e.file_name().to_string_lossy().starts_with("imported_wif_")))
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .any(|e| e.file_name().to_string_lossy().starts_with("imported_wif_"))
+                    })
                     .unwrap_or(false);
                 if dismissed || has_imported_wifs {
                     app.needs_seed_migration = false;
@@ -519,7 +536,8 @@ fn handle_password_then_setup(app: &mut ZipherXApp, mode: SetupMode) {
                                     // Store seed for transparent address derivation
                                     let _ = app.storage.store_key("wallet_seed", &seed);
                                     // Store mnemonic for future export
-                                    let _ = app.storage.store_key("wallet_mnemonic", phrase.as_bytes());
+                                    let _ =
+                                        app.storage.store_key("wallet_mnemonic", phrase.as_bytes());
                                     app.sk_bytes = Some(Zeroizing::new(sk.to_vec()));
                                     app.mnemonic_words =
                                         phrase.split_whitespace().map(|w| w.to_string()).collect();
@@ -646,7 +664,11 @@ fn show_import_seed_flow(app: &mut ZipherXApp, ui: &mut egui::Ui) {
     let clean = app.seed_import_input.trim().to_lowercase();
     let count = clean.len();
     let valid_hex = count == 128 && clean.chars().all(|c| c.is_ascii_hexdigit());
-    let count_color = if valid_hex { theme::GREEN } else { theme::MUTED };
+    let count_color = if valid_hex {
+        theme::GREEN
+    } else {
+        theme::MUTED
+    };
     ui.label(
         egui::RichText::new(format!("{}/128 hex characters", count))
             .font(theme::mono(10.0))

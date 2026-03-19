@@ -278,14 +278,16 @@ fn wallet_thread_main(
     // If so, enable faster sync polling (15s) until they confirm.
     {
         let db = wallet.db.clone();
-        if let Ok(has_pending) =
-            runtime.block_on(async { tokio::task::spawn_blocking(move || db.has_pending_sent_transactions()).await })
-        {
+        if let Ok(has_pending) = runtime.block_on(async {
+            tokio::task::spawn_blocking(move || db.has_pending_sent_transactions()).await
+        }) {
             if has_pending {
                 if let Ok(mut s) = state.lock() {
                     s.pending_confirmation = true;
                 }
-                eprintln!("[ZipherX] Found pending unconfirmed TXs — using faster sync interval (15s)");
+                eprintln!(
+                    "[ZipherX] Found pending unconfirmed TXs — using faster sync interval (15s)"
+                );
             }
         }
     }
@@ -343,7 +345,8 @@ fn wallet_thread_main(
                                 let sk = raw_sk.clone();
                                 tokio::task::spawn_blocking(move || {
                                     db_c.store_imported_transparent_key(&addr, &sk)
-                                }).await
+                                })
+                                .await
                             });
                             eprintln!("[ZipherX] Imported WIF key for {}", address);
                             // Set the transparent address in shared state so the UI can display it
@@ -359,7 +362,9 @@ fn wallet_thread_main(
                 // Zeroize raw keys using write_volatile to prevent compiler elision
                 for (mut sk, _) in pending {
                     for b in sk.iter_mut() {
-                        unsafe { std::ptr::write_volatile(b, 0); }
+                        unsafe {
+                            std::ptr::write_volatile(b, 0);
+                        }
                     }
                 }
 
@@ -400,7 +405,10 @@ fn wallet_thread_main(
                 if cached_seed.is_none() {
                     match storage.load_key("wallet_seed") {
                         Ok(seed) => {
-                            eprintln!("[ZipherX] Wallet thread: seed loaded ({} bytes)", seed.len());
+                            eprintln!(
+                                "[ZipherX] Wallet thread: seed loaded ({} bytes)",
+                                seed.len()
+                            );
                             cached_seed = Some(Zeroizing::new(seed));
                         }
                         Err(e) => {
@@ -422,7 +430,13 @@ fn wallet_thread_main(
                     mempool_detector_set = true;
                 }
 
-                handle_sync(&runtime, &wallet, &sk_bytes, cached_seed.as_ref().map(|s| s.as_slice()), &state);
+                handle_sync(
+                    &runtime,
+                    &wallet,
+                    &sk_bytes,
+                    cached_seed.as_ref().map(|s| s.as_slice()),
+                    &state,
+                );
                 // Refresh balance and history after sync
                 refresh_balance_and_history(&runtime, &wallet, &state);
 
@@ -446,7 +460,13 @@ fn wallet_thread_main(
                         eprintln!(
                             "[ZipherX] Auto-retry: total > spendable — notes need witness rebuild"
                         );
-                        handle_sync(&runtime, &wallet, &sk_bytes, cached_seed.as_ref().map(|s| s.as_slice()), &state);
+                        handle_sync(
+                            &runtime,
+                            &wallet,
+                            &sk_bytes,
+                            cached_seed.as_ref().map(|s| s.as_slice()),
+                            &state,
+                        );
                         refresh_balance_and_history(&runtime, &wallet, &state);
                     }
                     initial_sync_done = true;
@@ -575,7 +595,9 @@ fn wallet_thread_main(
                     // Check if we're significantly behind chain tip (>10 blocks).
                     // If so, use aggressive polling to catch up quickly.
                     let is_behind = if let Ok(_s) = state.lock() {
-                        let peer_tip = wallet.connected_peer_count.load(std::sync::atomic::Ordering::Relaxed);
+                        let peer_tip = wallet
+                            .connected_peer_count
+                            .load(std::sync::atomic::Ordering::Relaxed);
                         // If last sync was >5 min ago, we're likely behind
                         last_bg_sync.elapsed().as_secs() > 300 && peer_tip > 0
                     } else {
@@ -603,22 +625,46 @@ fn wallet_thread_main(
                                 "[ZipherX] Wallet thread: retrying initial sync (network recovery)"
                             );
                         }
-                        let height_before = if let Ok(s) = state.lock() { s.block_height } else { 0 };
-                        handle_sync(&runtime, &wallet, sk, cached_seed.as_ref().map(|s| s.as_slice()), &state);
+                        let height_before = if let Ok(s) = state.lock() {
+                            s.block_height
+                        } else {
+                            0
+                        };
+                        handle_sync(
+                            &runtime,
+                            &wallet,
+                            sk,
+                            cached_seed.as_ref().map(|s| s.as_slice()),
+                            &state,
+                        );
                         refresh_balance_and_history(&runtime, &wallet, &state);
 
                         // If inv MSG_BLOCK triggered this but no new block was found,
                         // peers haven't propagated headers yet. Retry once after 10s.
                         if new_block {
-                            let height_after = if let Ok(s) = state.lock() { s.block_height } else { 0 };
+                            let height_after = if let Ok(s) = state.lock() {
+                                s.block_height
+                            } else {
+                                0
+                            };
                             if height_after <= height_before {
                                 eprintln!("[ZipherX] Wallet thread: inv block but no new header — retrying in 10s");
                                 std::thread::sleep(std::time::Duration::from_secs(10));
-                                handle_sync(&runtime, &wallet, sk, cached_seed.as_ref().map(|s| s.as_slice()), &state);
+                                handle_sync(
+                                    &runtime,
+                                    &wallet,
+                                    sk,
+                                    cached_seed.as_ref().map(|s| s.as_slice()),
+                                    &state,
+                                );
                                 refresh_balance_and_history(&runtime, &wallet, &state);
 
                                 // If retry also failed, force reconnect to get fresh peers
-                                let height_after_retry = if let Ok(s) = state.lock() { s.block_height } else { 0 };
+                                let height_after_retry = if let Ok(s) = state.lock() {
+                                    s.block_height
+                                } else {
+                                    0
+                                };
                                 if height_after_retry <= height_before {
                                     eprintln!("[ZipherX] Wallet thread: peers stale after inv — reconnecting");
                                     runtime.block_on(async {
@@ -627,7 +673,13 @@ fn wallet_thread_main(
                                         let _ = pm.connect().await;
                                     });
                                     // One more sync attempt with fresh peers
-                                    handle_sync(&runtime, &wallet, sk, cached_seed.as_ref().map(|s| s.as_slice()), &state);
+                                    handle_sync(
+                                        &runtime,
+                                        &wallet,
+                                        sk,
+                                        cached_seed.as_ref().map(|s| s.as_slice()),
+                                        &state,
+                                    );
                                     refresh_balance_and_history(&runtime, &wallet, &state);
                                 }
                             }
@@ -1180,12 +1232,18 @@ fn handle_transparent_send(
 
     eprintln!(
         "[ZipherX] UTXO selection: amount={}, fee={}, total_needed={}, {} UTXOs available",
-        amount, fee, total_needed, sorted_utxos.len(),
+        amount,
+        fee,
+        total_needed,
+        sorted_utxos.len(),
     );
     for (i, u) in sorted_utxos.iter().enumerate() {
         eprintln!(
             "[ZipherX]   UTXO[{}]: txid={}.. value={} is_change={}",
-            i, &u.txid[..16], u.value, u.is_change,
+            i,
+            &u.txid[..16],
+            u.value,
+            u.is_change,
         );
     }
 
@@ -1202,7 +1260,9 @@ fn handle_transparent_send(
     let change_amount = selected_total.saturating_sub(total_needed);
     eprintln!(
         "[ZipherX] UTXO selection: picked {} UTXOs, total_input={}, change={}",
-        selected.len(), selected_total, change_amount,
+        selected.len(),
+        selected_total,
+        change_amount,
     );
 
     if selected_total < total_needed {
@@ -1231,7 +1291,8 @@ fn handle_transparent_send(
         #[cfg(debug_assertions)]
         eprintln!(
             "[ZipherX] UTXO script_pubkey ({} bytes): {}",
-            utxo.script_pubkey.len(), hex::encode(&utxo.script_pubkey),
+            utxo.script_pubkey.len(),
+            hex::encode(&utxo.script_pubkey),
         );
 
         // Derive the secret key for this UTXO
@@ -1250,7 +1311,10 @@ fn handle_transparent_send(
         } else {
             // Seed-derived key
             match zipherx_crypto::transparent::derive_transparent_secret_key(
-                seed, 0, utxo.child_index, utxo.is_change,
+                seed,
+                0,
+                utxo.child_index,
+                utxo.is_change,
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -1264,33 +1328,40 @@ fn handle_transparent_send(
 
         // Verify address match (skip for imported — already validated at import time)
         if !utxo.is_imported {
-        let derived_addr = if utxo.is_change {
-            zipherx_crypto::transparent::derive_transparent_change_address(seed, 0, utxo.child_index)
-        } else {
-            zipherx_crypto::transparent::derive_transparent_address(seed, 0, utxo.child_index)
-        };
-        match &derived_addr {
-            Ok(addr) => {
-                let matches = addr == &utxo.address;
-                #[cfg(debug_assertions)]
-                eprintln!(
-                    "[ZipherX] Key verification: derived={} utxo={} match={}",
-                    addr, utxo.address, matches,
-                );
-                if !matches {
-                    if let Ok(mut s) = state.lock() {
-                        s.send_result = Some(Err(format!(
-                            "UTXO address mismatch: derived {} but UTXO has {}",
-                            addr, utxo.address,
-                        )));
+            let derived_addr = if utxo.is_change {
+                zipherx_crypto::transparent::derive_transparent_change_address(
+                    seed,
+                    0,
+                    utxo.child_index,
+                )
+            } else {
+                zipherx_crypto::transparent::derive_transparent_address(seed, 0, utxo.child_index)
+            };
+            match &derived_addr {
+                Ok(addr) => {
+                    let matches = addr == &utxo.address;
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[ZipherX] Key verification: derived={} utxo={} match={}",
+                        addr, utxo.address, matches,
+                    );
+                    if !matches {
+                        if let Ok(mut s) = state.lock() {
+                            s.send_result = Some(Err(format!(
+                                "UTXO address mismatch: derived {} but UTXO has {}",
+                                addr, utxo.address,
+                            )));
+                        }
+                        return;
                     }
-                    return;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[ZipherX] WARNING: address derivation for verification failed: {}",
+                        e
+                    );
                 }
             }
-            Err(e) => {
-                eprintln!("[ZipherX] WARNING: address derivation for verification failed: {}", e);
-            }
-        }
         } // end if !utxo.is_imported
 
         // Parse txid hex to bytes — UTXO stores display format (reversed),
@@ -1344,10 +1415,17 @@ fn handle_transparent_send(
             return;
         }
     };
-    let t_change_addr = match zipherx_crypto::transparent::derive_transparent_change_address(seed, 0, next_change_idx) {
+    let t_change_addr = match zipherx_crypto::transparent::derive_transparent_change_address(
+        seed,
+        0,
+        next_change_idx,
+    ) {
         Ok(addr) => {
             #[cfg(debug_assertions)]
-            eprintln!("[ZipherX] Transparent change address (child_index={}): {}", next_change_idx, &addr);
+            eprintln!(
+                "[ZipherX] Transparent change address (child_index={}): {}",
+                next_change_idx, &addr
+            );
             Some(addr)
         }
         Err(_) => {
@@ -1359,7 +1437,10 @@ fn handle_transparent_send(
                 None
             };
             if let Some(addr) = fallback_addr {
-                eprintln!("[ZipherX] No seed — using imported address for change: {}", addr);
+                eprintln!(
+                    "[ZipherX] No seed — using imported address for change: {}",
+                    addr
+                );
                 Some(addr)
             } else {
                 eprintln!("[ZipherX] WARNING: no seed and no imported address — change will go to shielded");
@@ -1371,7 +1452,10 @@ fn handle_transparent_send(
     #[cfg(debug_assertions)]
     eprintln!(
         "[ZipherX] Building transparent TX: amount={} to={} chain_height={} change_addr={:?}",
-        amount, to_address, chain_height, t_change_addr.as_deref(),
+        amount,
+        to_address,
+        chain_height,
+        t_change_addr.as_deref(),
     );
 
     let tx_result = zipherx_crypto::transaction::build_transparent_spend_transaction(
@@ -1386,16 +1470,10 @@ fn handle_transparent_send(
 
     let tx_result = match tx_result {
         Ok(r) => {
-            eprintln!(
-                "[ZipherX] TX built: {} bytes",
-                r.tx_bytes.len(),
-            );
+            eprintln!("[ZipherX] TX built: {} bytes", r.tx_bytes.len(),);
             // Log first 8 bytes (version + version_group_id) and last 4 (expiry)
             if r.tx_bytes.len() >= 16 {
-                eprintln!(
-                    "[ZipherX] TX header: {}",
-                    hex::encode(&r.tx_bytes[..16]),
-                );
+                eprintln!("[ZipherX] TX header: {}", hex::encode(&r.tx_bytes[..16]),);
             }
             r
         }
@@ -1421,7 +1499,8 @@ fn handle_transparent_send(
     // Broadcast
     let broadcast_result = runtime.block_on(async {
         let pm = wallet.peer_manager.lock().await;
-        pm.broadcast_transaction(&tx_result.tx_bytes, &txid_hex).await
+        pm.broadcast_transaction(&tx_result.tx_bytes, &txid_hex)
+            .await
     });
 
     match broadcast_result {
@@ -1431,18 +1510,18 @@ fn handle_transparent_send(
 
             if !br.success {
                 if let Ok(mut s) = state.lock() {
-                    let reasons: Vec<String> = br.rejected_by.iter().map(|(_, r)| r.clone()).collect();
-                    s.send_result = Some(Err(format!(
-                        "TX rejected: {}",
-                        reasons.join(", "),
-                    )));
+                    let reasons: Vec<String> =
+                        br.rejected_by.iter().map(|(_, r)| r.clone()).collect();
+                    s.send_result = Some(Err(format!("TX rejected: {}", reasons.join(", "),)));
                 }
                 return;
             }
 
             eprintln!(
                 "[ZipherX] Transparent TX broadcast: {} ({} accepted, {} rejected)",
-                &txid_hex[..16], accepted, rejected,
+                &txid_hex[..16],
+                accepted,
+                rejected,
             );
 
             // Mark spent UTXOs in DB
@@ -1479,7 +1558,8 @@ fn handle_transparent_send(
             );
             eprintln!(
                 "[ZipherX] Transparent TX {} recorded as '{}'",
-                &txid_hex[..16], tx_type_val.as_str()
+                &txid_hex[..16],
+                tx_type_val.as_str()
             );
 
             if let Ok(mut s) = state.lock() {
@@ -1586,7 +1666,9 @@ fn refresh_balance_and_history(
                 }
                 let group = &grouped[&r.txid];
                 let sent_types = ["sent", "self_z2t", "self_t2z"];
-                let has_sent = group.iter().any(|t| sent_types.contains(&t.tx_type.as_str()));
+                let has_sent = group
+                    .iter()
+                    .any(|t| sent_types.contains(&t.tx_type.as_str()));
 
                 // Check ALL received entries for transparent vs shielded addresses.
                 // A transparent change output (t1/t3) paired with a "sent" is NOT a self-send —
@@ -1594,18 +1676,27 @@ fn refresh_balance_and_history(
                 // (z-address or no address) indicate a true self-send.
                 let has_shielded_received = group.iter().any(|t| {
                     t.tx_type == "received"
-                        && t.address.as_ref().map_or(true, |a| !a.starts_with("t1") && !a.starts_with("t3"))
+                        && t.address
+                            .as_ref()
+                            .map_or(true, |a| !a.starts_with("t1") && !a.starts_with("t3"))
                 });
                 let has_t_received = group.iter().any(|t| {
                     t.tx_type == "received"
-                        && t.address.as_ref().map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"))
+                        && t.address
+                            .as_ref()
+                            .map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"))
                 });
 
                 if has_sent && has_shielded_received {
                     // True self-send: there is a shielded "received" in the same tx.
-                    let sent = group.iter().find(|t| sent_types.contains(&t.tx_type.as_str())).unwrap();
+                    let sent = group
+                        .iter()
+                        .find(|t| sent_types.contains(&t.tx_type.as_str()))
+                        .unwrap();
 
-                    let sent_dest_is_transparent = sent.address.as_ref()
+                    let sent_dest_is_transparent = sent
+                        .address
+                        .as_ref()
                         .map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"));
 
                     // z→t: sent destination is t-addr AND a transparent UTXO was received
@@ -1616,10 +1707,15 @@ fn refresh_balance_and_history(
                     if is_z2t {
                         // Cross-pool: z→t shield-to-transparent transfer
                         // Use the transparent received entry for amount/address
-                        let t_received = group.iter().find(|t| {
-                            t.tx_type == "received"
-                                && t.address.as_ref().map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"))
-                        }).unwrap();
+                        let t_received = group
+                            .iter()
+                            .find(|t| {
+                                t.tx_type == "received"
+                                    && t.address.as_ref().map_or(false, |a| {
+                                        a.starts_with("t1") || a.starts_with("t3")
+                                    })
+                            })
+                            .unwrap();
                         result.push(crate::app::TransactionRecord {
                             txid: r.txid.clone(),
                             tx_type: "self_z2t".to_string(),
@@ -1634,10 +1730,15 @@ fn refresh_balance_and_history(
                     } else if is_t2z {
                         // Cross-pool: t→z transparent-to-shield transfer
                         // Use the shielded received entry for amount
-                        let z_received = group.iter().find(|t| {
-                            t.tx_type == "received"
-                                && t.address.as_ref().map_or(true, |a| !a.starts_with("t1") && !a.starts_with("t3"))
-                        }).unwrap();
+                        let z_received = group
+                            .iter()
+                            .find(|t| {
+                                t.tx_type == "received"
+                                    && t.address.as_ref().map_or(true, |a| {
+                                        !a.starts_with("t1") && !a.starts_with("t3")
+                                    })
+                            })
+                            .unwrap();
                         result.push(crate::app::TransactionRecord {
                             txid: r.txid.clone(),
                             tx_type: "self_t2z".to_string(),
@@ -1666,7 +1767,10 @@ fn refresh_balance_and_history(
                 } else if has_sent && has_t_received && !has_shielded_received {
                     // Regular send with transparent change — NOT a self-send.
                     // The "received" entries are just change outputs going back to our own t-addr.
-                    let sent_tx = group.iter().find(|t| sent_types.contains(&t.tx_type.as_str())).unwrap();
+                    let sent_tx = group
+                        .iter()
+                        .find(|t| sent_types.contains(&t.tx_type.as_str()))
+                        .unwrap();
                     result.push(crate::app::TransactionRecord {
                         txid: r.txid.clone(),
                         tx_type: "sent".to_string(),

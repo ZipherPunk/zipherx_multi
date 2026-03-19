@@ -179,8 +179,12 @@ impl AsyncWallet {
         let imported_addrs = {
             let db_clone = self.db.clone();
             tokio::task::spawn_blocking(move || {
-                db_clone.get_imported_transparent_addresses().unwrap_or_default()
-            }).await.unwrap_or_default()
+                db_clone
+                    .get_imported_transparent_addresses()
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default()
         };
         let t_addrs = if !imported_addrs.is_empty() {
             let mut addr_set = crate::scanner::TransparentAddressSet::empty();
@@ -273,13 +277,13 @@ impl AsyncWallet {
         // Also include imported (WIF) transparent addresses
         {
             let db_clone = self.db.clone();
-            if let Ok(imported_addrs) = tokio::task::spawn_blocking(move || {
-                db_clone.get_imported_transparent_addresses()
-            })
-            .await
-            .unwrap_or(Err(zipherx_storage::types::StorageError::QueryFailed(
-                "spawn failed".into(),
-            ))) {
+            if let Ok(imported_addrs) =
+                tokio::task::spawn_blocking(move || db_clone.get_imported_transparent_addresses())
+                    .await
+                    .unwrap_or(Err(zipherx_storage::types::StorageError::QueryFailed(
+                        "spawn failed".into(),
+                    )))
+            {
                 for (db_id, addr) in &imported_addrs {
                     t_address_set.add_imported(addr.clone(), *db_id);
                 }
@@ -706,31 +710,25 @@ impl AsyncWallet {
             let mut keys = Vec::new();
             for f in funded {
                 let wif = if f.is_imported {
-                    let encrypted_sk =
-                        db.get_imported_transparent_secret(&f.address)
-                            .map_err(|e| CoreError::Storage(e.to_string()))?
-                            .ok_or_else(|| {
-                                CoreError::Crypto(format!(
-                                    "Imported key not found: {}",
-                                    f.address
-                                ))
-                            })?;
-                    let sk_bytes = decrypt_fn(&encrypted_sk).map_err(|e| {
-                        CoreError::Crypto(format!("Decrypt failed: {e}"))
-                    })?;
-                    let wif_str =
-                        zipherx_crypto::transparent::encode_wif(&sk_bytes)
-                            .map_err(|e| CoreError::Crypto(e.to_string()))?;
+                    let encrypted_sk = db
+                        .get_imported_transparent_secret(&f.address)
+                        .map_err(|e| CoreError::Storage(e.to_string()))?
+                        .ok_or_else(|| {
+                            CoreError::Crypto(format!("Imported key not found: {}", f.address))
+                        })?;
+                    let sk_bytes = decrypt_fn(&encrypted_sk)
+                        .map_err(|e| CoreError::Crypto(format!("Decrypt failed: {e}")))?;
+                    let wif_str = zipherx_crypto::transparent::encode_wif(&sk_bytes)
+                        .map_err(|e| CoreError::Crypto(e.to_string()))?;
                     Zeroizing::new((*wif_str).clone())
                 } else {
-                    let wif_str =
-                        zipherx_crypto::transparent::export_transparent_wif(
-                            &seed,
-                            0,
-                            f.child_index,
-                            f.is_change,
-                        )
-                        .map_err(|e| CoreError::Crypto(e.to_string()))?;
+                    let wif_str = zipherx_crypto::transparent::export_transparent_wif(
+                        &seed,
+                        0,
+                        f.child_index,
+                        f.is_change,
+                    )
+                    .map_err(|e| CoreError::Crypto(e.to_string()))?;
                     Zeroizing::new((*wif_str).clone())
                 };
                 keys.push(FundedTransparentKey {

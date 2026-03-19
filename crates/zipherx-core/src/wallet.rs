@@ -276,6 +276,8 @@ impl WalletCore {
             zipherx_storage::types::TxType::Received => "received",
             zipherx_storage::types::TxType::Change => "change",
             zipherx_storage::types::TxType::SelfTransfer => "self",
+            zipherx_storage::types::TxType::SelfZ2T => "self_z2t",
+            zipherx_storage::types::TxType::SelfT2Z => "self_t2z",
         };
 
         TransactionDisplay {

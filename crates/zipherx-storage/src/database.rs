@@ -553,7 +553,8 @@ impl WalletDatabase {
                 "SELECT DISTINCT spent_in_tx FROM notes
                  WHERE is_spent = 1 AND spent_height = 0 AND spent_in_tx IS NOT NULL",
             )?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             rows
         };
@@ -953,14 +954,17 @@ impl WalletDatabase {
                 //    would be change, not the deshield destination. (Imported wallets
                 //    have is_change=0 for all UTXOs, so the is_change filter alone
                 //    isn't sufficient.)
-                let already_transparent_send = rec.address.as_ref()
+                let already_transparent_send = rec
+                    .address
+                    .as_ref()
                     .map_or(false, |a| a.starts_with("t1") || a.starts_with("t3"));
                 let has_shielded_spend = spend_txids.contains(&rec.txid);
                 if rec.tx_type == TxType::Sent && !already_transparent_send && has_shielded_spend {
                     #[cfg(debug_assertions)]
                     eprintln!(
                         "[ZipherX] z→t check: txid={} (len={})",
-                        &rec.txid, rec.txid.len()
+                        &rec.txid,
+                        rec.txid.len()
                     );
 
                     // Try exact match — exclude change UTXOs (is_change=1) which are
@@ -979,7 +983,10 @@ impl WalletDatabase {
 
                     if let Some((t_value, t_addr)) = t_utxo {
                         #[cfg(debug_assertions)]
-                        eprintln!("[ZipherX] MATCH! z→t self-send: value={} addr={}", t_value, t_addr);
+                        eprintln!(
+                            "[ZipherX] MATCH! z→t self-send: value={} addr={}",
+                            t_value, t_addr
+                        );
                         rec.tx_type = TxType::SelfZ2T;
                         rec.amount = t_value as u64;
                         rec.address = Some(t_addr);
@@ -1002,19 +1009,33 @@ impl WalletDatabase {
         // but no "sent" TX history entry was ever created (e.g., post-boost scan
         // marked spends without creating history entries in older code).
         #[cfg(debug_assertions)]
-        eprintln!("[ZipherX] Synthesize check: {} spend_txids, {} sent_txids", spend_txids.len(), sent_txids.len());
+        eprintln!(
+            "[ZipherX] Synthesize check: {} spend_txids, {} sent_txids",
+            spend_txids.len(),
+            sent_txids.len()
+        );
         for txid in &spend_txids {
             if sent_txids.contains(txid) {
                 #[cfg(debug_assertions)]
-                eprintln!("[ZipherX] Synthesize: skip {} (has real sent entry)", &txid[..16.min(txid.len())]);
+                eprintln!(
+                    "[ZipherX] Synthesize: skip {} (has real sent entry)",
+                    &txid[..16.min(txid.len())]
+                );
                 continue; // Already has a real "sent" entry
             }
             #[cfg(debug_assertions)]
-            eprintln!("[ZipherX] Synthesize: processing {} (no real sent entry)", &txid[..16.min(txid.len())]);
+            eprintln!(
+                "[ZipherX] Synthesize: processing {} (no real sent entry)",
+                &txid[..16.min(txid.len())]
+            );
 
             // Check if we already synthesized or have this in result
             if result.iter().any(|r| {
-                &r.txid == txid && (r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer || r.tx_type == TxType::SelfZ2T || r.tx_type == TxType::SelfT2Z)
+                &r.txid == txid
+                    && (r.tx_type == TxType::Sent
+                        || r.tx_type == TxType::SelfTransfer
+                        || r.tx_type == TxType::SelfZ2T
+                        || r.tx_type == TxType::SelfT2Z)
             }) {
                 continue;
             }
@@ -1038,7 +1059,11 @@ impl WalletDatabase {
                 .find(|r| r.txid == *txid)
                 .map(|r| (r.height, r.timestamp, r.fee))
                 .unwrap_or((0, None, 10_000));
-            let fee = if rec_fee > 0 { rec_fee as i64 } else { 10_000i64 };
+            let fee = if rec_fee > 0 {
+                rec_fee as i64
+            } else {
+                10_000i64
+            };
             let net = total_input - change - fee;
 
             if net <= 0 {
@@ -1059,9 +1084,7 @@ impl WalletDatabase {
             } else {
                 // Check if this is a z→t self-send
                 let t_utxo: Option<(i64, String)> = conn
-                    .prepare(
-                        "SELECT value, address FROM transparent_utxos WHERE txid = ?1 LIMIT 1",
-                    )
+                    .prepare("SELECT value, address FROM transparent_utxos WHERE txid = ?1 LIMIT 1")
                     .ok()
                     .and_then(|mut stmt| {
                         stmt.query_row(params![txid], |row| {
@@ -1170,7 +1193,12 @@ impl WalletDatabase {
         // Cache total counts before pagination (avoids a separate full re-fetch)
         let sent = result
             .iter()
-            .filter(|r| r.tx_type == TxType::Sent || r.tx_type == TxType::SelfTransfer || r.tx_type == TxType::SelfZ2T || r.tx_type == TxType::SelfT2Z)
+            .filter(|r| {
+                r.tx_type == TxType::Sent
+                    || r.tx_type == TxType::SelfTransfer
+                    || r.tx_type == TxType::SelfZ2T
+                    || r.tx_type == TxType::SelfT2Z
+            })
             .count() as u32;
         let received = result
             .iter()
@@ -1487,7 +1515,9 @@ impl WalletDatabase {
                 // Recompute net sent from authoritative source:
                 // net = total_input - change - fee
                 // FIX I13: Use actual fee from the sent record, fallback to 10,000
-                let fee: i64 = fee_stmt.query_row(params![txid], |row| row.get(0)).unwrap_or(10_000i64);
+                let fee: i64 = fee_stmt
+                    .query_row(params![txid], |row| row.get(0))
+                    .unwrap_or(10_000i64);
                 let net_sent = total_input
                     .saturating_sub(*change_amount)
                     .saturating_sub(fee);
@@ -2970,7 +3000,8 @@ impl WalletDatabase {
                 params![txid, output_index],
                 |row| row.get::<_, i64>(0),
             )
-            .unwrap_or(0) > 0;
+            .unwrap_or(0)
+            > 0;
         if exists {
             eprintln!(
                 "[ZipherX] SPEND MATCH: prevout {}..vout={} FOUND in DB (spending_tx={}.. height={})",
@@ -3020,7 +3051,11 @@ impl WalletDatabase {
             if let Ok((txid, vout, value, spent, height)) = row {
                 output.push_str(&format!(
                     "[ZipherX]   utxo: {}..vout={} value={} spent={} height={}\n",
-                    &txid[..16.min(txid.len())], vout, value, spent, height,
+                    &txid[..16.min(txid.len())],
+                    vout,
+                    value,
+                    spent,
+                    height,
                 ));
                 count += 1;
             }
@@ -3082,9 +3117,8 @@ impl WalletDatabase {
         output_index: u32,
     ) -> Result<Option<u64>, StorageError> {
         let conn = recover_lock(self.conn.lock());
-        let mut stmt = conn.prepare(
-            "SELECT value FROM transparent_utxos WHERE txid = ?1 AND output_index = ?2",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT value FROM transparent_utxos WHERE txid = ?1 AND output_index = ?2")?;
         let val = stmt
             .query_row(params![txid, output_index], |row| {
                 row.get::<_, i64>(0).map(|v| v as u64)
@@ -3186,9 +3220,8 @@ impl WalletDatabase {
     /// Get all imported transparent addresses with their database IDs.
     pub fn get_imported_transparent_addresses(&self) -> Result<Vec<(i64, String)>, StorageError> {
         let conn = recover_lock(self.conn.lock());
-        let mut stmt = conn.prepare(
-            "SELECT id, address FROM imported_transparent_keys ORDER BY imported_at",
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT id, address FROM imported_transparent_keys ORDER BY imported_at")?;
         let rows = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -4537,14 +4570,10 @@ mod tests {
         assert_eq!(addrs.len(), 1);
         assert_eq!(addrs[0].1, "t1TestAddr123");
 
-        let loaded = db
-            .get_imported_transparent_secret("t1TestAddr123")
-            .unwrap();
+        let loaded = db.get_imported_transparent_secret("t1TestAddr123").unwrap();
         assert_eq!(loaded, Some(fake_encrypted));
 
-        let missing = db
-            .get_imported_transparent_secret("t1NoSuchAddr")
-            .unwrap();
+        let missing = db.get_imported_transparent_secret("t1NoSuchAddr").unwrap();
         assert_eq!(missing, None);
     }
 

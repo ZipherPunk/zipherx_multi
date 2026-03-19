@@ -295,9 +295,7 @@ pub fn decode_transparent_address(address: &str) -> Result<TransparentAddress, C
     let checksum = &decoded[22..26];
     let expected = double_sha256(payload);
     if checksum != &expected[..4] {
-        return Err(CryptoError::InvalidAddress(
-            "Invalid checksum".into(),
-        ));
+        return Err(CryptoError::InvalidAddress("Invalid checksum".into()));
     }
 
     let prefix = [decoded[0], decoded[1]];
@@ -352,11 +350,7 @@ pub fn extract_address_from_script(script: &[u8]) -> Option<TransparentAddress> 
     }
 
     // P2SH: a9 14 <20 bytes> 87 (23 bytes total)
-    if script.len() == 23
-        && script[0] == 0xa9
-        && script[1] == 0x14
-        && script[22] == 0x87
-    {
+    if script.len() == 23 && script[0] == 0xa9 && script[1] == 0x14 && script[22] == 0x87 {
         let mut hash = [0u8; 20];
         hash.copy_from_slice(&script[2..22]);
         return Some(TransparentAddress::Script(hash));

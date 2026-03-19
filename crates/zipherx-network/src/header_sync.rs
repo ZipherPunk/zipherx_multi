@@ -450,10 +450,8 @@ impl<S: HeaderStore> HeaderSync<S> {
                 let remaining = chain_tip.saturating_sub(current_height);
                 let is_first_in_batch = batch_idx == 0;
                 let is_last_in_batch = batch_idx == headers.len() - 1;
-                let should_verify = remaining < 1000
-                    || height % 5 == 0
-                    || is_first_in_batch
-                    || is_last_in_batch;
+                let should_verify =
+                    remaining < 1000 || height % 5 == 0 || is_first_in_batch || is_last_in_batch;
 
                 if should_verify {
                     match zipherx_crypto::equihash::verify(&header_base, &header.solution) {

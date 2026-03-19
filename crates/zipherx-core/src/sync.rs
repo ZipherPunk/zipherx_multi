@@ -80,6 +80,9 @@ pub enum SyncStatus {
     /// Boost download failed after all retries. User must decide whether
     /// to continue with slow P2P header sync or abort.
     BoostFailed { reason: String, attempts: u32 },
+    /// Confirmations updated in DB (emitted before witness rebuild).
+    /// Allows UI to detect TX confirmations without waiting for witnesses.
+    ConfirmationsUpdated { height: u64 },
     /// Sync complete.
     Complete { height: u64 },
     /// Sync failed.

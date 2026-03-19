@@ -1602,8 +1602,7 @@ fn send_transparent_with_progress(
                     // Try as WIF string (Android/iOS store WIF as UTF-8 bytes)
                     if let Ok(wif_str) = std::str::from_utf8(encrypted_sk) {
                         let wif_str = wif_str.trim();
-                        if let Ok((sk_bytes, _)) =
-                            zipherx_crypto::transparent::decode_wif(wif_str)
+                        if let Ok((sk_bytes, _)) = zipherx_crypto::transparent::decode_wif(wif_str)
                         {
                             return Ok(sk_bytes);
                         }
@@ -2025,9 +2024,7 @@ fn get_imported_transparent_addresses() -> Result<Vec<String>, WalletError> {
             )))
     })
     .map_err(|e| WalletError::from(e))?
-    .map_err(|e| WalletError::StorageError {
-        msg: e.to_string(),
-    })?;
+    .map_err(|e| WalletError::StorageError { msg: e.to_string() })?;
     Ok(addrs.into_iter().map(|(_id, addr)| addr).collect())
 }
 
@@ -2077,9 +2074,7 @@ fn export_funded_transparent_wifs() -> Result<Vec<FundedTransparentKeyFFI>, Wall
             // Try as WIF string (Android/iOS store WIF as UTF-8 bytes)
             if let Ok(wif_str) = std::str::from_utf8(encrypted_sk) {
                 let wif_str = wif_str.trim();
-                if let Ok((sk_bytes, _)) =
-                    zipherx_crypto::transparent::decode_wif(wif_str)
-                {
+                if let Ok((sk_bytes, _)) = zipherx_crypto::transparent::decode_wif(wif_str) {
                     return Ok(sk_bytes);
                 }
             }
@@ -2219,9 +2214,7 @@ fn get_imported_key_count() -> Result<u32, WalletError> {
     runtime::block_on(async {
         tokio::task::spawn_blocking(move || {
             db.get_imported_key_count()
-                .map_err(|e| WalletError::StorageError {
-                    msg: e.to_string(),
-                })
+                .map_err(|e| WalletError::StorageError { msg: e.to_string() })
         })
         .await
         .map_err(|e| WalletError::RuntimeError {
@@ -2272,7 +2265,9 @@ fn sync_status_to_progress(status: &SyncStatus) -> (String, u64, u64) {
             u64::try_from(*total_notes).unwrap_or(u64::MAX),
         ),
         SyncStatus::BoostFailed { .. } => ("boost_failed".into(), 0, 0),
-        SyncStatus::ConfirmationsUpdated { height } => ("confirmations_updated".into(), *height, *height),
+        SyncStatus::ConfirmationsUpdated { height } => {
+            ("confirmations_updated".into(), *height, *height)
+        }
         SyncStatus::Complete { height } => ("complete".into(), *height, *height),
         SyncStatus::Failed(_) => ("failed".into(), 0, 0),
     }

@@ -259,6 +259,50 @@ pub async fn build_transaction_async(
     Ok(result)
 }
 
+/// Build a deshielding transaction (z → t) asynchronously.
+pub async fn build_deshield_transaction_async(
+    sk_bytes: Vec<u8>,
+    to_t_address_str: String,
+    amount: u64,
+    spends: Vec<SpendInfo>,
+    chain_height: u64,
+) -> Result<TransactionResult, CoreError> {
+    if spends.is_empty() {
+        return Err(CoreError::TransactionBuildFailed(
+            "No spend inputs provided".into(),
+        ));
+    }
+
+    if sk_bytes.len() != zipherx_crypto::types::SPENDING_KEY_LENGTH {
+        return Err(CoreError::Crypto(format!(
+            "Invalid spending key length: {} (expected {})",
+            sk_bytes.len(),
+            zipherx_crypto::types::SPENDING_KEY_LENGTH,
+        )));
+    }
+
+    if !prover::is_initialized() {
+        return Err(CoreError::ProverNotInitialized);
+    }
+
+    let result = tokio::task::spawn_blocking(move || {
+        let t_addr = zipherx_crypto::transparent::decode_transparent_address(&to_t_address_str)
+            .map_err(|e| zipherx_crypto::types::CryptoError::InvalidAddress(e.to_string()))?;
+        transaction::build_transaction_to_transparent(
+            &sk_bytes,
+            &t_addr,
+            amount,
+            &spends,
+            chain_height,
+        )
+    })
+    .await
+    .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+    .map_err(|e| CoreError::TransactionBuildFailed(e.to_string()))?;
+
+    Ok(result)
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

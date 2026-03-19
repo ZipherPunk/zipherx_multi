@@ -322,7 +322,15 @@ pub fn validate_shielded_address(address: &str) -> Result<(), CoreError> {
 
 /// Validate a send request before processing.
 pub fn validate_send_request(request: &SendRequest) -> Result<(), CoreError> {
-    validate_shielded_address(&request.to_address)?;
+    // Accept both shielded (zs...) and transparent (t1.../t3...) addresses
+    let is_transparent =
+        request.to_address.starts_with("t1") || request.to_address.starts_with("t3");
+    if is_transparent {
+        zipherx_crypto::transparent::decode_transparent_address(&request.to_address)
+            .map_err(|e| CoreError::Crypto(format!("Invalid transparent address: {e}")))?;
+    } else {
+        validate_shielded_address(&request.to_address)?;
+    }
 
     if request.amount_zatoshis == 0 {
         return Err(CoreError::Crypto("Amount must be greater than 0".into()));

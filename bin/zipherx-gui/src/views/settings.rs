@@ -843,8 +843,7 @@ fn show_security_section(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Co
                         .desired_width(350.0),
                 );
                 ui.add_space(5.0);
-                let enter =
-                    response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 ui.horizontal(|ui| {
                     if ui
                         .add(egui::Button::new(
@@ -1194,10 +1193,18 @@ fn show_danger_zone(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                             // Delete wallet DB, headers, delta store, boost cache
                             let data_dir = app.storage.data_dir().clone();
                             for name in &[
-                                "wallet.db", "wallet.db-wal", "wallet.db-shm",
-                                "zipherx_wallet.db", "zipherx_wallet.db-wal", "zipherx_wallet.db-shm",
-                                "headers.db", "headers.db-wal", "headers.db-shm",
-                                "zipherx_headers.db", "zipherx_headers.db-wal", "zipherx_headers.db-shm",
+                                "wallet.db",
+                                "wallet.db-wal",
+                                "wallet.db-shm",
+                                "zipherx_wallet.db",
+                                "zipherx_wallet.db-wal",
+                                "zipherx_wallet.db-shm",
+                                "headers.db",
+                                "headers.db-wal",
+                                "headers.db-shm",
+                                "zipherx_headers.db",
+                                "zipherx_headers.db-wal",
+                                "zipherx_headers.db-shm",
                             ] {
                                 let _ = std::fs::remove_file(data_dir.join(name));
                             }
@@ -1206,8 +1213,10 @@ fn show_danger_zone(app: &mut ZipherXApp, ui: &mut egui::Ui) {
                             }
                             // Delete delta files
                             for pattern in &[
-                                "delta_manifest.json", "delta_nullifiers.bin",
-                                "delta_sapling_roots.bin", "shielded_outputs_delta.bin",
+                                "delta_manifest.json",
+                                "delta_nullifiers.bin",
+                                "delta_sapling_roots.bin",
+                                "shielded_outputs_delta.bin",
                             ] {
                                 let _ = std::fs::remove_file(data_dir.join(pattern));
                             }
@@ -1551,8 +1560,7 @@ fn show_mnemonic_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &
             );
 
             ui.add_space(5.0);
-            let enter =
-                response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             ui.horizontal(|ui| {
                 if ui
                     .add(egui::Button::new(
@@ -1573,8 +1581,7 @@ fn show_mnemonic_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &
                                     app.mnemonic_export_auto_dismiss =
                                         Some(std::time::Instant::now());
                                 } else {
-                                    app.password_error =
-                                        Some("Failed to decode mnemonic".into());
+                                    app.password_error = Some("Failed to decode mnemonic".into());
                                 }
                             }
                             Err(_) => {
@@ -1783,8 +1790,7 @@ fn show_export_display(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Cont
                         all.push('\n');
                     }
                     if !app.export_funded_keys.is_empty() {
-                        for (addr, wif, balance, is_change, is_imported) in
-                            &app.export_funded_keys
+                        for (addr, wif, balance, is_change, is_imported) in &app.export_funded_keys
                         {
                             let label = if *is_imported {
                                 "IMPORTED"
@@ -1951,8 +1957,7 @@ fn show_seed_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui
             );
             ui.add_space(5.0);
             ui.horizontal(|ui| {
-                let enter = response.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if enter
                     || ui
                         .add(egui::Button::new(
@@ -1968,8 +1973,7 @@ fn show_seed_export_confirm(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui
                                 app.export_seed_display = hex::encode(&seed);
                                 app.show_seed_export = true;
                                 app.show_seed_export_confirm = false;
-                                app.seed_export_auto_dismiss =
-                                    Some(std::time::Instant::now());
+                                app.seed_export_auto_dismiss = Some(std::time::Instant::now());
                             }
                             Err(_) => {
                                 app.send_error =
@@ -2193,7 +2197,11 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                         valid_count, invalid_count
                     ))
                     .font(theme::mono(10.0))
-                    .color(if valid_count > 0 { theme::GREEN } else { theme::RED }),
+                    .color(if valid_count > 0 {
+                        theme::GREEN
+                    } else {
+                        theme::RED
+                    }),
                 );
 
                 // Show results in a scrollable area (for large imports)
@@ -2201,34 +2209,34 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                 egui::ScrollArea::vertical()
                     .max_height(max_height)
                     .show(ui, |ui| {
-                for (valid, addr_or_err, prefix) in results {
-                    let (icon, color) = if *valid {
-                        ("[OK]", theme::GREEN)
-                    } else {
-                        ("[X]", theme::RED)
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(icon)
-                                .font(theme::mono(10.0))
-                                .color(color),
-                        );
-                        ui.label(
-                            egui::RichText::new(prefix)
-                                .font(theme::mono(9.0))
-                                .color(theme::MUTED),
-                        );
-                        ui.label(
-                            egui::RichText::new(if *valid {
-                                format!("-> {}", addr_or_err)
+                        for (valid, addr_or_err, prefix) in results {
+                            let (icon, color) = if *valid {
+                                ("[OK]", theme::GREEN)
                             } else {
-                                addr_or_err.clone()
-                            })
-                            .font(theme::mono(9.0))
-                            .color(color),
-                        );
-                    });
-                }
+                                ("[X]", theme::RED)
+                            };
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(icon)
+                                        .font(theme::mono(10.0))
+                                        .color(color),
+                                );
+                                ui.label(
+                                    egui::RichText::new(prefix)
+                                        .font(theme::mono(9.0))
+                                        .color(theme::MUTED),
+                                );
+                                ui.label(
+                                    egui::RichText::new(if *valid {
+                                        format!("-> {}", addr_or_err)
+                                    } else {
+                                        addr_or_err.clone()
+                                    })
+                                    .font(theme::mono(9.0))
+                                    .color(color),
+                                );
+                            });
+                        }
                     }); // end ScrollArea
 
                 if invalid_count > 0 {
@@ -2260,18 +2268,12 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(format!(
-                                    "[ IMPORT {} KEY(S) ]",
-                                    valid_count
-                                ))
-                                .font(theme::mono(12.0))
-                                .color(egui::Color32::WHITE),
+                                egui::RichText::new(format!("[ IMPORT {} KEY(S) ]", valid_count))
+                                    .font(theme::mono(12.0))
+                                    .color(egui::Color32::WHITE),
                             )
                             .fill(theme::CYAN.linear_multiply(0.2))
-                            .stroke(egui::Stroke::new(
-                                1.0,
-                                theme::CYAN.linear_multiply(0.5),
-                            ))
+                            .stroke(egui::Stroke::new(1.0, theme::CYAN.linear_multiply(0.5)))
                             .rounding(4.0),
                         )
                         .clicked()
@@ -2291,7 +2293,8 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                                 // Queue raw key + address for the wallet thread to encrypt & store
                                 if let Some(ref state) = app.shared_state {
                                     if let Ok(mut s) = state.lock() {
-                                        s.pending_wif_imports.push((Zeroizing::new(sk_bytes.to_vec()), address));
+                                        s.pending_wif_imports
+                                            .push((Zeroizing::new(sk_bytes.to_vec()), address));
                                     }
                                 }
                                 imported += 1;
@@ -2300,15 +2303,16 @@ fn show_wif_import(app: &mut ZipherXApp, ui: &mut egui::Ui, _ctx: &egui::Context
                         if imported > 0 {
                             app.imported_key_count += imported;
                             app.wif_import_status = Some((
-                                format!("{} key(s) imported! Rescanning blockchain for funds...", imported),
+                                format!(
+                                    "{} key(s) imported! Rescanning blockchain for funds...",
+                                    imported
+                                ),
                                 true,
                             ));
                             app.wif_rescan_in_progress = true;
                         } else {
-                            app.wif_import_status = Some((
-                                "No valid keys to import.".to_string(),
-                                false,
-                            ));
+                            app.wif_import_status =
+                                Some(("No valid keys to import.".to_string(), false));
                         }
                         app.wif_import_text.zeroize();
                         app.wif_import_results = None;

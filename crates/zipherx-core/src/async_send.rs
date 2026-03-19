@@ -194,8 +194,8 @@ pub async fn send_transaction(
     let sk_owned = Zeroizing::new(sk_bytes.to_vec());
 
     // Detect if destination is a transparent address (t1...)
-    let is_transparent_dest = request.to_address.starts_with("t1")
-        || request.to_address.starts_with("t3");
+    let is_transparent_dest =
+        request.to_address.starts_with("t1") || request.to_address.starts_with("t3");
 
     let tx_result = if is_transparent_dest {
         // Deshielding: z → t
@@ -425,7 +425,10 @@ pub async fn send_transparent_transaction(
         .map_err(|e| CoreError::Storage(e.to_string()))?;
 
     if utxos.is_empty() {
-        return Err(CoreError::InsufficientBalance { have: 0, need: request.total_needed() });
+        return Err(CoreError::InsufficientBalance {
+            have: 0,
+            need: request.total_needed(),
+        });
     }
 
     // Step 5: Select UTXOs (largest first to minimize inputs)
@@ -433,7 +436,8 @@ pub async fn send_transparent_transaction(
     sorted.sort_by(|a, b| b.value.cmp(&a.value));
 
     // C3: Use checked arithmetic to prevent silent overflow
-    let total_needed = request.amount_zatoshis
+    let total_needed = request
+        .amount_zatoshis
         .checked_add(request.fee_zatoshis)
         .ok_or(CoreError::Crypto("amount + fee overflow".into()))?;
     let mut selected = Vec::new();
@@ -465,7 +469,9 @@ pub async fn send_transparent_transaction(
 
     eprintln!(
         "[ZipherX] Transparent send: {} UTXOs selected, total={}, need={}",
-        selected.len(), selected_total, total_needed,
+        selected.len(),
+        selected_total,
+        total_needed,
     );
 
     // Step 6: Derive secret keys and build TransparentSpendInfo
@@ -505,9 +511,8 @@ pub async fn send_transparent_transaction(
                     utxo.address
                 ))
             })?;
-            decrypt_fn(encrypted_sk).map_err(|e| {
-                CoreError::Crypto(format!("Failed to decrypt imported key: {e}"))
-            })?
+            decrypt_fn(encrypted_sk)
+                .map_err(|e| CoreError::Crypto(format!("Failed to decrypt imported key: {e}")))?
         } else {
             // Seed-derived key
             let derived = zipherx_crypto::transparent::derive_transparent_secret_key(
@@ -584,14 +589,17 @@ pub async fn send_transparent_transaction(
     let t_change_addr = {
         // I2: Rotate change address — use next available child_index to avoid reuse.
         let db_for_idx = db.clone();
-        let next_change_idx = tokio::task::spawn_blocking(move || {
-            db_for_idx.next_transparent_change_index()
-        })
-        .await
-        .map_err(|e| CoreError::RuntimeError(e.to_string()))?
-        .map_err(|e| CoreError::Storage(e.to_string()))?;
+        let next_change_idx =
+            tokio::task::spawn_blocking(move || db_for_idx.next_transparent_change_index())
+                .await
+                .map_err(|e| CoreError::RuntimeError(e.to_string()))?
+                .map_err(|e| CoreError::Storage(e.to_string()))?;
 
-        match zipherx_crypto::transparent::derive_transparent_change_address(&seed_owned, 0, next_change_idx) {
+        match zipherx_crypto::transparent::derive_transparent_change_address(
+            &seed_owned,
+            0,
+            next_change_idx,
+        ) {
             Ok(addr) => Some(addr),
             Err(_) => {
                 // No seed (PK + WIF import) — send change back to the first selected UTXO's address.

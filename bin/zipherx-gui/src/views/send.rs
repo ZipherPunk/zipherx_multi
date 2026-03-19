@@ -20,17 +20,37 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         if app.transparent_address.is_some() {
             ui.horizontal(|ui| {
                 ui.add_space(20.0);
-                let shielded_color = if !app.send_from_transparent { theme::GREEN } else { theme::MUTED };
-                let transparent_color = if app.send_from_transparent { theme::GREEN } else { theme::MUTED };
-                if ui.add(egui::Button::new(
-                    egui::RichText::new("[ SHIELDED ]").font(theme::mono(11.0)).color(shielded_color),
-                )).clicked() && app.send_from_transparent {
+                let shielded_color = if !app.send_from_transparent {
+                    theme::GREEN
+                } else {
+                    theme::MUTED
+                };
+                let transparent_color = if app.send_from_transparent {
+                    theme::GREEN
+                } else {
+                    theme::MUTED
+                };
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ SHIELDED ]")
+                            .font(theme::mono(11.0))
+                            .color(shielded_color),
+                    ))
+                    .clicked()
+                    && app.send_from_transparent
+                {
                     app.send_from_transparent = false;
                     app.send_amount = String::new(); // Clear so MAX recalculates for new source
                 }
-                if ui.add(egui::Button::new(
-                    egui::RichText::new("[ TRANSPARENT ]").font(theme::mono(11.0)).color(transparent_color),
-                )).clicked() && !app.send_from_transparent {
+                if ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("[ TRANSPARENT ]")
+                            .font(theme::mono(11.0))
+                            .color(transparent_color),
+                    ))
+                    .clicked()
+                    && !app.send_from_transparent
+                {
                     app.send_from_transparent = true;
                     app.send_amount = String::new(); // Clear so MAX recalculates for new source
                 }
@@ -43,11 +63,19 @@ pub fn show(app: &mut ZipherXApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         } else {
             app.balance.spendable
         };
-        let source_label = if app.send_from_transparent { "Transparent" } else { "Shielded" };
+        let source_label = if app.send_from_transparent {
+            "Transparent"
+        } else {
+            "Shielded"
+        };
         ui.label(
-            egui::RichText::new(format!("{} spendable: {} ZCL", source_label, fmt_zcl(spendable)))
-                .font(theme::mono(11.0))
-                .color(theme::MUTED),
+            egui::RichText::new(format!(
+                "{} spendable: {} ZCL",
+                source_label,
+                fmt_zcl(spendable)
+            ))
+            .font(theme::mono(11.0))
+            .color(theme::MUTED),
         );
         ui.add_space(15.0);
 
@@ -168,7 +196,8 @@ fn show_send_form(app: &mut ZipherXApp, ui: &mut egui::Ui) {
 
     // Memo: show for any send where destination is shielded (z→z or t→z).
     // Transparent outputs cannot carry memos.
-    let dest_is_transparent = app.send_address.starts_with("t1") || app.send_address.starts_with("t3");
+    let dest_is_transparent =
+        app.send_address.starts_with("t1") || app.send_address.starts_with("t3");
     if !dest_is_transparent {
         ui.label(
             egui::RichText::new("MEMO (optional):")
@@ -502,7 +531,8 @@ fn validate_send(app: &mut ZipherXApp) -> Result<(), String> {
     }
 
     let is_valid_shielded = zipherx_crypto::address::validate_address(&app.send_address);
-    let is_valid_transparent = zipherx_crypto::transparent::validate_transparent_address(&app.send_address);
+    let is_valid_transparent =
+        zipherx_crypto::transparent::validate_transparent_address(&app.send_address);
 
     // Both shielded and transparent sends can target z or t addresses
     if !is_valid_shielded && !is_valid_transparent {
@@ -574,7 +604,10 @@ fn execute_send(app: &mut ZipherXApp) {
                     fee: validated.fee,
                     memo: validated.memo,
                     seed: zeroize::Zeroizing::new(seed),
-                    sk_bytes: app.sk_bytes.clone().unwrap_or_else(|| zeroize::Zeroizing::new(Vec::new())),
+                    sk_bytes: app
+                        .sk_bytes
+                        .clone()
+                        .unwrap_or_else(|| zeroize::Zeroizing::new(Vec::new())),
                 });
             }
         }
