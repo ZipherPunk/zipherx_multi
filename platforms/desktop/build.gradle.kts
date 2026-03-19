@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "com.zipherx.wallet"
-version = "1.0.0"
+version = "1.1.0"
 
 repositories {
     mavenCentral()
@@ -40,7 +40,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb, TargetFormat.Rpm)
             packageName = "ZipherX"
-            packageVersion = "1.0.0"
+            packageVersion = "1.1.0"
             description = "ZipherX — Privacy-first Zclassic wallet"
             vendor = "ZipherX"
 
