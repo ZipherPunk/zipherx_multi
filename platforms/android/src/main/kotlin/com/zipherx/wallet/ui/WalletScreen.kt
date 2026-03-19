@@ -181,6 +181,7 @@ fun WalletScreen(
     val boostFailed by viewModel.boostFailed.collectAsState()
     val needsSeedMigration by viewModel.needsSeedMigration.collectAsState()
     val wifRescanInProgress by viewModel.wifRescanInProgress.collectAsState()
+    val importedKeyCount by viewModel.importedKeyCount.collectAsState()
 
     // KA-N3: These remember{} states survive configuration changes (rotation) but NOT
     // process death. Critical wallet state lives in WalletViewModel (ViewModel-scoped) which
@@ -319,6 +320,7 @@ fun WalletScreen(
                     syncProgress = syncProgress,
                     isSyncing = isSyncing,
                     isPendingConfirmation = pendingTxid != null,
+                    importedKeyCount = importedKeyCount,
                     wifRescanInProgress = wifRescanInProgress,
                 )
 

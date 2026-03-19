@@ -223,7 +223,7 @@ fun BalanceCard(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 9.sp,
                     ),
-                    color = ZColors.primaryDim,
+                    color = ZColors.warning,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                 )
             }

@@ -171,6 +171,9 @@ class WalletViewModel : ViewModel() {
     private val _wifRescanInProgress = MutableStateFlow(false)
     val wifRescanInProgress: StateFlow<Boolean> = _wifRescanInProgress.asStateFlow()
 
+    private val _importedKeyCount = MutableStateFlow(0u)
+    val importedKeyCount: StateFlow<UInt> = _importedKeyCount.asStateFlow()
+
     private var secureStorage: AndroidSecureStorage? = null
     private var appContext: Context? = null
 
@@ -635,6 +638,9 @@ class WalletViewModel : ViewModel() {
 
                 _walletState.value = "ready"
                 _isWalletActive.value = true
+
+                // Load imported key count for balance display
+                refreshImportedKeyCount()
 
                 // Detect upgrade from pre-transparent version: SK exists but no seed.
                 // Without the seed, transparent address scanning is disabled.
@@ -1862,6 +1868,9 @@ class WalletViewModel : ViewModel() {
                 }
                 if (BuildConfig.DEBUG) Log.i(TAG, "Imported ${encKeys.size} WIF key(s)")
 
+                // Update imported key count for balance display
+                refreshImportedKeyCount()
+
                 // Update transparent address for receive screen if not already set
                 if (_transparentAddress.value == null && addrs.isNotEmpty()) {
                     _transparentAddress.value = addrs.first()
@@ -1886,6 +1895,18 @@ class WalletViewModel : ViewModel() {
                 _errorMessage.value = "Import failed: ${e.message}"
                 _wifRescanInProgress.value = false
             }
+        }
+    }
+
+    /** Refresh the imported key count from DB (for balance screen indicator). */
+    private fun refreshImportedKeyCount() {
+        viewModelScope.launch {
+            try {
+                val addrs = withContext(Dispatchers.IO) {
+                    uniffi.zipherx.getImportedTransparentAddresses()
+                }
+                _importedKeyCount.value = addrs.size.toUInt()
+            } catch (_: Exception) {}
         }
     }
 
